@@ -1,47 +1,38 @@
-//! 现有账号租约内按 API 协议分派；转换不改变账号选择和中间件执行顺序
+//! Messages 原生执行与计数复用已选账号租约，不承担跨协议转换
 
 mod count;
 mod stream;
-mod translator;
 
 use super::*;
 use crate::credential::{ApiKeyProtocol, CodexRuntimeAuthentication};
-use gateway_protocol::anthropic::{
-    ANTHROPIC_PROTOCOL, messages_to_responses_request, responses_to_messages_request,
-};
+use gateway_protocol::anthropic::ANTHROPIC_PROTOCOL;
 use serde_json::Map;
 
 impl CodexProvider {
-    pub(super) async fn execute_selected_protocol_generate(
+    pub(super) async fn execute_native_messages(
         self: Arc<Self>,
         operation: Operation,
-        mut headers: Vec<MiddlewareHeader>,
+        headers: Vec<MiddlewareHeader>,
         model: UpstreamModelId,
         context: AttemptContext,
         mut selected: SelectedGenerate,
     ) -> Result<ProviderStream, ProviderError> {
-        if operation.capability_requirements() != selected.frozen_requirements {
-            return Err(invalid_request());
-        }
-        let Operation::Generate(generate) = &operation else {
+        let Operation::Generate(generate) = operation else {
             return Err(invalid_request());
         };
-        let source = generate.protocol_payload().protocol();
-        if !matches!(source, OPENAI_PROTOCOL | ANTHROPIC_PROTOCOL) {
+        if generate.protocol_payload().protocol() != ANTHROPIC_PROTOCOL
+            || selected.lease.authentication().api_protocol() != ApiKeyProtocol::Messages
+        {
             return Err(invalid_request());
         }
-        if !context.is_diagnostic_required_account()
-            && (source == ANTHROPIC_PROTOCOL
-                || selected.lease.authentication().api_protocol() == ApiKeyProtocol::Messages)
-        {
-            // attempt 改写后的身份必须在跨协议转换前复验，避免绕过已有账号绑定
+        if !context.is_diagnostic_required_account() {
             let affinity = crate::credential::derive_messages_session_affinity(
                 generate.protocol_payload(),
                 &headers,
                 context.client_api_key_ref(),
             );
             self.selector
-                .validate_translated_selection(
+                .validate_selected_affinity(
                     &mut selected.lease,
                     affinity.as_ref(),
                     None,
@@ -50,91 +41,20 @@ impl CodexProvider {
                 .await
                 .map_err(map_selection_error)?;
         }
-        if selected.lease.authentication().api_protocol() == ApiKeyProtocol::Messages {
-            if context.continuation_attempt() == ContinuationAttempt::Native
-                || generate.provider_session_state(PROVIDER_NAME).is_some()
-                || (source == OPENAI_PROTOCOL
-                    && generate
-                        .protocol_payload()
-                        .body()
-                        .get("previous_response_id")
-                        .and_then(Value::as_str)
-                        .is_some_and(|value| !value.is_empty()))
-            {
-                return Err(continuation_replay_required_error("scope_unavailable"));
-            }
-            let original = generate.protocol_payload().body();
-            let mut body = if source == ANTHROPIC_PROTOCOL {
-                let mut body = original.clone();
-                gateway_protocol::anthropic::strip_foreign_thinking_for_messages(&mut body);
-                body
-            } else {
-                let capabilities = self
-                    .catalog
-                    .messages_model_capabilities(selected.lease.account(), &model)
-                    .unwrap_or_default();
-                let mut body = responses_to_messages_request(original, &capabilities)
-                    .map_err(|error| invalid_request().with_source(error))?;
-                // Responses 的 HTTP JSON 和 SSE 共用事件输出，跨协议上游统一请求事件流
-                body.insert("stream".to_owned(), Value::Bool(true));
-                body
-            };
-            body.insert("model".to_owned(), Value::String(model.as_str().to_owned()));
-            let mut source_context = generate.protocol_payload().context().clone();
-            if source == OPENAI_PROTOCOL {
-                retain_target_headers(source, &mut source_context, &mut headers);
-                if body.get("speed").and_then(Value::as_str) == Some("fast") {
-                    crate::compat::add_translated_fast_beta(
-                        &mut headers,
-                        &crate::transport::request::decode_passthrough_headers(&source_context),
-                    );
-                }
-            }
-            let translator = (source == OPENAI_PROTOCOL)
-                .then(|| translator::MessagesResponseTranslator::new(original));
-            drop(operation);
-            let stream = self
-                .execute_selected_messages(body, source_context, headers, model, context, selected)
-                .await?;
-            return Ok(if let Some(translator) = translator {
-                stream.with_native_response_translator(translator)
-            } else {
-                stream
-            });
-        }
-        if source == ANTHROPIC_PROTOCOL {
-            let original = generate.protocol_payload().body();
-            let mut source_context = generate.protocol_payload().context().clone();
-            retain_target_headers(source, &mut source_context, &mut headers);
-            let translator = translator::ResponsesResponseTranslator::new(original);
-            let mut translated = messages_to_responses_request(original)
-                .map_err(|error| invalid_request().with_source(error))?;
-            if matches!(
-                selected.lease.authentication(),
-                CodexRuntimeAuthentication::OAuth(_)
-            ) {
-                crate::compat::normalize_translated_codex_service_tier(&mut translated);
-            }
-            let body = serde_json::to_vec(&translated).map_err(|_| invalid_request())?;
-            let operation = operation
-                .replace_protocol_wire(None, source_context)
-                .map_err(|_| invalid_request())?
-                .translate_protocol_wire(OPENAI_PROTOCOL, body.into())
-                .map_err(|_| invalid_request())?;
-            // 原始能力已在上面核对；Responses 终端只校验它实际消费的 wire 事实
-            if let Operation::Generate(generate) = &operation {
-                selected.frozen_requirements = generate.wire_capability_requirements();
-            }
-            let stream = self
-                .execute_selected_generate(operation, headers, model, context, selected)
-                .await?;
-            return Ok(stream.with_native_response_translator(translator));
-        }
-        self.execute_selected_generate(operation, headers, model, context, selected)
-            .await
+        let mut body = generate.protocol_payload().body().clone();
+        body.insert("model".to_owned(), Value::String(model.as_str().to_owned()));
+        self.execute_selected_messages(
+            body,
+            generate.protocol_payload().context().clone(),
+            headers,
+            model,
+            context,
+            selected,
+        )
+        .await
     }
 
-    async fn execute_selected_messages(
+    pub(super) async fn execute_selected_messages(
         self: Arc<Self>,
         body: Map<String, Value>,
         source_context: Map<String, Value>,
@@ -258,45 +178,4 @@ fn invalid_request() -> ProviderError {
 
 fn protocol_error() -> ProviderError {
     provider_error(ProviderErrorKind::Protocol, UpstreamSendState::Sent)
-}
-
-fn retain_target_headers(
-    source: &str,
-    context: &mut Map<String, Value>,
-    headers: &mut Vec<MiddlewareHeader>,
-) {
-    let keep = |name: &str| {
-        let name = name.to_ascii_lowercase();
-        if source == ANTHROPIC_PROTOCOL {
-            !name.starts_with("anthropic-") && !name.starts_with("x-anthropic-")
-        } else {
-            ![
-                "openai-",
-                "x-openai-",
-                "x-codex-",
-                "x-oai-",
-                "x-responsesapi-",
-                "chatgpt-",
-            ]
-            .iter()
-            .any(|prefix| name.starts_with(prefix))
-                && !matches!(
-                    name.as_str(),
-                    "session-id" | "conversation-id" | "thread-id" | "turn-id" | "session_id"
-                )
-        }
-    };
-    if let Some(entries) = context
-        .get_mut(crate::transport::request::PASSTHROUGH_HEADERS_CONTEXT_KEY)
-        .and_then(Value::as_array_mut)
-    {
-        entries.retain(|entry| {
-            entry
-                .as_array()
-                .and_then(|entry| entry.first())
-                .and_then(Value::as_str)
-                .is_some_and(keep)
-        });
-    }
-    headers.retain(|header| keep(header.name()));
 }

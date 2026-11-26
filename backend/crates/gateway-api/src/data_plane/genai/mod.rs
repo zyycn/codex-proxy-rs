@@ -217,7 +217,6 @@ async fn generate(
             middleware_body: body,
         },
         None,
-        None,
     )
     .await
 }

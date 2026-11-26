@@ -79,6 +79,7 @@ fn saturated_snapshot_is_capacity_unavailable_even_with_exhausted_accounts() {
     );
     let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
     let error = block_on(selector.select(&SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &url,
         attempt: &request_attempt,
@@ -112,6 +113,7 @@ async fn recent_start_preserves_affinity_without_waiting() {
     let request_attempt = queued_attempt(Duration::from_secs(2));
     let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
     let request = SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &url,
         attempt: &request_attempt,
@@ -157,6 +159,7 @@ async fn affinity_queue_waits_for_the_original_account_for_local_capacity_blocke
         );
         let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
         let request = SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &url,
             attempt: &request_attempt,
@@ -200,6 +203,7 @@ async fn affinity_queue_full_and_timeout_preserve_binding_despite_free_fallback(
     let next_attempt = queued_attempt(Duration::from_secs(2));
     let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
     let request = SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &url,
         attempt: &head_attempt,
@@ -211,6 +215,7 @@ async fn affinity_queue_full_and_timeout_preserve_binding_despite_free_fallback(
     leases.busy_accounts.lock().unwrap().clear();
     let rejected = selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             attempt: &next_attempt,
             ..request
         })
@@ -226,6 +231,7 @@ async fn affinity_queue_full_and_timeout_preserve_binding_despite_free_fallback(
     let timeout_attempt = queued_attempt(Duration::from_millis(20));
     let timeout = selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             attempt: &timeout_attempt,
             ..request
         })
@@ -245,6 +251,7 @@ async fn affinity_queue_full_and_timeout_preserve_binding_despite_free_fallback(
     leases.busy_accounts.lock().unwrap().clear();
     let selected = selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             attempt: &next_attempt,
             ..request
         })
@@ -276,6 +283,7 @@ async fn affinity_queue_rechecks_hard_unavailability_before_switching_accounts()
         let request_attempt = queued_attempt(Duration::from_secs(2));
         let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
         let request = SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &url,
             attempt: &request_attempt,
@@ -310,6 +318,7 @@ async fn queue_enabled_without_affinity_still_uses_a_free_account() {
     let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
     let selected = selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &url,
             attempt: &request_attempt,
@@ -390,6 +399,7 @@ async fn affinity_wait_respects_explicit_policy_choices_but_not_delegated_fallba
         );
         let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
         let request = SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &url,
             attempt: &request_attempt,
@@ -461,6 +471,7 @@ async fn filtering_affinity_covers_native_reselection_and_lease_contention() {
         let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
         let selected = selector
             .select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &url,
                 attempt: &request_attempt,
@@ -519,6 +530,7 @@ async fn filtered_waiting_never_leases_excluded_affinity_and_next_request_can_re
     let filtered = capacity_attempt(policy, Some(filtered_policy(&["acct_first"])));
     let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
     let request = SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &url,
         attempt: &filtered,
@@ -534,6 +546,7 @@ async fn filtered_waiting_never_leases_excluded_affinity_and_next_request_can_re
     let recovered = capacity_attempt(policy, Some(filtered_policy(&[])));
     let selected = selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             attempt: &recovered,
             ..request
         })
@@ -544,6 +557,7 @@ async fn filtered_waiting_never_leases_excluded_affinity_and_next_request_can_re
     drop(selected);
     let selected = selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             attempt: &recovered,
             session_affinity_key: None,
             ..request
@@ -604,6 +618,7 @@ async fn all_filtered_is_terminal_before_queue_or_lease_even_for_native_pins() {
         let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
         let result = selector
             .select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &url,
                 attempt: &request_attempt,
@@ -654,6 +669,7 @@ async fn busy_leases_do_not_consume_the_next_round_robin_assignment() {
     *leases.busy.lock().unwrap() = true;
     let result = selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &url,
             attempt: &attempt,
@@ -722,6 +738,7 @@ async fn round_robin_counts_delegated_assignments_and_skips_explicit_picks() {
             let key = ProviderSessionAffinityKey::try_new(session).unwrap();
             let selected = selector
                 .select(&SelectCodexCredential {
+                    protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                     upstream_model: "gpt-5.4",
                     request_url: &url,
                     attempt,

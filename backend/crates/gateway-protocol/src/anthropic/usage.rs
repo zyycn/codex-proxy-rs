@@ -1,6 +1,6 @@
-//! Messages 累计用量的字段合并与 Responses 投影
+//! Messages 累计用量的字段合并与缓存事实
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 /// 原生 Messages 用量，缺失字段保留未知状态
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -51,27 +51,4 @@ impl MessageUsage {
                 .saturating_add(self.cache_creation_input_tokens.unwrap_or_default())
         })
     }
-
-    pub(super) fn responses(self) -> Value {
-        let input = self.total_input_tokens().unwrap_or_default();
-        let output = self.output_tokens.unwrap_or_default();
-        // Messages 没有独立的推理 token 计数，省略详情，避免空对象违反 Responses 客户端合同
-        json!({"input_tokens": input, "output_tokens": output, "total_tokens": input.saturating_add(output), "input_tokens_details": {"cached_tokens": self.cache_read_input_tokens.unwrap_or_default(), "cache_write_tokens": self.cache_creation_input_tokens.unwrap_or_default()}})
-    }
-}
-
-pub(super) fn responses_usage(value: &Value) -> Value {
-    let input = value
-        .get("input_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    let cached = value
-        .pointer("/input_tokens_details/cached_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    let written = value
-        .pointer("/input_tokens_details/cache_write_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    json!({"input_tokens": input.saturating_sub(cached).saturating_sub(written), "output_tokens": value.get("output_tokens").and_then(Value::as_u64).unwrap_or_default(), "cache_read_input_tokens": cached, "cache_creation_input_tokens": written})
 }

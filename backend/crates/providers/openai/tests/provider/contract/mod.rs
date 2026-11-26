@@ -186,60 +186,44 @@ async fn invalid_request_profile_preserves_diagnostic_before_any_upstream_send()
 }
 
 #[tokio::test]
-async fn native_openai_translates_a_non_native_source_before_encoding() {
+async fn native_openai_rejects_foreign_harness_before_middleware_rewriting() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
     let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/codex/responses"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(CAPTURE_COMPLETED_SSE),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
-    let translations = Arc::new(Mutex::new(0_usize));
+    let rewrites = Arc::new(Mutex::new(0_usize));
     let source = Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object(
             "example-source",
             Map::from_iter([("opaque".to_owned(), json!("source-only"))]),
         )
-        .unwrap()
-        .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))])),
+        .unwrap(),
     ));
-    let mut stream = provider_with_base_url(&store, server.uri())
+    let error = provider_with_base_url(&store, server.uri())
         .execute(
             planned_request("openai", source),
             context_with_middleware(
-                "req_native_translate",
-                Arc::new(TranslationMiddleware {
-                    translations: Arc::clone(&translations),
-                    target: Map::from_iter([
-                        ("model".to_owned(), json!("ignored-by-forced-model")),
-                        ("input".to_owned(), json!("translated")),
-                        ("stream".to_owned(), json!(true)),
-                    ]),
+                "req_no_foreign_rewrite",
+                Arc::new(RequestRewriteMiddleware {
+                    rewrites: Arc::clone(&rewrites),
+                    target: json!({"model":"ignored","input":"rewritten"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
                 }),
                 FastMode::Default,
             ),
         )
         .await
-        .expect("registered translation should run before native encoding");
+        .err()
+        .expect("middleware cannot authorize a foreign native harness");
+    assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
+    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    assert_eq!(*rewrites.lock().unwrap(), 0);
     assert!(server.received_requests().await.unwrap().is_empty());
-    while let Some(event) = stream.next().await {
-        event.expect("translated request response");
-    }
-    assert_eq!(*translations.lock().unwrap(), 1);
-    let requests = server.received_requests().await.unwrap();
-    let sent = captured_request_body(&requests[0]);
-    assert_eq!(sent["input"][0]["content"][0]["text"], "translated");
-    assert_eq!(sent["model"], "gpt-5.4");
 }
 
 #[tokio::test]
-async fn native_openai_rejects_missing_translation_before_send() {
+async fn native_openai_rejects_unknown_protocol_before_send() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
     let server = MockServer::start().await;
@@ -262,38 +246,38 @@ async fn native_openai_rejects_missing_translation_before_send() {
         )
         .await
     {
-        Ok(_) => panic!("missing translation pair must be explicit"),
+        Ok(_) => panic!("unknown source cannot use native Responses"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
+    assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
     assert_eq!(error.send_state(), UpstreamSendState::NotSent);
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn native_openai_rejects_capability_expanding_translation_before_send() {
+async fn native_openai_rejects_capability_expanding_rewrite_before_send() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
     let server = MockServer::start().await;
     let source = Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object(
-            "example-source",
-            Map::from_iter([("opaque".to_owned(), json!("source-only"))]),
+            "openai",
+            Map::from_iter([("input".to_owned(), json!("source-only"))]),
         )
         .unwrap()
         .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))])),
     ));
-    let translations = Arc::new(Mutex::new(0));
+    let rewrites = Arc::new(Mutex::new(0));
     let error = match provider_with_base_url(&store, server.uri())
         .execute(
             planned_request("openai", source),
             context_with_middleware(
                 "req_native_translate_expansion",
-                Arc::new(TranslationMiddleware {
-                    translations: Arc::clone(&translations),
+                Arc::new(RequestRewriteMiddleware {
+                    rewrites: Arc::clone(&rewrites),
                     target: json!({
                         "model":"ignored-by-forced-model",
-                        "input":"translated",
+                        "input":"rewritten",
                         "tools":[{"type":"function", "name":"new_capability"}]
                     })
                     .as_object()
@@ -305,17 +289,17 @@ async fn native_openai_rejects_capability_expanding_translation_before_send() {
         )
         .await
     {
-        Ok(_) => panic!("translation cannot expand routed capabilities"),
+        Ok(_) => panic!("rewrite cannot expand routed capabilities"),
         Err(error) => error,
     };
     assert_eq!(error.kind(), ProviderErrorKind::InvalidRequest);
     assert_eq!(error.send_state(), UpstreamSendState::NotSent);
-    assert_eq!(*translations.lock().unwrap(), 1);
+    assert_eq!(*rewrites.lock().unwrap(), 1);
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn native_openai_revalidates_translated_transport_without_reselecting() {
+async fn native_openai_revalidates_rewritten_transport_without_reselecting() {
     let store = Arc::new(MemoryAccountStore::default());
     let upstream = MockServer::start().await;
     store
@@ -327,8 +311,8 @@ async fn native_openai_revalidates_translated_transport_without_reselecting() {
         .await;
     let source = Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object(
-            "example-source",
-            Map::from_iter([("opaque".to_owned(), json!("source-only"))]),
+            "openai",
+            Map::from_iter([("input".to_owned(), json!("source-only"))]),
         )
         .unwrap()
         .with_context(Map::from_iter([("use_websocket".to_owned(), json!(true))])),
@@ -338,8 +322,8 @@ async fn native_openai_revalidates_translated_transport_without_reselecting() {
             planned_request("openai", source),
             context_with_middleware(
                 "req_native_translate_transport",
-                Arc::new(TranslationMiddleware {
-                    translations: Arc::new(Mutex::new(0)),
+                Arc::new(RequestRewriteMiddleware {
+                    rewrites: Arc::new(Mutex::new(0)),
                     target: json!({
                         "model": "ignored-by-forced-model",
                         "input": [],
@@ -355,7 +339,7 @@ async fn native_openai_revalidates_translated_transport_without_reselecting() {
         )
         .await
     {
-        Ok(_) => panic!("selected HTTP account cannot satisfy translated WebSocket request"),
+        Ok(_) => panic!("selected HTTP account cannot satisfy rewritten WebSocket request"),
         Err(error) => error,
     };
     assert_eq!(error.kind(), ProviderErrorKind::Unsupported);
@@ -364,19 +348,19 @@ async fn native_openai_revalidates_translated_transport_without_reselecting() {
 }
 
 #[tokio::test]
-async fn native_openai_claims_translated_session_affinity_before_send() {
+async fn native_openai_claims_rewritten_session_affinity_before_send() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
     let server = MockServer::start().await;
     let affinity = Arc::new(MemorySessionAffinity::default());
     let source = Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object(
-            "example-source",
-            Map::from_iter([("opaque".to_owned(), json!("source-only"))]),
+            "openai",
+            Map::from_iter([("input".to_owned(), json!("source-only"))]),
         )
         .unwrap()
         .with_context(Map::from_iter([
-            ("session_id".to_owned(), json!("translated-session")),
+            ("session_id".to_owned(), json!("rewritten-session")),
             ("use_websocket".to_owned(), json!(false)),
         ])),
     ));
@@ -385,11 +369,11 @@ async fn native_openai_claims_translated_session_affinity_before_send() {
             planned_request("openai", source),
             context_with_middleware(
                 "req_native_translate_affinity",
-                Arc::new(TranslationMiddleware {
-                    translations: Arc::new(Mutex::new(0)),
+                Arc::new(RequestRewriteMiddleware {
+                    rewrites: Arc::new(Mutex::new(0)),
                     target: json!({
                         "model": "ignored-by-forced-model",
-                        "input": "translated",
+                        "input": "rewritten",
                         "stream": true
                     })
                     .as_object()
@@ -400,7 +384,7 @@ async fn native_openai_claims_translated_session_affinity_before_send() {
             ),
         )
         .await
-        .expect("translated session should keep the selected account");
+        .expect("rewritten session should keep the selected account");
     assert_eq!(
         stream.metadata().provider_account_id().as_str(),
         "acct_provider_contract"
@@ -1617,12 +1601,12 @@ fn global_request_location() -> gateway_core::account::RequestLocation {
 }
 
 #[derive(Debug)]
-struct TranslationMiddleware {
-    translations: Arc<Mutex<usize>>,
+struct RequestRewriteMiddleware {
+    rewrites: Arc<Mutex<usize>>,
     target: Map<String, Value>,
 }
 
-impl MiddlewarePlan for TranslationMiddleware {
+impl MiddlewarePlan for RequestRewriteMiddleware {
     fn handle(
         &self,
         context: MiddlewareContext,
@@ -1631,7 +1615,7 @@ impl MiddlewarePlan for TranslationMiddleware {
     ) -> BoxFuture<'static, Result<MiddlewareResponse, MiddlewareError>> {
         assert_eq!(context.mount(), MiddlewareMount::Attempt);
         assert!(context.account_id().is_some());
-        *self.translations.lock().unwrap() += 1;
+        *self.rewrites.lock().unwrap() += 1;
         let headers = request.headers().to_vec();
         next.run(
             request

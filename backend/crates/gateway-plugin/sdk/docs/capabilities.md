@@ -508,15 +508,14 @@ Responses 终端重新解码插件正文时读取改写后的正文上限；atte
 更早的改写使用上述 HTTP 请求的 `settings`。`request.head.settings_sources` 使用相同的来源结构，`execution.input` 表示进入当前 Key 作用域时的有效值。
 原生 Responses WebSocket 每轮请求读取当前宿主快照，重新认证并解析 Key 策略，同时保留握手阶段的显式改写；已开始的执行保持自己的冻结值
 
-Chat Completions 在 request 与 attempt 挂载中使用规范化的 Responses 请求和响应正文，
-`request.head.endpoint` 仍为 `/v1/chat/completions`，`protocol` 仍为 `openai`。
-request 改写按 Responses 合同重新解码，响应先经过该合同的复核，再由 API 投影成 Chat 交给外层 HTTP 挂载。
-Chat 的下游流模式及 `include_usage` 由 API 持有，request 阶段不能切换已确定的下游流模式。
-同一边界的原样保留不要求 Chat 与 Responses 字节相同；需要读写 `messages` 或 `choices` 的插件应使用 HTTP 挂载，
-字段范围见 [Chat 合同](../../../../../docs/api.md#chat-completions-请求)
+Chat Completions 在 request 与 attempt 挂载中保留 Chat 正文，`request.head.endpoint` 为 `/v1/chat/completions`，
+`protocol` 为 `chat_completions`。request 改写按 Chat 合同重新解码，`messages` 不会在进入选路前变成 Responses `input`。
+Provider 选定账号后直接转换到实际目标，`outbound` 看到目标协议请求；回程直接产生 Chat JSON 或 chunks，再经过对应响应挂载与 API 交付校验。
+下游流模式由 API 入口固定，request 阶段不能切换已经确定的 HTTP 响应模式。
+同一挂载边界仍遵守原始字节保留规则；字段范围见 [Chat 合同](../../../../../docs/api.md#chat-completions-请求)
 
-Messages 入站的 `protocol` 为 `anthropic`，端点为 `/v1/messages`；计数使用 `/v1/messages/count_tokens` 与 `count_tokens` 操作
-同协议请求保留原生正文，Responses 与 Messages 之间的转换发生在所选上游的执行边界
+Messages 入站的 `protocol` 为 `anthropic`，端点为 `/v1/messages`；计数使用 `/v1/messages/count_tokens` 与 `count_tokens` 操作。
+原生请求只选择同协议账号，不调用内置 Chat 转换。插件自行承担转换与回译；宿主不保留旧 Chat 视图，不修复插件输出或补偿插件状态
 
 中间件可读取和改写完整请求、响应 headers、正文与响应帧，也不按字段名称过滤认证、Cookie、会话或连接头。
 该能力遵循[完整信任](manifest.md#完整信任)边界；类型、HTTP 格式、大小及资源生命周期仍需符合合同

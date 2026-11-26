@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 pub use crate::capabilities::RequestFacts;
 
 use crate::anthropic::{ANTHROPIC_PROTOCOL, messages_request_effort};
+use crate::chat_completions::{self, CHAT_PROTOCOL};
 use crate::genai::{self, GENAI_PROTOCOL};
 use crate::openai::{OPENAI_PROTOCOL, codex_responses_request_semantics_with_turn_metadata};
 
@@ -63,6 +64,10 @@ pub fn request_observation(
                 compact: semantics.compact,
             }
         }
+        CHAT_PROTOCOL => RequestObservation {
+            reasoning_effort: chat_completions::request_effort(body).map(str::to_owned),
+            ..RequestObservation::default()
+        },
         ANTHROPIC_PROTOCOL => RequestObservation {
             reasoning_effort: messages_request_effort(body).map(str::to_owned),
             ..RequestObservation::default()
@@ -121,6 +126,7 @@ pub fn request_facts(protocol: &str, body: &Map<String, Value>) -> RequestFacts 
                 == Some("json_schema");
         }
         GENAI_PROTOCOL => genai::request_facts(body, &mut facts),
+        CHAT_PROTOCOL => facts = chat_completions::request_facts(body),
         _ => {}
     }
     facts

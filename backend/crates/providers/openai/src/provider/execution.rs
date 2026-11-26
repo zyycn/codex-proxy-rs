@@ -254,7 +254,7 @@ impl CodexProvider {
         };
         if !context.is_diagnostic_required_account() {
             self.selector
-                .validate_translated_selection(
+                .validate_selected_affinity(
                     &mut lease,
                     affinity.as_ref(),
                     None,

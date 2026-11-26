@@ -1039,3 +1039,57 @@ fn native_count_catalog_and_execution_do_not_fall_back_to_another_protocol() {
             .is_empty()
     );
 }
+
+#[test]
+fn same_model_native_protocols_do_not_borrow_chat_conversion_capabilities() {
+    let native = capabilities()
+        .with_native_generation_protocols(["openai", "anthropic"])
+        .with_translated_generation_protocols([gateway_protocol::chat_completions::CHAT_PROTOCOL]);
+    let genai = capabilities()
+        .with_generation_protocol("genai")
+        .with_translated_generation_protocols([gateway_protocol::chat_completions::CHAT_PROTOCOL]);
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).unwrap(),
+        settings(),
+        vec![
+            ProviderKind::new("openai").unwrap(),
+            ProviderKind::new("xai").unwrap(),
+        ],
+        vec![
+            model("openai", "shared", native),
+            model("xai", "shared", genai),
+        ],
+        vec![],
+    )
+    .unwrap()
+    .with_account_directory(account_directory());
+    for (protocol, expected) in [
+        ("openai", vec!["openai"]),
+        ("anthropic", vec!["openai"]),
+        ("genai", vec!["xai"]),
+        (
+            gateway_protocol::chat_completions::CHAT_PROTOCOL,
+            vec!["openai", "xai"],
+        ),
+    ] {
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(protocol, Default::default()).unwrap(),
+        ));
+        let plan = snapshot
+            .plan(
+                &PublicModelId::new("shared").unwrap(),
+                &operation,
+                account_scope(),
+                &RoutingContext::default(),
+            )
+            .unwrap();
+        assert_eq!(
+            plan.candidates()
+                .iter()
+                .map(|candidate| candidate.provider().as_str())
+                .collect::<Vec<_>>(),
+            expected,
+            "{protocol}"
+        );
+    }
+}

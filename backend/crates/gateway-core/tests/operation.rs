@@ -399,3 +399,41 @@ fn image_request_should_preserve_generation_and_edit_payloads_opaque() {
     );
     assert!(!format!("{edit:?}").contains("data:image/png"));
 }
+
+#[test]
+fn chat_source_survives_the_one_authorized_wire_translation() {
+    let original = serde_json::json!({"model":"shared", "messages":[{"role":"user","content":"hello"}], "max_completion_tokens":1024});
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            gateway_protocol::chat_completions::CHAT_PROTOCOL,
+            original.as_object().unwrap().clone(),
+        )
+        .unwrap(),
+    ));
+    let requirements = operation.capability_requirements();
+    let translated = operation.translate_protocol_wire("anthropic", Bytes::from_static(br#"{"model":"shared","messages":[{"role":"user","content":"hello"}],"max_tokens":1024}"#)).unwrap();
+    let Operation::Generate(generate) = &translated else {
+        unreachable!()
+    };
+    assert_eq!(
+        generate.source_protocol(),
+        gateway_protocol::chat_completions::CHAT_PROTOCOL
+    );
+    assert_eq!(generate.protocol_payload().protocol(), "anthropic");
+    assert_eq!(translated.capability_requirements(), requirements);
+    let replaced = translated
+        .replace_protocol_wire(None, serde_json::Map::new())
+        .unwrap();
+    let Operation::Generate(generate) = &replaced else {
+        unreachable!()
+    };
+    assert_eq!(
+        generate.source_protocol(),
+        gateway_protocol::chat_completions::CHAT_PROTOCOL
+    );
+    assert!(
+        replaced
+            .translate_protocol_wire("genai", Bytes::from_static(b"{}"))
+            .is_err()
+    );
+}

@@ -2,10 +2,11 @@
 
 mod affinity;
 mod candidates;
+mod chat;
+mod count;
 mod execution;
 mod feedback;
 mod selection;
-mod translation;
 pub(crate) mod workers;
 
 use crate::{
@@ -17,8 +18,8 @@ use gateway_core::{
     account::{AccountFeedbackStats, ProviderAccountId, ProviderAccountStore},
     concurrency::ConcurrencyWaitQueue,
     engine::{
-        AttemptContext, ModelRequestId,
-        provider::{LocalWebSocketPrewarm, Provider, ProviderRequest, ProviderStream},
+        AttemptContext,
+        provider::{Provider, ProviderRequest, ProviderStream},
     },
     error::{ErrorSource, ProviderError, ProviderErrorKind},
     provider_ports::{
@@ -74,14 +75,6 @@ impl AntigravityProvider {
 
 #[async_trait]
 impl Provider for AntigravityProvider {
-    fn local_websocket_prewarm(
-        &self,
-        operation: &gateway_core::operation::Operation,
-        request_id: &ModelRequestId,
-    ) -> Option<LocalWebSocketPrewarm> {
-        translation::websocket_prewarm(operation, request_id)
-    }
-
     fn is_direct_account(&self, authentication_kind: &str) -> bool {
         authentication_kind == "oauth"
     }
@@ -136,5 +129,3 @@ fn unavailable(error: impl Into<ErrorSource>) -> ProviderError {
     crate::transport::unsent(ProviderErrorKind::ProviderInfrastructureUnavailable)
         .with_source(error)
 }
-
-mod web_search;

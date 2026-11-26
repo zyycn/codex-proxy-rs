@@ -44,7 +44,7 @@ async fn released(fixture: &Fixture) {
 }
 
 #[tokio::test]
-async fn native_and_messages_count_share_identity_and_never_generate_usage() {
+async fn native_and_provider_count_share_identity_and_never_generate_usage() {
     for (protocol, body, expected) in [
         (
             "genai",
@@ -52,9 +52,9 @@ async fn native_and_messages_count_share_identity_and_never_generate_usage() {
             json!({"totalTokens":42}),
         ),
         (
-            "anthropic",
-            json!({"model":"fixture-model","messages":[{"role":"user","content":"hello"}],"system":"client identity","tools":[{"name":"read","input_schema":{"type":"object"}}]}),
-            json!({"input_tokens":42}),
+            "token-count",
+            json!({"model":"fixture-model","contents":[{"role":"user","parts":[{"text":"hello"}]}],"systemInstruction":{"parts":[{"text":"client identity"}]},"tools":[{"functionDeclarations":[{"name":"read"}]}]}),
+            json!({"totalTokens":42}),
         ),
     ] {
         let upstream = MockServer::start().await;
@@ -206,5 +206,28 @@ async fn empty_protobuf_count_response_is_an_explicit_zero() {
     let wire = events[0].wire_event().unwrap();
     let value: Value = serde_json::from_slice(wire.raw_json_body().unwrap()).unwrap();
     assert_eq!(value, json!({"totalTokens":0}));
+    released(&fixture).await;
+}
+
+#[tokio::test]
+async fn messages_count_cannot_use_the_genai_native_counter() {
+    let upstream = MockServer::start().await;
+    let fixture = Fixture::new(&upstream.uri());
+    let error = fixture
+        .provider
+        .clone()
+        .execute(
+            counted(
+                "anthropic",
+                json!({"messages":[{"role":"user","content":"hello"}]}),
+            ),
+            context(profile(), CancellationToken::new()),
+        )
+        .await
+        .err()
+        .expect("native count protocols cannot be converted");
+    assert_eq!(error.kind(), ProviderErrorKind::Unsupported);
+    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    assert!(upstream.received_requests().await.unwrap().is_empty());
     released(&fixture).await;
 }

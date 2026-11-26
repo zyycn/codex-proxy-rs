@@ -101,6 +101,7 @@ async fn selector_overlaps_cooldown_reads_with_bounded_in_flight_work() {
         let started = tokio::time::Instant::now();
         let selected = selector
             .select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &request_url,
                 attempt: &attempt,
@@ -145,6 +146,7 @@ async fn dropping_selection_cancels_pending_reads_without_starting_later_batches
     );
     let request_url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
     let request = SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &request_url,
         attempt: &attempt,
@@ -244,6 +246,7 @@ async fn concurrent_reads_preserve_cooldown_expiry_probe_freeze_and_error_fallba
         let attempt = attempt(BTreeSet::new());
         let selected = selector
             .select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &request_url,
                 attempt: &attempt,
@@ -312,6 +315,7 @@ async fn shorter_account_cooldown_cannot_unmask_an_active_model_cooldown_during_
     let attempt = attempt(BTreeSet::new());
     let selected = selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &request_url,
             attempt: &attempt,

@@ -56,14 +56,14 @@ pnpm --dir frontend dev
 
 [后端 Workspace 边界](architecture.md#3-workspace-边界) · [前端模块职责](architecture.md#34-前端模块职责) · [共享 UI 组件架构](../modules/ui/playground/guide/architecture.md)
 
-Messages 与 Responses 的纯协议转换位于 `backend/crates/gateway-protocol/src/anthropic/`，
-HTTP 入口位于 `backend/crates/gateway-api/src/data_plane/messages.rs`，
-账号协议分派、HTTP 执行和计数位于 `backend/crates/providers/openai/src/provider/messages/`。
+Chat Completions 到 Responses、Messages、GenAI 的纯协议转换位于 `backend/crates/gateway-protocol/src/chat_completions/`，
+Chat HTTP 入口位于 `backend/crates/gateway-api/src/data_plane/chat_completions/`，各 Provider 的 `provider/chat/` 或 `provider/chat.rs` 负责调用获准的转换。
+Messages 原生类型位于 `backend/crates/gateway-protocol/src/anthropic/`，账号协议分派、HTTP 执行和计数位于 `backend/crates/providers/openai/src/provider/messages/`。
 模块职责见 [Provider 与协议边界](architecture.md#5-provider-与协议边界)
 
-联调协议时分别准备使用 `responses` 和 `messages` 的 API Key 账号，并通过账号分组与 Client Key 固定上游范围，
-避免混合账号池使一次请求选中其他协议。对 Responses、Chat 和 Messages 三个入口分别检查 JSON 与 SSE，
-再核对工具往返、取消、错误和输入计数；请求格式及六种组合见 [模型数据面](api.md#3-模型数据面与模型目录)。
+联调协议时为各 Provider 准备对应的原生账号，并通过账号分组与 Client Key 固定上游范围；OpenAI 的 Responses 与 Messages API Key 账号应分组验证。
+分别检查各账号的原生入口与 Chat 入口的 JSON、SSE、工具往返、取消和错误；支持计数的账号另测原生计数入口，并确认其他原生协议入口不会触发内置转换。
+请求格式与支持范围见 [模型数据面](api.md#3-模型数据面与模型目录)。
 Messages 账号只配置 HTTP；本地计数估算不能替代上游计费核对
 
 OpenAI 的 `transport::tls::` 测试在本机回环地址采集 ClientHello，覆盖默认 HTTP、自定义 CA 的 HTTP 和 WebSocket。运行方式见[后端验证命令](architecture.md#验证命令)

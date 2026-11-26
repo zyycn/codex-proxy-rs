@@ -14,6 +14,7 @@ use crate::data_plane::responses::validation::{
 
 #[derive(Clone)]
 pub(super) enum GenerationValidationFacts {
+    Chat(Arc<Mutex<Option<String>>>),
     Responses(ResponseValidationFacts),
     Messages(Arc<Mutex<Option<String>>>),
     Count(&'static str),
@@ -23,6 +24,7 @@ pub(super) enum GenerationValidationFacts {
 impl GenerationValidationFacts {
     pub(super) fn new(protocol: GenerationEndpoint) -> Self {
         match protocol {
+            GenerationEndpoint::Chat => Self::Chat(Arc::default()),
             GenerationEndpoint::Responses => Self::Responses(ResponseValidationFacts::default()),
             GenerationEndpoint::Messages => Self::Messages(Arc::default()),
             GenerationEndpoint::MessageTokenCount => Self::Count("input_tokens"),
@@ -33,6 +35,25 @@ impl GenerationValidationFacts {
 
     pub(super) fn observe_event(&self, event: &ProviderEvent) {
         match self {
+            Self::Chat(id) => {
+                if let Some(wire) = event.wire_event().filter(|wire| {
+                    wire.protocol() == gateway_protocol::chat_completions::CHAT_PROTOCOL
+                }) {
+                    let parsed = wire
+                        .raw_json_body()
+                        .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok());
+                    if let Some(value) = parsed
+                        .as_ref()
+                        .unwrap_or_else(|| wire.data())
+                        .get("id")
+                        .and_then(Value::as_str)
+                    {
+                        id.lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .get_or_insert_with(|| value.to_owned());
+                    }
+                }
+            }
             Self::Responses(facts) => facts.observe_event(event),
             Self::Messages(id) => {
                 if let Some(value) = event
@@ -73,12 +94,29 @@ impl GenerationValidationFacts {
         match self {
             Self::Responses(facts) => facts.response_id(),
             Self::Messages(id) => id.lock().ok().and_then(|id| id.clone()),
+            Self::Chat(id) => id
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
             Self::Count(_) | Self::GenAi => None,
         }
     }
 
     pub(super) fn validate_buffered(&self, bytes: &[u8]) -> Result<(), ()> {
         match self {
+            Self::Chat(id) => {
+                crate::data_plane::chat_completions::delivery::validate_response(bytes)?;
+                let value: Value = serde_json::from_slice(bytes).map_err(|_| ())?;
+                if id
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .as_deref()
+                    .is_some_and(|id| value.get("id").and_then(Value::as_str) != Some(id))
+                {
+                    return Err(());
+                }
+                Ok(())
+            }
             Self::Responses(facts) => validate_buffered_response(facts, bytes).map_err(|_| ()),
             Self::Messages(_) => {
                 let value: Value = serde_json::from_slice(bytes).map_err(|_| ())?;
@@ -113,6 +151,7 @@ impl GenerationValidationFacts {
 }
 
 pub(super) enum GenerationDeliveryValidator {
+    Chat(crate::data_plane::chat_completions::delivery::ChatDeliveryValidator),
     Responses(ResponsesDeliveryValidator),
     Messages {
         id: Option<String>,
@@ -127,6 +166,7 @@ pub(super) enum GenerationDeliveryValidator {
 impl GenerationDeliveryValidator {
     pub(super) fn new(protocol: GenerationEndpoint) -> Self {
         match protocol {
+            GenerationEndpoint::Chat => Self::Chat(Default::default()),
             GenerationEndpoint::Responses => Self::Responses(ResponsesDeliveryValidator::default()),
             GenerationEndpoint::GenAi => Self::GenAi {
                 observation: GenerateContentObservation::default(),
@@ -141,6 +181,7 @@ impl GenerationDeliveryValidator {
 
     pub(super) fn response_id(&self) -> Option<&str> {
         match self {
+            Self::Chat(validator) => validator.response_id(),
             Self::Responses(validator) => validator.response_id(),
             Self::Messages { id, .. } => id.as_deref(),
             Self::GenAi { .. } => None,
@@ -154,6 +195,18 @@ impl GenerationDeliveryValidator {
         facts: &GenerationValidationFacts,
     ) -> Result<(), ()> {
         match (self, facts) {
+            (Self::Chat(validator), GenerationValidationFacts::Chat(id)) => {
+                validator.validate_frame(bytes)?;
+                if validator.response_id().is_some_and(|actual| {
+                    id.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .as_deref()
+                        .is_some_and(|expected| expected != actual)
+                }) {
+                    return Err(());
+                }
+                Ok(())
+            }
             (Self::Responses(validator), GenerationValidationFacts::Responses(facts)) => validator
                 .validate_frame(bytes, transformed, facts)
                 .map_err(|_| ()),
@@ -234,6 +287,7 @@ impl GenerationDeliveryValidator {
 
     pub(super) fn finish_delivery(&self) -> Result<(), ()> {
         match self {
+            Self::Chat(validator) => validator.finish_delivery(),
             Self::Responses(validator) => validator.finish_delivery().map_err(|_| ()),
             Self::Messages { finished: true, .. } => Ok(()),
             Self::GenAi {

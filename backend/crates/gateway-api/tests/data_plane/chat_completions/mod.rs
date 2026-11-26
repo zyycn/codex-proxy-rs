@@ -1,45 +1,42 @@
-//! Chat Completions 的请求转换、输出投影与 HTTP 生命周期测试
+//! Chat 原始入口与交付生命周期测试，纯转换测试归 gateway-protocol
 
+mod delivery;
 mod http;
-mod request;
-mod response;
 
-use gateway_core::event::{ProtocolWireEvent, ProviderEvent};
+use gateway_core::event::{GatewayEvent, ProtocolWireEvent, ProviderEvent, ResponseMeta};
 use serde_json::{Value, json};
 
 fn chat_request(stream: bool) -> Value {
     json!({"model":"model-a","messages":[{"role":"user","content":"hello"}],"stream":stream})
 }
 
-fn wire(kind: &str, mut value: Value) -> ProviderEvent {
-    value["type"] = json!(kind);
-    ProviderEvent::wire(ProtocolWireEvent::json("openai", Some(kind.to_owned()), value).unwrap())
-}
-
-fn completed(output: Value) -> ProviderEvent {
-    wire(
-        "response.completed",
-        json!({"response":{
-            "id":"resp_chat_test","object":"response","model":"upstream-model",
-            "status":"completed","output":output,
-            "usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,
-                "input_tokens_details":{"cached_tokens":3},
-                "output_tokens_details":{"reasoning_tokens":2}}
-        }}),
+fn chunk(delta: Value, finish: Value) -> ProviderEvent {
+    ProviderEvent::wire(
+        ProtocolWireEvent::json(
+            "chat_completions",
+            None,
+            json!({
+                "id":"chatcmpl_fixture", "object":"chat.completion.chunk", "created":100,
+                "model":"model-a", "choices":[{"index":0,"delta":delta,"finish_reason":finish}]
+            }),
+        )
+        .unwrap(),
     )
 }
 
-fn message(text: &str) -> Value {
-    json!({"id":"msg_chat_test","type":"message","role":"assistant","status":"completed",
-        "content":[{"type":"output_text","text":text,"annotations":[]}]})
+fn completed(text: &str) -> ProviderEvent {
+    chunk(json!({"content":text}), json!("stop")).with_fact(GatewayEvent::Completed(
+        ResponseMeta::new("upstream_response", "model-a"),
+    ))
 }
 
 fn created() -> ProviderEvent {
-    wire(
-        "response.created",
-        json!({"response":{
-            "id":"resp_chat_test","object":"response","model":"upstream-model",
-            "status":"in_progress","output":[]
-        }}),
-    )
+    chunk(json!({"role":"assistant"}), Value::Null)
+}
+
+fn json_completed() -> ProviderEvent {
+    ProviderEvent::wire(ProtocolWireEvent::raw_json("chat_completions", bytes::Bytes::from(json!({
+        "id":"chatcmpl_fixture", "object":"chat.completion", "created":100,
+        "model":"model-a", "choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}]
+    }).to_string())).unwrap()).with_fact(GatewayEvent::Completed(ResponseMeta::new("upstream_response", "model-a")))
 }

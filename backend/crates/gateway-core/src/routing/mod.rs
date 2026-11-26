@@ -157,7 +157,7 @@ pub struct ModelCapabilities {
     features: BTreeMap<Feature, SupportLevel>,
     max_output_tokens: Option<u64>,
     upstream_validates_features: bool,
-    generation_protocol: Option<&'static str>,
+    native_generation_protocols: BTreeSet<&'static str>,
     translated_generation_protocols: BTreeSet<&'static str>,
     reasoning_variants: BTreeMap<String, ReasoningModelVariant>,
     account_metadata: BTreeMap<crate::account::ProviderAccountId, AccountModelMetadata>,
@@ -434,7 +434,7 @@ impl ModelCapabilities {
             features: BTreeMap::new(),
             max_output_tokens,
             upstream_validates_features: false,
-            generation_protocol: None,
+            native_generation_protocols: BTreeSet::new(),
             translated_generation_protocols: BTreeSet::new(),
             reasoning_variants: BTreeMap::new(),
             account_metadata: BTreeMap::new(),
@@ -491,8 +491,18 @@ impl ModelCapabilities {
 
     /// 声明原生生成协议；额外转换入口须显式登记，其他操作沿用各自的能力约束
     #[must_use]
-    pub const fn with_generation_protocol(mut self, protocol: &'static str) -> Self {
-        self.generation_protocol = Some(protocol);
+    pub fn with_generation_protocol(mut self, protocol: &'static str) -> Self {
+        self.native_generation_protocols = BTreeSet::from([protocol]);
+        self
+    }
+
+    /// 同一 Provider 可包含不同协议的账号，最终资格仍由账号选择器核对
+    #[must_use]
+    pub fn with_native_generation_protocols(
+        mut self,
+        protocols: impl IntoIterator<Item = &'static str>,
+    ) -> Self {
+        self.native_generation_protocols = protocols.into_iter().collect();
         self
     }
 
@@ -512,17 +522,29 @@ impl ModelCapabilities {
         requirements: &CapabilityRequirements,
     ) -> Option<BTreeSet<Feature>> {
         if operation.requires_native_protocol()
-            && self.generation_protocol != Some(operation.protocol())
+            && !self
+                .native_generation_protocols
+                .contains(operation.protocol())
         {
             return None;
         }
         if matches!(operation, crate::operation::Operation::Generate(_))
-            && self.generation_protocol.is_some_and(|protocol| {
-                protocol != operation.protocol()
-                    && !self
-                        .translated_generation_protocols
-                        .contains(operation.protocol())
-            })
+            && !self.native_generation_protocols.is_empty()
+            && !self
+                .native_generation_protocols
+                .contains(operation.protocol())
+            && !self
+                .translated_generation_protocols
+                .contains(operation.protocol())
+        {
+            return None;
+        }
+        if matches!(operation, crate::operation::Operation::CountTokens(_))
+            && operation.protocol() != "token-count"
+            && !self.native_generation_protocols.is_empty()
+            && !self
+                .native_generation_protocols
+                .contains(operation.protocol())
         {
             return None;
         }

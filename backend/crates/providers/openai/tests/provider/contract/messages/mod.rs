@@ -1,4 +1,4 @@
-//! Messages 原生 wire、跨协议头隔离和本地计数合同
+//! Messages 原生 wire、Chat 直接转换和同协议计数合同
 
 mod affinity;
 mod translator;
@@ -52,6 +52,24 @@ fn messages_operation(stream: bool) -> Operation {
                     ["x-business-extension", STANDARD.encode("keep")]
                 ]),
             )])),
+    ))
+}
+
+fn chat_operation(stream: bool) -> Operation {
+    let source = generate_with_downstream_headers();
+    let Operation::Generate(source) = source else {
+        unreachable!()
+    };
+    let mut body = json!({"model":"gpt-5.4", "stream":stream,
+        "reasoning_effort":"xhigh",
+        "messages":[{"role":"user","content":"hello"}]});
+    if stream {
+        body["stream_options"] = json!({"include_usage":true});
+    }
+    Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("chat_completions", body.as_object().unwrap().clone())
+            .unwrap()
+            .with_context(source.protocol_payload().context().clone()),
     ))
 }
 
@@ -226,7 +244,7 @@ async fn native_messages_preserve_json_sse_headers_and_real_signatures() {
 }
 
 #[tokio::test]
-async fn messages_and_responses_translate_with_target_header_boundaries() {
+async fn chat_reaches_each_selected_protocol_with_target_header_boundaries() {
     for target in [ApiKeyProtocol::Messages, ApiKeyProtocol::Responses] {
         let server = MockServer::start().await;
         let store = Arc::new(MemoryAccountStore::default());
@@ -247,11 +265,7 @@ async fn messages_and_responses_translate_with_target_header_boundaries() {
             .expect(1)
             .mount(&server)
             .await;
-        let operation = if target == ApiKeyProtocol::Messages {
-            generate_with_downstream_headers()
-        } else {
-            messages_operation(true)
-        };
+        let operation = chat_operation(true);
         let expected_protocol = operation.protocol().to_owned();
         let mut stream = provider(&store)
             .execute(
@@ -311,16 +325,16 @@ async fn messages_and_responses_translate_with_target_header_boundaries() {
 }
 
 #[tokio::test]
-async fn translated_messages_service_tiers_follow_the_selected_responses_upstream() {
+async fn chat_service_tiers_follow_the_selected_responses_upstream() {
     for api_key in [false, true] {
         for (options, oauth_tier, api_tier) in [
             (json!({"service_tier":"auto"}), None, Some("auto")),
+            (json!({"service_tier":"default"}), None, Some("default")),
             (
-                json!({"service_tier":"standard_only"}),
-                None,
-                Some("default"),
+                json!({"service_tier":"priority"}),
+                Some("priority"),
+                Some("priority"),
             ),
-            (json!({"speed":"fast"}), Some("priority"), Some("priority")),
         ] {
             let server = MockServer::start().await;
             let store = Arc::new(MemoryAccountStore::default());
@@ -347,7 +361,7 @@ async fn translated_messages_service_tiers_follow_the_selected_responses_upstrea
                 .unwrap()
                 .extend(options.as_object().unwrap().clone());
             let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
-                ProtocolPayload::json_object("anthropic", body.as_object().unwrap().clone())
+                ProtocolPayload::json_object("chat_completions", body.as_object().unwrap().clone())
                     .unwrap()
                     .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))])),
             ));
@@ -376,12 +390,10 @@ async fn translated_messages_service_tiers_follow_the_selected_responses_upstrea
 }
 
 #[tokio::test]
-async fn custom_messages_and_responses_count_locally_without_billable_usage() {
+async fn custom_messages_count_locally_without_billable_usage() {
     for (target, source) in [
         (ApiKeyProtocol::Messages, "anthropic"),
-        (ApiKeyProtocol::Responses, "anthropic"),
         (ApiKeyProtocol::Messages, "token-count"),
-        (ApiKeyProtocol::Responses, "token-count"),
     ] {
         let server = MockServer::start().await;
         let store = Arc::new(MemoryAccountStore::default());
@@ -419,7 +431,7 @@ async fn custom_messages_and_responses_count_locally_without_billable_usage() {
 async fn cancelled_local_count_returns_no_usage_or_result() {
     let server = MockServer::start().await;
     let store = Arc::new(MemoryAccountStore::default());
-    seed(&store, &server, ApiKeyProtocol::Responses).await;
+    seed(&store, &server, ApiKeyProtocol::Messages).await;
     let cancel = CancellationToken::new();
     let operation = Operation::CountTokens(TokenCountRequest::from_raw_json(
         RawJsonPayload::new(
@@ -541,7 +553,7 @@ async fn official_messages_count_preserves_native_result_and_never_estimates_aft
 }
 
 #[tokio::test]
-async fn translated_thinking_uses_selected_account_catalog_and_preserves_fast_betas() {
+async fn chat_thinking_uses_selected_account_catalog_and_preserves_fast_betas() {
     let store = Arc::new(MemoryAccountStore::default());
     let adaptive = MockServer::start().await;
     let manual = MockServer::start().await;
@@ -576,9 +588,9 @@ async fn translated_thinking_uses_selected_account_catalog_and_preserves_fast_be
     let provider = provider_with_catalog_and_base_url(&store, adaptive.uri()).await;
     for _ in 0..2 {
         for account in ["acct_provider_contract", "acct_manual"] {
-            let body = json!({"model":"unrelated-client-alias","input":"hello","max_output_tokens":4096,"reasoning":{"effort":"xhigh"},"tools":[{"type":"function","name":"echo"}],"parallel_tool_calls":false,"service_tier":"priority"});
+            let body = json!({"model":"unrelated-client-alias","messages":[{"role":"user","content":"hello"}],"max_completion_tokens":4096,"reasoning_effort":"high","tools":[{"type":"function","function":{"name":"echo","parameters":{"type":"object"}}}],"parallel_tool_calls":false,"service_tier":"priority"});
             let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
-                ProtocolPayload::json_object("openai", body.as_object().unwrap().clone())
+                ProtocolPayload::json_object("chat_completions", body.as_object().unwrap().clone())
                     .unwrap()
                     .with_context(Map::from_iter([(
                         "opaque_request_headers".into(),
@@ -648,19 +660,19 @@ async fn cancelled_messages_request_never_sends_generation_or_catalog_lookup() {
 }
 
 #[tokio::test]
-async fn messages_json_and_sse_deliver_consistent_responses_terminal_states() {
-    for (reason, expected_status, expected_event) in [
-        ("end_turn", "completed", "response.completed"),
-        ("max_tokens", "incomplete", "response.incomplete"),
-        ("refusal", "incomplete", "response.incomplete"),
+async fn messages_json_and_sse_deliver_consistent_chat_terminal_states() {
+    for (reason, expected_reason) in [
+        ("end_turn", "stop"),
+        ("max_tokens", "length"),
+        ("refusal", "content_filter"),
     ] {
-        let mut terminals = Vec::new();
-        for upstream_streaming in [false, true] {
+        let mut completions = Vec::new();
+        for streaming in [false, true] {
             let server = MockServer::start().await;
             let store = Arc::new(MemoryAccountStore::default());
             seed(&store, &server, ApiKeyProtocol::Messages).await;
             let body = json!({"id":"msg_native","type":"message","role":"assistant","model":"gpt-5.4","content":[{"type":"text","text":"hello"}],"stop_reason":reason,"usage":{"input_tokens":11,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"output_tokens":2}});
-            let response = if upstream_streaming {
+            let response = if streaming {
                 ResponseTemplate::new(200).set_body_raw(
                     MESSAGES_SSE.replace("end_turn", reason),
                     "text/event-stream",
@@ -676,11 +688,13 @@ async fn messages_json_and_sse_deliver_consistent_responses_terminal_states() {
                 .await;
             let mut stream = provider(&store)
                 .execute(
-                    planned_request("openai", generate_with_downstream_headers()),
+                    planned_request("openai", chat_operation(streaming)),
                     context("req_messages_terminal", CancellationToken::new()),
                 )
                 .await
                 .unwrap();
+            let mut accumulator = gateway_protocol::chat_completions::ChatAccumulator::default();
+            let mut completion = None;
             let mut terminal_count = 0;
             while let Some(event) = stream.next().await {
                 let event = event.unwrap();
@@ -688,43 +702,40 @@ async fn messages_json_and_sse_deliver_consistent_responses_terminal_states() {
                     .canonical_facts()
                     .iter()
                     .any(|fact| matches!(fact, GatewayEvent::Completed(_)));
-                let translated = stream.translate_native_response(event, terminal).unwrap();
-                for event in translated {
-                    if event
-                        .canonical_facts()
-                        .iter()
-                        .any(|fact| matches!(fact, GatewayEvent::Started(_)))
-                    {
-                        assert!(
-                            event.wire_event().is_some(),
-                            "原生出口的开始事实必须带可交付正文，不能提交空的 SSE 批次"
-                        );
-                    }
-                    if event
-                        .canonical_facts()
-                        .iter()
-                        .any(|fact| matches!(fact, GatewayEvent::Completed(_)))
-                    {
-                        terminal_count += 1;
-                        let wire = event.wire_event().expect("终态附在最后一个转换事件");
-                        assert_eq!(wire.data()["type"], expected_event);
-                        assert_eq!(wire.data()["response"]["status"], expected_status);
-                        terminals.push(wire.data()["response"].clone());
+                for event in stream.translate_native_response(event, terminal).unwrap() {
+                    terminal_count += usize::from(
+                        event
+                            .canonical_facts()
+                            .iter()
+                            .any(|fact| matches!(fact, GatewayEvent::Completed(_))),
+                    );
+                    if let Some(wire) = event.wire_event() {
+                        assert_eq!(wire.protocol(), "chat_completions");
+                        if wire.raw_json_body().is_some() {
+                            completion = Some(
+                                serde_json::from_slice(wire.raw_json_body().unwrap()).unwrap(),
+                            );
+                        } else {
+                            accumulator.push(wire.data()).unwrap();
+                        }
                     }
                 }
             }
             assert_eq!(terminal_count, 1);
+            let value = completion.unwrap_or_else(|| accumulator.finish().unwrap());
+            assert_eq!(value["choices"][0]["finish_reason"], expected_reason);
+            assert_eq!(value["usage"]["prompt_tokens"], 16);
+            assert_eq!(value["usage"]["completion_tokens"], 2);
+            completions.push(value);
             server.verify().await;
         }
-        assert_eq!(
-            terminals[0], terminals[1],
-            "同一上游结果的 JSON 与 SSE 语义一致"
-        );
+        assert_eq!(completions[0]["choices"], completions[1]["choices"]);
+        assert_eq!(completions[0]["usage"], completions[1]["usage"]);
     }
 }
 
 #[tokio::test]
-async fn many_messages_json_blocks_stay_in_one_responses_terminal_event() {
+async fn many_messages_json_blocks_stay_in_one_chat_completion() {
     let server = MockServer::start().await;
     let store = Arc::new(MemoryAccountStore::default());
     seed(&store, &server, ApiKeyProtocol::Messages).await;
@@ -739,7 +750,7 @@ async fn many_messages_json_blocks_stay_in_one_responses_terminal_event() {
         .await;
     let mut stream = provider(&store)
         .execute(
-            planned_request("openai", generate_with_downstream_headers()),
+            planned_request("openai", chat_operation(false)),
             context("req_messages_many_blocks", CancellationToken::new()),
         )
         .await
@@ -753,20 +764,21 @@ async fn many_messages_json_blocks_stay_in_one_responses_terminal_event() {
             .any(|fact| matches!(fact, GatewayEvent::Completed(_)));
         for event in stream.translate_native_response(event, terminal).unwrap() {
             if let Some(wire) = event.wire_event() {
-                received.push(wire.data().clone());
+                received.push(wire.raw_json_body().map_or_else(
+                    || wire.data().clone(),
+                    |raw| serde_json::from_slice(raw).unwrap(),
+                ));
             }
         }
     }
     assert_eq!(received.len(), 1);
-    assert_eq!(received[0]["type"], "response.incomplete");
-    assert_eq!(
-        received[0]["response"]["output"].as_array().unwrap().len(),
-        100
-    );
-    assert_eq!(
-        received[0]["response"]["output"][99]["content"][0]["text"],
-        "block 99"
-    );
+    assert_eq!(received[0]["object"], "chat.completion");
+    assert_eq!(received[0]["choices"][0]["finish_reason"], "length");
+    let text = received[0]["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap();
+    assert!(text.starts_with("block 0"));
+    assert!(text.ends_with("block 99"));
     server.verify().await;
 }
 
@@ -829,7 +841,7 @@ async fn cold_directory_never_queries_models_during_generation() {
         let mut stream = provider
             .clone()
             .execute(
-                planned_request("openai", generate_operation()),
+                planned_request("openai", chat_operation(true)),
                 context("req_slow_catalog", CancellationToken::new()),
             )
             .await
@@ -852,4 +864,37 @@ async fn cold_directory_never_queries_models_during_generation() {
         .collect::<Vec<_>>();
     assert_eq!(limits, [32000, 32000]);
     server.verify().await;
+}
+
+#[tokio::test]
+async fn native_generation_and_counts_cannot_select_another_protocol_with_the_same_model() {
+    for (target, operation) in [
+        (ApiKeyProtocol::Messages, generate_operation()),
+        (ApiKeyProtocol::Responses, messages_operation(false)),
+        (
+            ApiKeyProtocol::Responses,
+            Operation::CountTokens(TokenCountRequest::from_raw_json(
+                RawJsonPayload::new(
+                    "anthropic",
+                    Bytes::from_static(br#"{"messages":[{"role":"user","content":"hello"}]}"#),
+                )
+                .unwrap(),
+            )),
+        ),
+    ] {
+        let server = MockServer::start().await;
+        let store = Arc::new(MemoryAccountStore::default());
+        seed(&store, &server, target).await;
+        let error = provider(&store)
+            .execute(
+                planned_request("openai", operation),
+                context("req_no_native_conversion", CancellationToken::new()),
+            )
+            .await
+            .err()
+            .expect("same model name cannot authorize a different protocol");
+        assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
 }

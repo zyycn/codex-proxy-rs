@@ -39,6 +39,7 @@ async fn select(
 ) -> Result<provider_openai::credential::CodexCredentialLease, CredentialSelectionError> {
     selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: model,
             request_url: &Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap(),
             attempt,
@@ -490,6 +491,7 @@ async fn account_queue_timeout_can_reselect_for_preferred_and_sessionless_reques
         let ctx = projection_attempt("key_codex_contract", contract_account_scope(), policy);
         let key = ProviderSessionAffinityKey::try_new("queue-fallback").unwrap();
         let request = SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap(),
             attempt: &ctx,
@@ -593,6 +595,7 @@ async fn movable_waiters_use_other_accounts_even_before_queue_promotion() {
                 assert!(head.as_mut().now_or_never().is_none());
             }
             let request = SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap(),
                 attempt: &attempt,

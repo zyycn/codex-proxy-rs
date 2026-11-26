@@ -112,6 +112,7 @@ enum CookieRecovery {
 }
 
 pub struct SelectCodexCredential<'a> {
+    pub protocol: &'a str,
     pub upstream_model: &'a str,
     pub request_url: &'a Url,
     pub attempt: &'a AttemptContext,
@@ -126,6 +127,7 @@ pub(crate) struct SelectCodexProviderEndpointCredential<'a> {
 }
 
 struct CredentialSelectionInput<'a> {
+    native_protocol: NativeProtocol,
     managed_upstream: bool,
     requires_websocket: bool,
     request_url: &'a Url,
@@ -350,6 +352,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             managed_upstream: false,
+            native_protocol: NativeProtocol::for_source(request.protocol),
             requires_websocket: false,
             request_url: request.request_url,
             attempt: request.attempt,
@@ -410,6 +413,7 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             managed_upstream: true,
+            native_protocol: NativeProtocol::for_source(request.protocol),
             requires_websocket,
             request_url: request.request_url,
             attempt: request.attempt,
@@ -429,7 +433,7 @@ impl CodexCredentialSelector {
     ///
     /// 此处只复用既有亲和与 cyber-policy 端口，不再次选号；冲突必须在发送前失败，
     /// 避免同一 attempt 持有旧租约时重入账号选择
-    pub(crate) async fn validate_translated_selection(
+    pub(crate) async fn validate_selected_affinity(
         &self,
         lease: &mut CodexCredentialLease,
         session_affinity: Option<&CodexSessionAffinity>,
@@ -483,6 +487,7 @@ impl CodexCredentialSelector {
         request: &SelectCodexProviderEndpointCredential<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
+            native_protocol: NativeProtocol::Fixed(ApiKeyProtocol::Responses),
             managed_upstream: false,
             requires_websocket: false,
             request_url: request.request_url,
@@ -959,15 +964,29 @@ impl CodexCredentialSelector {
                     }
                     native_accounts.insert(account.id().clone());
                 }
-                let endpoint_requires_responses =
-                    !matches!(model, CodexSelectionModel::Requested(_))
-                        && account.authentication_kind()
-                            == super::CODEX_AUTHENTICATION_KIND_API_KEY;
+                if adapter.is_none()
+                    && matches!(request.native_protocol, NativeProtocol::Unsupported)
+                {
+                    continue;
+                }
+                let required_protocol = match request.native_protocol {
+                    NativeProtocol::Fixed(protocol) => Some(protocol),
+                    NativeProtocol::Chat | NativeProtocol::Unsupported => None,
+                };
+                // OAuth 的原生协议固定，只有 API Key 需要读取与 revision 绑定的协议配置
+                if adapter.is_none()
+                    && account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH
+                    && required_protocol == Some(ApiKeyProtocol::Messages)
+                {
+                    continue;
+                }
+                let check_protocol = required_protocol.is_some()
+                    && account.authentication_kind() == super::CODEX_AUTHENTICATION_KIND_API_KEY;
                 let check_ws = request.requires_websocket
                     && pinned_account.as_ref().is_none_or(|id| id == account.id());
-                if adapter.is_none() && (endpoint_requires_responses || check_ws) {
+                if adapter.is_none() && (check_protocol || check_ws) {
                     // 只复用同 revision 的协议类型；选中后仍以完整账号快照重读凭据
-                    if endpoint_requires_responses && !check_ws {
+                    if check_protocol && !check_ws {
                         let cached = self
                             .endpoint_protocols
                             .lock()
@@ -976,7 +995,7 @@ impl CodexCredentialSelector {
                             .copied()
                             .filter(|(rev, _)| *rev == account.revision());
                         if let Some((_, protocol)) = cached {
-                            if protocol == ApiKeyProtocol::Responses {
+                            if Some(protocol) == required_protocol {
                                 eligible.push(account);
                             }
                             continue;
@@ -1004,7 +1023,7 @@ impl CodexCredentialSelector {
                         }
                         Err(error) => return Err(error.into()),
                     };
-                    if endpoint_requires_responses {
+                    if check_protocol {
                         self.endpoint_protocols
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1015,9 +1034,9 @@ impl CodexCredentialSelector {
                     }
                     if (request.requires_websocket
                         && runtime.transport == super::ResponsesTransport::Http)
-                        || (endpoint_requires_responses
-                            && runtime.authentication.api_protocol()
-                                == super::ApiKeyProtocol::Messages)
+                        || required_protocol.is_some_and(|protocol| {
+                            runtime.authentication.api_protocol() != protocol
+                        })
                     {
                         continue;
                     }
@@ -2482,5 +2501,26 @@ fn minimum_duration(current: Option<Duration>, candidate: Option<Duration>) -> O
         (Some(current), Some(candidate)) => Some(current.min(candidate)),
         (Some(current), None) => Some(current),
         (None, candidate) => candidate,
+    }
+}
+
+// 原生资格在账号边界检查，显式插件适配拥有自己的输入协议
+#[derive(Clone, Copy)]
+enum NativeProtocol {
+    Fixed(ApiKeyProtocol),
+    Chat,
+    Unsupported,
+}
+
+impl NativeProtocol {
+    fn for_source(protocol: &str) -> Self {
+        match protocol {
+            gateway_protocol::openai::OPENAI_PROTOCOL => Self::Fixed(ApiKeyProtocol::Responses),
+            gateway_protocol::anthropic::ANTHROPIC_PROTOCOL | "token-count" => {
+                Self::Fixed(ApiKeyProtocol::Messages)
+            }
+            gateway_protocol::chat_completions::CHAT_PROTOCOL => Self::Chat,
+            _ => Self::Unsupported,
+        }
     }
 }

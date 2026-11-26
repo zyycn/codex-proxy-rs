@@ -2,7 +2,6 @@
 
 mod canonical;
 mod catalog;
-mod compaction;
 mod egress;
 mod headers;
 mod network;

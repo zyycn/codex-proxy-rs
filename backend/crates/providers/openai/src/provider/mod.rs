@@ -100,6 +100,7 @@ use crate::transport::{
     CodexUpstreamDiagnostics, CodexWebSocketPool, endpoint_url,
 };
 
+mod chat;
 mod execution;
 mod failure;
 mod guardian;
@@ -760,6 +761,7 @@ impl Provider for CodexProvider {
             self.selector
                 .select_with_cyber_policy(
                     &SelectCodexCredential {
+                        protocol: generate.protocol_payload().protocol(),
                         upstream_model: upstream_model.as_str(),
                         request_url: &self.responses_url,
                         attempt: &context,
@@ -932,7 +934,6 @@ impl CodexProvider {
         );
         let mut upstream = encode_generate_payload(&generate, upstream_model.as_str())
             .map_err(map_request_error)?;
-        gateway_protocol::anthropic::strip_foreign_reasoning_for_responses(upstream.body_mut());
         upstream.client_account_follow_only = crate::request_identity::follows_session_with_headers(
             generate.protocol_payload().body(),
             generate.protocol_payload().context(),
@@ -958,7 +959,7 @@ impl CodexProvider {
         let continuation_requested = processed.continuation_requested;
         if !context.is_diagnostic_required_account() {
             self.selector
-                .validate_translated_selection(
+                .validate_selected_affinity(
                     &mut lease,
                     processed.session_affinity.as_ref(),
                     processed.cyber_policy_session_key.as_ref(),
@@ -1280,5 +1281,47 @@ impl CodexProvider {
         } else {
             stream
         })
+    }
+}
+
+impl CodexProvider {
+    // 原生协议严格匹配已选账号，只有 Chat 进入内置转换装配
+    async fn execute_selected_protocol_generate(
+        self: Arc<Self>,
+        operation: Operation,
+        headers: Vec<MiddlewareHeader>,
+        model: UpstreamModelId,
+        context: AttemptContext,
+        selected: SelectedGenerate,
+    ) -> Result<ProviderStream, ProviderError> {
+        if operation.capability_requirements() != selected.frozen_requirements {
+            return Err(ProviderError::invalid_request(
+                "Middleware changed generation capabilities after account selection.",
+            ));
+        }
+        match (
+            operation.protocol(),
+            selected.lease.authentication().api_protocol(),
+        ) {
+            (gateway_protocol::chat_completions::CHAT_PROTOCOL, _) => {
+                self.execute_selected_chat(operation, headers, model, context, selected)
+                    .await
+            }
+            (OPENAI_PROTOCOL, crate::credential::ApiKeyProtocol::Responses) => {
+                self.execute_selected_generate(operation, headers, model, context, selected)
+                    .await
+            }
+            (
+                gateway_protocol::anthropic::ANTHROPIC_PROTOCOL,
+                crate::credential::ApiKeyProtocol::Messages,
+            ) => {
+                self.execute_native_messages(operation, headers, model, context, selected)
+                    .await
+            }
+            _ => Err(provider_error(
+                ProviderErrorKind::Unsupported,
+                UpstreamSendState::NotSent,
+            )),
+        }
     }
 }

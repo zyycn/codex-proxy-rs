@@ -4,10 +4,10 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
-use super::super::TranslationError;
+use super::super::MessageError;
 
 #[derive(Debug)]
-pub(super) struct Block {
+struct Block {
     pub value: Value,
     pub input_json: String,
     pub invalid_input: bool,
@@ -15,15 +15,15 @@ pub(super) struct Block {
 }
 
 #[derive(Debug)]
-pub(super) struct MessageSnapshot {
+struct MessageSnapshot {
     pub message: Value,
     pub blocks: BTreeMap<u64, Block>,
 }
 
 impl MessageSnapshot {
-    fn into_json(mut self) -> Result<Value, TranslationError> {
+    fn into_json(mut self) -> Result<Value, MessageError> {
         if self.blocks.values().any(|block| block.invalid_input) {
-            return Err(TranslationError::InvalidEvent(
+            return Err(MessageError::InvalidEvent(
                 "The Messages tool input is not valid JSON.",
             ));
         }
@@ -45,26 +45,22 @@ pub struct MessagesAccumulator {
 
 impl MessagesAccumulator {
     /// message_stop 返回完整响应，error 返回原生错误终态，未知事件不改变状态
-    pub fn push(&mut self, event: &Value) -> Result<Option<Value>, TranslationError> {
+    pub fn push(&mut self, event: &Value) -> Result<Option<Value>, MessageError> {
         self.accumulate(event)?
             .map(MessageSnapshot::into_json)
             .transpose()
     }
 
-    // 原生 JSON 要求工具输入可解析，跨协议转换还需要保留合法截断的原始参数
-    pub(super) fn accumulate(
-        &mut self,
-        event: &Value,
-    ) -> Result<Option<MessageSnapshot>, TranslationError> {
-        let kind =
-            event
-                .get("type")
-                .and_then(Value::as_str)
-                .ok_or(TranslationError::InvalidEvent(
-                    "The Messages event type is missing.",
-                ))?;
+    // 原生 JSON 仅在完整工具输入可解析时交付
+    fn accumulate(&mut self, event: &Value) -> Result<Option<MessageSnapshot>, MessageError> {
+        let kind = event
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or(MessageError::InvalidEvent(
+                "The Messages event type is missing.",
+            ))?;
         if self.terminal {
-            return Err(TranslationError::InvalidEvent(
+            return Err(MessageError::InvalidEvent(
                 "The Messages stream contains events after its terminal event.",
             ));
         }
@@ -78,12 +74,12 @@ impl MessagesAccumulator {
             }
             "message_start" => {
                 if self.message.is_some() {
-                    return Err(TranslationError::InvalidEvent(
+                    return Err(MessageError::InvalidEvent(
                         "The Messages stream contains duplicate message_start events.",
                     ));
                 }
                 let message = event.get("message").filter(|v| v.is_object()).ok_or(
-                    TranslationError::InvalidEvent(
+                    MessageError::InvalidEvent(
                         "The message_start event must contain a message object.",
                     ),
                 )?;
@@ -93,14 +89,14 @@ impl MessagesAccumulator {
                 self.require_message()?;
                 let index = index(event)?;
                 if self.blocks.contains_key(&index) {
-                    return Err(TranslationError::InvalidEvent(
+                    return Err(MessageError::InvalidEvent(
                         "The Messages content block index is duplicated.",
                     ));
                 }
                 let value = event
                     .get("content_block")
                     .filter(|v| v.is_object())
-                    .ok_or(TranslationError::InvalidEvent(
+                    .ok_or(MessageError::InvalidEvent(
                         "The content_block_start event must contain a content block.",
                     ))?
                     .clone();
@@ -116,7 +112,7 @@ impl MessagesAccumulator {
             }
             "content_block_delta" => {
                 let block = self.active_block(event)?;
-                let delta = event.get("delta").ok_or(TranslationError::InvalidEvent(
+                let delta = event.get("delta").ok_or(MessageError::InvalidEvent(
                     "The content block delta is missing.",
                 ))?;
                 match delta
@@ -162,7 +158,7 @@ impl MessagesAccumulator {
                 block.stopped = true;
             }
             "message_delta" => {
-                let message = self.message.as_mut().ok_or(TranslationError::InvalidEvent(
+                let message = self.message.as_mut().ok_or(MessageError::InvalidEvent(
                     "The Messages delta arrived before message_start.",
                 ))?;
                 if let Some(delta) = event.get("delta").and_then(Value::as_object) {
@@ -182,14 +178,11 @@ impl MessagesAccumulator {
             "message_stop" => {
                 self.require_message()?;
                 if self.blocks.values().any(|block| !block.stopped) {
-                    return Err(TranslationError::InvalidEvent(
+                    return Err(MessageError::InvalidEvent(
                         "The Messages stream ended with an open content block.",
                     ));
                 }
-                let message = self
-                    .message
-                    .take()
-                    .ok_or(TranslationError::IncompleteStream)?;
+                let message = self.message.take().ok_or(MessageError::IncompleteStream)?;
                 self.terminal = true;
                 return Ok(Some(MessageSnapshot {
                     message,
@@ -202,43 +195,39 @@ impl MessagesAccumulator {
     }
 
     /// 必须消费成功或失败终态，连接结束不能被当作成功
-    pub fn finish(&self) -> Result<(), TranslationError> {
+    pub fn finish(&self) -> Result<(), MessageError> {
         if self.terminal {
             Ok(())
         } else {
-            Err(TranslationError::IncompleteStream)
+            Err(MessageError::IncompleteStream)
         }
     }
 
-    pub(super) fn block(&self, index: u64) -> Option<&Block> {
-        self.blocks.get(&index)
-    }
-
-    fn require_message(&self) -> Result<(), TranslationError> {
+    fn require_message(&self) -> Result<(), MessageError> {
         if self.message.is_some() {
             Ok(())
         } else {
-            Err(TranslationError::InvalidEvent(
+            Err(MessageError::InvalidEvent(
                 "The Messages content arrived before message_start.",
             ))
         }
     }
 
-    fn active_block(&mut self, event: &Value) -> Result<&mut Block, TranslationError> {
+    fn active_block(&mut self, event: &Value) -> Result<&mut Block, MessageError> {
         self.blocks
             .get_mut(&index(event)?)
             .filter(|block| !block.stopped)
-            .ok_or(TranslationError::InvalidEvent(
+            .ok_or(MessageError::InvalidEvent(
                 "The Messages delta references a content block that is not open.",
             ))
     }
 }
 
-pub(super) fn index(event: &Value) -> Result<u64, TranslationError> {
+fn index(event: &Value) -> Result<u64, MessageError> {
     event
         .get("index")
         .and_then(Value::as_u64)
-        .ok_or(TranslationError::InvalidEvent(
+        .ok_or(MessageError::InvalidEvent(
             "The content block index is missing.",
         ))
 }

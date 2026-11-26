@@ -26,6 +26,7 @@ impl CodexProvider {
         let lease = self
             .selector
             .select(&SelectCodexCredential {
+                protocol: gateway_protocol::anthropic::ANTHROPIC_PROTOCOL,
                 upstream_model: model.as_str(),
                 request_url: &self.responses_url,
                 attempt: &context,
@@ -109,7 +110,6 @@ impl CodexProvider {
         account_selection_wait_ms: u64,
         response_protocol: &'static str,
     ) -> Result<ProviderStream, ProviderError> {
-        let protocol = lease.authentication().api_protocol();
         let metadata = ProviderCallMetadata::new(
             ProviderKind::new(PROVIDER_NAME).map_err(|_| invalid_request())?,
             model.clone(),
@@ -124,7 +124,6 @@ impl CodexProvider {
             account_selection_wait_ms,
             lease.capacity_snapshot(),
         ));
-        let tokenizer_model = model.as_str().to_ascii_lowercase();
         let events: EventStream = Box::pin(async_stream::try_stream! {
             // BPE 是 CPU 密集任务，按可用核数限制进程内并发；断开后由工作线程持有名额直到退出
             static WORKERS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
@@ -147,23 +146,10 @@ impl CodexProvider {
                     else { Ok(()) }
                 };
                 check()?;
-                let segments = if protocol == ApiKeyProtocol::Responses {
-                    let translated = gateway_protocol::anthropic::messages_to_responses_count_request(&body).map_err(|_| invalid_request())?;
-                    responses_segments(&translated)
-                } else {
-                    messages_segments(&body)
-                };
+                let segments = messages_segments(&body);
                 static O200K: OnceLock<Result<tiktoken_rs::CoreBPE, ()>> = OnceLock::new();
-                static CL100K: OnceLock<Result<tiktoken_rs::CoreBPE, ()>> = OnceLock::new();
-                // 与 CPA 的 Codex 映射一致，未知 Responses 模型使用 cl100k
-                let modern = protocol == ApiKeyProtocol::Messages || ["gpt-5", "gpt-4.1", "gpt-4o"].iter().any(|prefix| tokenizer_model.starts_with(prefix));
-                let encoder = if modern {
-                    O200K.get_or_init(|| tiktoken_rs::o200k_base().map_err(|_| ()))
-                } else {
-                    CL100K.get_or_init(|| tiktoken_rs::cl100k_base().map_err(|_| ()))
-                }.as_ref().map_err(|_| {
-                    provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
-                })?;
+                let encoder = O200K.get_or_init(|| tiktoken_rs::o200k_base().map_err(|_| ()))
+                    .as_ref().map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
                 check()?;
                 Ok::<u64, ProviderError>(u64::try_from(encoder.encode_ordinary(&segments.join("\n")).len()).unwrap_or(u64::MAX))
             });
@@ -291,48 +277,4 @@ fn content_segments(content: &Value, segments: &mut Vec<String>) {
         "" => push(segments, content),
         _ => push(segments, &content["text"]),
     }
-}
-
-fn responses_segments(body: &Map<String, Value>) -> Vec<String> {
-    let mut segments = Vec::new();
-    if let Some(instructions) = body.get("instructions") {
-        push(&mut segments, instructions);
-    }
-    for item in body
-        .get("input")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        match item.get("type").and_then(Value::as_str) {
-            Some("message") | None => {
-                if item["content"].is_string() {
-                    push(&mut segments, &item["content"]);
-                }
-                for part in item
-                    .get("content")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                {
-                    push(&mut segments, &part["text"]);
-                }
-            }
-            Some("function_call") => fields(&mut segments, item, &["name", "arguments"]),
-            Some("function_call_output") => push(&mut segments, &item["output"]),
-            _ => push(&mut segments, &item["text"]),
-        }
-    }
-    for tool in body
-        .get("tools")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        fields(&mut segments, tool, &["name", "description", "parameters"]);
-    }
-    if let Some(format) = body.get("text").and_then(|value| value.get("format")) {
-        fields(&mut segments, format, &["name", "schema"]);
-    }
-    segments
 }

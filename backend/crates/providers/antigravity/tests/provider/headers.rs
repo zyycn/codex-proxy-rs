@@ -74,12 +74,8 @@ async fn native_and_translated_requests_forward_business_headers_with_account_id
             json!({"contents":[]}),
         ),
         (
-            gateway_protocol::openai::OPENAI_PROTOCOL,
-            json!({"input":[]}),
-        ),
-        (
-            gateway_protocol::anthropic::ANTHROPIC_PROTOCOL,
-            json!({"messages":[]}),
+            gateway_protocol::chat_completions::CHAT_PROTOCOL,
+            json!({"model":"fixture-model","messages":[{"role":"user","content":"hello"}]}),
         ),
     ] {
         let input = super::affinity::session_request(protocol, body, metadata.clone());
@@ -114,7 +110,7 @@ async fn native_and_translated_requests_forward_business_headers_with_account_id
         .await
         .unwrap();
     let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 3);
     for request in requests {
         let values: Vec<_> = request
             .headers

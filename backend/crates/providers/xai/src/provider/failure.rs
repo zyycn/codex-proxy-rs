@@ -3,18 +3,6 @@
 use super::*;
 use gateway_core::error::ProviderDiagnostic;
 
-pub(super) fn is_invalid_encrypted_content_failure(error: &GrokInferenceTransportError) -> bool {
-    error.kind() == GrokInferenceTransportErrorKind::InvalidRequest
-        && error.status() == Some(400)
-        && (error.diagnostic().and_then(ProviderDiagnostic::code)
-            == Some(REASONING_DECODE_FAILED_CODE)
-            || error.upstream_code().is_some_and(|code| {
-                [REASONING_DECODE_FAILED_CODE, "invalid_encrypted_content"]
-                    .iter()
-                    .any(|known| code.as_str().trim().eq_ignore_ascii_case(known))
-            }))
-}
-
 pub(super) enum InferenceBoundary {
     Response(Result<crate::transport::GrokInferenceResponse, GrokInferenceTransportError>),
     Cancelled,

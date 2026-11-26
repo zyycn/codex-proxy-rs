@@ -424,6 +424,7 @@ pub struct GenerateRequest {
 
 #[derive(Clone, PartialEq)]
 struct GeneratePayload {
+    source_protocol: Option<String>,
     requires_native_protocol: bool,
     source_image_generation: bool,
     wire_facts: RequestFacts,
@@ -461,6 +462,15 @@ impl ClientTurn {
 }
 
 impl GenerateRequest {
+    /// 返回可信入口协议，直接转换只能更新当前 wire，不能改写请求来源
+    #[must_use]
+    pub fn source_protocol(&self) -> &str {
+        self.payload
+            .source_protocol
+            .as_deref()
+            .unwrap_or_else(|| self.payload.protocol_payload.protocol())
+    }
+
     /// 创建携带协议不透明正文的生成请求
     ///
     /// 完整请求以原始 wire object 保存，协议层提取路由与权限所需的纯事实
@@ -469,6 +479,7 @@ impl GenerateRequest {
     pub fn from_protocol_payload(protocol_payload: ProtocolPayload) -> Self {
         Self {
             payload: Arc::new(GeneratePayload {
+                source_protocol: None,
                 requires_native_protocol: false,
                 source_image_generation: false,
                 wire_facts: request_facts(protocol_payload.protocol(), protocol_payload.body()),
@@ -917,8 +928,11 @@ impl Operation {
     pub fn requires_web_search(&self) -> bool {
         matches!(self, Self::Generate(request) if {
             let payload = request.protocol_payload();
-            payload.protocol() == gateway_protocol::openai::OPENAI_PROTOCOL &&
-                gateway_protocol::openai::web_search::is_required(payload.body())
+            match payload.protocol() {
+                gateway_protocol::openai::OPENAI_PROTOCOL => gateway_protocol::openai::web_search::is_required(payload.body()),
+                gateway_protocol::chat_completions::CHAT_PROTOCOL => payload.body().get("web_search_options").is_some_and(serde_json::Value::is_object),
+                _ => false,
+            }
         })
     }
 
@@ -1091,6 +1105,7 @@ impl Operation {
                             }
                         })?;
                     if let Some(protocol) = target_protocol {
+                        payload.source_protocol = Some(payload.protocol_payload.protocol.clone());
                         payload.protocol_payload.protocol = protocol;
                     }
                     payload.wire_facts =

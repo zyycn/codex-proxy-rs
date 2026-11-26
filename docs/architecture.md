@@ -22,8 +22,8 @@ Codex Proxy RS 是单进程、单副本运行的多 Provider AI 网关，同时�
 - 固定的 OpenAI、xAI 与 Antigravity 三个编译期 Provider，以及插件提供的认证、中间件和管理扩展
 - PostgreSQL 持久化、Redis 协调状态以及 S3/R2 数据库备份
 
-Responses、Chat Completions 和 Messages 共用生成执行链，API Key 账号可选择 Responses 或 Messages 上游协议，
-仍由 OpenAI Provider 管理。Chat 在 API 层转为 Responses，Provider 在选定账号后处理 Messages 与 Responses 的转换。
+Responses、Messages、GenAI 和 Chat 共用生成执行链。原生入口只选择同协议能力；
+Chat 在 Provider 选定账号后直接转换到实际协议。API Key 的 Responses 与 Messages 账号仍由 OpenAI Provider 管理。
 Client Key 限定账号分组，账号范围、模型能力与运行时健康决定候选 Provider。网关没有独立的 Provider Instance 层
 
 | 概念 | 所有者与含义 |
@@ -45,7 +45,7 @@ flowchart TB
   API --> Admin[gateway-admin<br/>管理用例]
   Core --> Registry[Provider Registry]
   Admin --> Registry
-  Registry --> Builtin[OpenAI / xAI]
+  Registry --> Builtin[OpenAI / xAI / Antigravity]
   Core -. 请求扩展 .-> Plugins[Plugin Runtime / 插件进程]
   Admin -. 安装与发布 .-> Plugins
   API -. 入口与管理扩展 .-> Plugins
@@ -79,7 +79,7 @@ flowchart TB
 | `gateway-plugin/sdk`（包名 `gateway-plugin-sdk`） | 公开插件清单与线协议，独立于网关领域；异步收发通过可选 `io` feature 提供 |
 | `gateway-plugin/runtime`（包名 `gateway-plugin-runtime`） | 插件包校验、能力适配、双向 RPC 与发布集合；通过 Host 管理子进程和受管 HTTP |
 | `providers/openai` | OpenAI OAuth、API Key 凭据、账号选择、目录、额度和 Responses/Messages/Images/Search transport |
-| `providers/xai` | xAI OAuth session、账号选择、目录、额度和 Grok/Responses 转换 |
+| `providers/xai` | xAI OAuth session、账号选择、目录、额度和原生 Responses 传输 |
 | `providers/antigravity` | 个人账号 OAuth 与凭据文件、项目与模型目录、套餐和模型分组额度、原生生成与人工计费，以及 Desktop／CLI 发布资料和请求身份 |
 | `frontend` | Vue 管理端与 Key 用量页，仅通过各自身份允许的控制面 API 访问状态 |
 | 独立仓库 `codex-proxy-ui` | 管理端与插件页面共用的 Vue 基础组件、纯主题算法和样式，不依赖宿主业务状态、路由或 API |
@@ -306,7 +306,7 @@ HTTP 字段见 [插件 API](api.md#12-插件管理)，更新与数据恢复见 [
 
 较大的模块门面只负责组合和 re-export：账号 Admin HTTP 边界按 `wire`、`credentials`、`handlers`、
 `presenter` 划分；观测用例按 `service`、`insights`、`billing` 和 `dashboard` 分离协调与纯投影。
-Provider 执行按 continuation、stream、failure、observation 和 worker 等职责拆分；xAI 请求转换按 response、tools 与 history 拆分。各子模块之间只使用 owner 内最小可见性
+Provider 执行按 continuation、stream、failure、observation 和 worker 等职责拆分；Chat 转换装配独立于各平台原生执行。各子模块之间只使用 owner 内最小可见性
 
 ### 3.3 `gateway-core` 内部 owner
 
@@ -345,7 +345,7 @@ Provider 可为模型提供来源账号集合；Core 在公开目录查询时结
 客户端原生模型目录同样由 Provider 拥有，通过 `ExecutionService` 和现有 Registry 的只读调用传递。
 `routing::catalog` 的原生条目只包含模型 ID 与不透明协议正文，Core 负责冻结账号范围和整对象模型映射，
 不解析上游字段；API 负责协议输出，不直接依赖具体 Provider。原生目录失败不会退回通用画像，只有不提供
-该协议原生目录的 Provider（如 xAI 的 Codex 适配）才走画像转换。目录读取不创建计量请求或推理 attempt。
+该协议原生目录的 Provider才走画像转换。目录读取不创建计量请求或推理 attempt。
 
 请求位置、隐私、Fast 和生图的跨层策略见[请求策略与事实](#请求策略与事实)，Provider 目录的刷新与凭据隔离见[账号模型目录](#账号模型目录)
 
@@ -501,18 +501,23 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别客户端，Cor
 - 观测写入失败不能替换已经确定的客户端协议结果
 
 生成请求按模型目录编译候选；全局模型映射是精确映射，未命中时模型名原样交给候选 Provider。
-Responses 与 Messages 保留各自的协议正文进入共用 Generate 执行链；Chat 在 API 层规范化为 Responses，
-回程再投影成 Chat JSON 或 SSE。HTTP 中间件位于入口转换外侧，request 与 attempt 中间件处理该逻辑协议正文，
-实际 endpoint 保留客户端路由。Provider 选定账号后按账号协议转换出站，`outbound` 处理实际发送的上游请求
+Responses、Messages、GenAI 和 Chat 保留各自的正文与协议事实进入共用 Generate 执行链。
+HTTP、request 与 attempt 中间件处理当前入站协议，endpoint 保留客户端路由。
+原生请求只匹配声明同协议能力的候选；Chat 由 Provider 选定账号后直接转换到目标协议，`outbound` 处理实际发送的请求
 
-三个入口共用提交、取消与终结生命周期；Core 独占路由、重试、交付事实与结算，
-Provider 独占上游身份、账号相关适配与转换编排、隐私策略及账号隔离。`gateway-protocol` 拥有纯字段解析、结构转换和单次响应的流状态，
-响应转换器只保留客户端模型名及还原工具调用所需的名称映射，不持有输入历史、账号、连接或调度状态。
-Messages 与 Responses 的映射、忽略和降级规则参考 CPA，
-同语义字段交给目标上游校验；结构解码或必要流状态失败按协议错误终结，不补造成功结果。
+Core 独占路由、重试、交付事实与结算；Provider 独占上游身份、账号相关适配、隐私策略及账号隔离。
+`gateway-protocol` 的 `openai/`、`anthropic/`、`genai/` 保留原生解析；
+`chat_completions/{responses,messages,genai}/` 分别直接映射请求、完整响应和流事件，不借另一平台协议中转。
+转换器只保留本次响应身份、增量状态及工具名称映射，不持有输入历史、账号、连接或调度状态。
+API 的 `chat_completions/` 负责入口和 Chat 交付校验，复用 `generation/` 的提交、取消与终结生命周期。
+Chat 的 finish 与 usage 等待执行终态确认，终结失败不得先交付成功结果
+
+原始入口协议独立于转换后的正文协议，转换时保留来源与原始能力事实，不能从客户端头、User-Agent 或目标正文推断转换资格。
+内置转换只能从 Chat 来源调用；显式插件仍按现有能力声明与中间件合同运行。
 字段合同见 [Chat Completions](api.md#chat-completions-请求)和 [Messages](api.md#messages-请求)，插件视图见 [SDK 请求中间件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)
 
-Responses 搜索的强制执行判定、声明选择与联网模式解析由 `gateway-protocol::openai::web_search` 统一提供。Core 用其判定路由，协议转换复用声明解析，Provider 负责账号可用的搜索模型和目标上游支持的选项。需要独立搜索转换时必须对应唯一声明，缺失或歧义按请求错误处理，不退回普通生成
+Responses 搜索的强制执行判定、声明选择与联网模式解析由 `gateway-protocol::openai::web_search` 统一提供。
+Core 按原始协议提取搜索能力要求，Chat 的 `web_search_options` 同样参与候选筛选；Provider 校验实际目标是否支持声明的搜索选项
 
 Images 与 standalone Search 是 OpenAI Provider 自有端点：两者都不参与文本模型映射，只在 Client Key
 的账号范围确实包含 Codex 账号时生成单一 OpenAI 候选。Images 的图片模型由 Provider 从正文旁路
@@ -578,19 +583,21 @@ Antigravity 的 `credential/catalog` 持有与凭据版本绑定的项目与模�
 
 数据面协议入口位于 `gateway-api/src/data_plane`。Responses、Chat Completions、Messages 与 GenAI 共用 `generation` 的执行和交付流程。GenAI 从 URL 解码模型和生成方法，要求候选模型在原生目录中声明对应协议。Core 在 Key 的账号范围内匹配能力，Antigravity 将选中的 GenAI 请求封装为 Cloud Code 上游请求
 
-GenAI 模型目录通过 Core 的原生操作路由判断过滤冻结账号范围；列表、详情和执行使用同一份能力事实。Antigravity 声明生成与输入计数能力，原生 GenAI 和 Messages 计数复用选号、画像、中间件及资源释放流程，出站调用独立的 Cloud Code `countTokens`。计数响应不产生生成用量或费用事实，失败不切换为本地估算
+GenAI 模型目录通过 Core 的原生操作路由判断过滤冻结账号范围；列表、详情和执行使用同一份能力事实。Antigravity 声明生成与输入计数能力，原生 GenAI 计数复用选号、画像、中间件及资源释放流程，出站调用独立的 Cloud Code `countTokens`。计数响应不产生生成用量或费用事实，失败不切换为本地估算
 
-Antigravity 目录分别声明原生 GenAI 协议和接受转换的 Responses／Messages 协议；原生能力约束仍只匹配原生协议。`gateway-protocol::genai` 持有纯内容与增量事件映射，Responses 与 Messages 各自构造 GenAI 请求，共用签名回放和多模态工具结果编码。Chat 复用 API 层的 Responses 入口。Provider 的 `provider/translation` 负责选择和装配转换器，`transport` 负责 Cloud Code 封装、原生 wire 与调用事实，并按冻结画像统一替换 AGY 系统指令。默认提示和可编辑配置归 Provider 的 `profile`，纯协议转换层不持有 AGY 身份规则
+Antigravity 目录声明原生 GenAI 和 Chat 转换能力，Responses、Messages 不借用 Chat 能力进入该平台。
+`provider/chat.rs` 装配 Chat ↔ GenAI 直接转换；`transport` 负责 Cloud Code 封装、原生 wire 与调用事实，
+并按冻结画像统一替换 AGY 系统指令。默认提示和可编辑配置归 Provider 的 `profile`，纯协议层不持有 AGY 身份规则
 
 Antigravity 的业务头使用 API 保留的不透明多值字节，transport 统一执行账号身份、HTTP 传输及切号追踪头过滤。选号阶段从原会话绑定和 Core 的账号归属冻结切号事实，认领冲突后重新读取，不从重试排除集合推测归属
 
 推理 HTTP 客户端按账号、凭据版本、代理和 UA 隔离，最多缓存 64 项并按最近使用淘汰；在途请求持有独立客户端引用，令牌、项目和系统指令不随连接池缓存
 
-Antigravity 的 Cloud Code 传输按下游生成模式选择普通 JSON 或 SSE。HTTP 非流式调用使用 `generateContent`，SSE 和 WebSocket 使用 `streamGenerateContent`，独立搜索使用普通 JSON
+Antigravity 的 Cloud Code 传输按下游生成模式选择普通 JSON 或 SSE。HTTP 非流式调用使用 `generateContent`，SSE 和 WebSocket 使用 `streamGenerateContent`，Chat 搜索使用普通 JSON
 
 Cloud Code 连接使用 rustls 与 HTTP/1.1，gzip 协商和流式解压由本 Provider 持有，不启用会影响其他 Provider 的 reqwest 全局压缩特性。解压后的流继续遵循控制面和推理消费方的大小限制、取消及截止时间
 
-跨协议响应在 Core 的响应中间件阶段之间转换。转换器在正常 EOF 时刷新最后内容块并发出终态，尾部用量先于完成事件交付；错误和取消不合成成功终态。转换状态随单次流释放，不增加账号级签名缓存或对话副本
+Chat 响应在 Core 的响应中间件阶段之间直接转换。转换器在正常 EOF 时刷新最后内容块并发出终态，尾部用量先于完成事件交付；错误和取消不合成成功终态。转换状态随单次流释放，不增加账号级签名缓存或对话副本
 
 ### 连接与上游身份
 
@@ -630,7 +637,7 @@ OpenAI 模型目录用于发现与原生 Responses 账号资格筛选。
 目录与账号白名单的优先级见[路由与账号范围](#6-路由账号范围与-continuation)
 
 - Responses 同协议执行是透明边界。正文兼容、身份归一和显式请求策略之外的业务字段保留原始语义；
-  同协议业务响应使用原始 wire，跨协议才调用转换器；客户端错误兼容与原生续写额度恢复按明确例外处理，见 [OpenAI 透传](api.md#openai-透传)。
+  同协议业务响应使用原始 wire，只有 Chat 调用转换器；客户端错误兼容与原生续写额度恢复按明确例外处理，见 [OpenAI 透传](api.md#openai-透传)。
   `transport/correlation` 在出站副本上按本次安装身份统一映射关联标识。
   Responses 的账号归属判断及换号头部清理由 Provider 统一执行，各传输消费同一出站请求。
   安装身份独立于 UA，派生规则见 [Key 客户端身份](api.md#key-客户端身份)。Live 沿用引导时冻结的种子。插件通过中间件生成并保存身份、改写关联字段
@@ -642,7 +649,7 @@ OpenAI 模型目录用于发现与原生 Responses 账号资格筛选。
   按 `output_index` 还原完整输出；已有非空终态输出不改写。完成项缺失或冲突时在下游提交前拒绝，
   不凭 canonical 增量补造内容，也不让 SSE/WS 转发额外保存整份输出
 - Messages 上游只使用所选账号的 API Key 认证与 Anthropic 协议头，不继承 Codex OAuth 身份。
-  Messages 原生 SSE 交付原始帧，canonical facts 旁路提取用量、终态和错误；跨协议转换状态由单次响应独占。
+  Messages 原生 SSE 交付原始帧，canonical facts 旁路提取用量、终态和错误；Chat 转换状态由单次响应独占。
   输入计数通过 CountTokens operation 复用准入、账号选择、租约与终结链，由 Provider 决定调用官方原生计数或本地 tokenizer。
   本地估算不创建生成请求、不记录上游发送或伪造上游用量；精度与多模态边界见 [Messages 输入计数](api.md#messages-输入计数)
 - Responses、Messages、Images 与 standalone Search 的业务扩展头保留原始多值字节。API 负责剥离鉴权、账号身份和 HTTP 传输字段，
@@ -661,8 +668,9 @@ OpenAI 模型目录用于发现与原生 Responses 账号资格筛选。
 - Live 共用 OpenAI 的头部身份、下游环境和传输边界，业务扩展不使用固定白名单。
   引导、sideband 与 hangup 由 Provider 在选定或加载钉住账号后统一处理出站关联标识；
   API 保留原始入站事实，Core 只传递头值字节和通话归属，具体合同见 [Codex Live 语音通话](api.md#codex-live-语音通话)
-- xAI 是翻译边界。Provider 把 Grok wire 转换为 Responses wire；上游结构化错误的 message/code/type
-  可以透出，但账号指纹会先脱敏
+- xAI 原生使用 Responses 协议，保留原始响应与 SSE，并旁路提取调用事实。
+  `provider/chat/` 仅为 Chat 装配直接转换；原生路径不模拟 Codex 工具、compaction 或推理历史。
+  上游结构化错误的 message/code/type 可以透出，账号指纹先脱敏
 - response ID 是不透明 UTF-8 bytes，不假设 UUID、固定长度或跨 Provider 可复用
 - OpenAI 与 xAI 用户身份选择由 PostgreSQL 保存，Core 在 `FrozenAccountScope` 中按 Key 整体覆盖通用选择，
   以 Provider-owned 不透明对象沿路由计划传递；执行会话复用首次解析结果，使重试不受发布更新影响。
@@ -679,12 +687,12 @@ OpenAI 模型目录用于发现与原生 Responses 账号资格筛选。
   OpenAI 账号目录发现和定时预热每轮读取并解析一次当前全局画像，查询版本和请求头使用同一快照，不接受 Key 覆盖。
   其余后台账号和 Desktop 专属操作使用独立官方 Desktop 画像。
   管理端连接测试从本次发布快照携带全局画像，经 Provider 解析后冻结为探测身份。
-  xAI 以内置画像为版本检查基线，在进程内更新 Grok CLI 发布资料；模型与压缩请求使用已保存的用户选择，
+  xAI 以内置画像为版本检查基线，在进程内更新 Grok CLI 发布资料；模型请求使用已保存的用户选择，
   OAuth、后台目录和额度查询使用内置官方画像
 
-xAI Provider 负责 Codex custom 工具与 Grok function 工具的双向转换，保持工具类型、item ID 与
-`call_id` 配对；超限或转换失败终止流。默认 `store: false` 的续接由现有会话 owner 重放完整历史；
-原生续接按上游约束处理 `instructions` 与 `previous_response_id`，不把协议差异交给 Core
+xAI 的 Chat 路径将 custom 工具包装为 function 输入，并在直接返回 Chat 时还原；原生 Responses 不做该转换。
+原生续接的账号归属仍由既有会话 owner 管理，同账号重放保留完整上游输出；跨账号重放只清理无法携带的账号绑定状态。
+`store` 和原生工具声明遵从请求及上游默认，不为其他 Harness 补写或重建
 
 ### Codex 原生生图与认证
 
@@ -792,7 +800,7 @@ OpenAI 与 Antigravity 的内置 `round_robin` 在最高可调度权重层按账
 分配游标只读，取得租约后通过共享准入接口推进；有会话认领时，游标和绑定原子提交，冲突先释放租约再重选
 亲和命中、保留主绑定的临时分流、固定账号和插件显式选号不消耗轮询位置；插件委托仍参与内置轮询
 
-Antigravity 在转换前识别 GenAI 会话头及正文 `sessionId`／`session_id`（头优先）、Codex 逻辑会话和 Claude Code 会话，绑定按 Client Key、模型和入站协议隔离。转换请求从绑定键派生 Cloud Code 的 `sessionId`
+Antigravity 从 GenAI 原生会话头及正文 `sessionId`／`session_id`（头优先）、Chat 显式会话头识别会话，绑定按 Client Key、模型和入站协议隔离。Chat 请求从绑定键派生 Cloud Code 的 `sessionId`
 xAI 继续从自身请求身份派生模型级亲和键，共用版本绑定及 TTL；上游 session ID 和推理重放身份仍由传输模块持有
 两者的优先模式在容量分流时保留合格的主绑定，绑定不再满足当前资格时迁移；严格模式等待繁忙主账号，关闭排队或资格失效时允许重选
 原生固定账号请求不改写已有主绑定，诊断请求和没有亲和键的请求不访问绑定存储
@@ -821,7 +829,7 @@ OpenAI 固定归属请求直接读取目标账号，其余请求按冻结的账�
 Store 只保存带版本的绑定事实，Provider 在取得租约后、发送前原子认领、续期或按模式迁移；快照冲突释放租约并重新选择。
 首次认领不依赖根线程先发请求，独立后台任务也使用自身会话绑定。
 Messages 的 Claude Code 明确会话身份由 `gateway-protocol::anthropic` 解析；OpenAI Provider 在选号前按 Client Key 派生独立命名空间的亲和键，
-沿用现有绑定与调度策略；原生执行在 attempt 改写后、协议转换前复验身份，不建立 OpenAI 轮次关联或原生续接归属。
+沿用现有绑定与调度策略；原生执行在 attempt 改写后、发送前复验身份，不建立 OpenAI 轮次关联或原生续接归属。
 OpenAI Provider 对无显式会话的 Responses 和 Chat Completions 入站请求，可按客户端缓存键或对话开头形成账号亲和。Messages 入站请求不按对话内容绑定账号。
 亲和键按 Client Key 隔离，与会话键使用不同命名空间，不建立轮次关联或原生续接归属。
 内容亲和存储不可用时，优先模式按普通调度继续选号，严格模式停止发送。

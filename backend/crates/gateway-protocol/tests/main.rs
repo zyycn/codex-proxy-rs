@@ -4,3 +4,5 @@ mod anthropic;
 mod genai;
 mod openai;
 mod request;
+
+mod chat_completions;

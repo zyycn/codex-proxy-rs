@@ -179,6 +179,7 @@ async fn smart_reselection_respects_native_and_required_account_boundaries() {
         );
         let selected = selector
             .select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &request_url,
                 attempt: &attempt,
@@ -465,6 +466,7 @@ fn selector_uses_frozen_global_account_policy_for_lease() {
     let lease =
         block_on(
             selector.select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
@@ -513,6 +515,7 @@ fn selector_uses_the_account_concurrency_override_for_the_redis_lease() {
     let attempt = attempt(BTreeSet::new());
 
     block_on(selector.select(&SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url:
             &Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL"),
@@ -561,6 +564,7 @@ fn selector_reloads_quota_snapshot_before_acquiring_the_only_lease() {
     let selector = selector(&store, Arc::clone(&leases));
     let attempt = attempt(BTreeSet::new());
     let selected = block_on(selector.select(&SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("URL"),
         attempt: &attempt,
@@ -621,6 +625,7 @@ fn selector_rejects_quota_exhaustion_observed_after_selection() {
     let selector = selector(&store, Arc::clone(&leases));
     let attempt = attempt(BTreeSet::new());
     let error = block_on(selector.select(&SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("URL"),
         attempt: &attempt,
@@ -677,6 +682,7 @@ fn selector_uses_rotated_credentials_after_a_snapshot_conflict() {
     let selector = selector(&store, Arc::clone(&leases));
     let attempt = attempt(BTreeSet::new());
     let selected = block_on(selector.select(&SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("URL"),
         attempt: &attempt,
@@ -723,6 +729,7 @@ fn selector_snapshot_retry_preserves_frozen_account_scope_and_model_permissions(
     let selector = selector(&store, Arc::clone(&leases));
     let attempt = model_restricted_attempt(None, BTreeSet::new());
     let error = block_on(selector.select(&SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "test-luna",
         request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("URL"),
         attempt: &attempt,
@@ -752,6 +759,7 @@ fn selector_does_not_retry_credential_store_unavailability() {
     let selector = selector(&store, Arc::clone(&leases));
     let attempt = attempt(BTreeSet::new());
     let error = block_on(selector.select(&SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("URL"),
         attempt: &attempt,
@@ -782,6 +790,7 @@ fn selector_does_not_retry_invalid_credential_data() {
     let selector = selector(&store, Arc::clone(&leases));
     let attempt = attempt(BTreeSet::new());
     let error = block_on(selector.select(&SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("URL"),
         attempt: &attempt,
@@ -811,6 +820,7 @@ async fn selector_round_robin_cursor_advances_across_requests() {
         let attempt = round_robin_attempt();
         let lease = selector
             .select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &request_url,
                 attempt: &attempt,
@@ -895,6 +905,7 @@ async fn select_strict_round_robin_session(
     let affinity_key = ProviderSessionAffinityKey::try_new(key).expect("affinity key");
     selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url,
             attempt: &attempt,
@@ -924,6 +935,7 @@ async fn selector_should_claim_the_initial_session_account_before_upstream_send(
 
     let selected = selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                 .expect("request URL"),
@@ -990,6 +1002,7 @@ async fn selector_should_reuse_and_renew_the_account_bound_to_the_same_session()
     let first_attempt = attempt(BTreeSet::new());
     let first = selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &request_url,
             attempt: &first_attempt,
@@ -1003,6 +1016,7 @@ async fn selector_should_reuse_and_renew_the_account_bound_to_the_same_session()
     let second_attempt = attempt(BTreeSet::new());
     let second = selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &request_url,
             attempt: &second_attempt,
@@ -1060,6 +1074,7 @@ async fn selector_should_replace_a_busy_affinity_binding_after_the_fallback_succ
 
     let selected = selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &request_url,
             attempt: &request_attempt,
@@ -1128,6 +1143,7 @@ async fn selector_should_prefer_session_over_weight_and_soft_health() {
 
     let selected = selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &request_url,
             attempt: &request_attempt,
@@ -1169,6 +1185,7 @@ async fn selector_should_escape_a_quota_exhausted_affinity_account() {
 
     let selected = selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &request_url,
             attempt: &request_attempt,
@@ -1200,6 +1217,7 @@ fn selector_honors_attempt_local_account_exclusion() {
     let lease =
         block_on(
             selector.select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
@@ -1223,6 +1241,7 @@ fn selector_uses_only_the_required_account() {
     let lease =
         block_on(
             selector.select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
@@ -1264,6 +1283,7 @@ fn unavailable_required_account_never_falls_back() {
         };
         let attempt = attempt_with_required(excluded, Some(required));
         let error = block_on(selector.select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &Url::parse(OFFICIAL_CODEX_BASE_URL).expect("request URL"),
             attempt: &attempt,
@@ -1289,6 +1309,7 @@ fn selector_returns_capacity_error_when_every_redis_lease_is_busy() {
     let error =
         block_on(
             selector.select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
@@ -1314,6 +1335,7 @@ fn credential_expired_failure_marks_unified_account_expired() {
     let lease =
         block_on(
             selector.select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
@@ -1394,6 +1416,7 @@ fn rate_limited_failure_records_runtime_cooldown_without_changing_persisted_fact
     let lease =
         block_on(
             selector.select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
@@ -1680,6 +1703,7 @@ fn native_continuation_surfaces_the_original_accounts_quota_status_to_the_coordi
     let error =
         block_on(
             selector.select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
@@ -1751,6 +1775,7 @@ fn native_continuation_surfaces_the_original_accounts_quota_signal_to_the_coordi
     let error =
         block_on(
             selector.select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
@@ -1773,6 +1798,7 @@ fn identity_verification_failure_isolates_only_selected_account() {
     let lease =
         block_on(
             selector.select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
@@ -1819,6 +1845,7 @@ fn cloudflare_challenge_does_not_change_persisted_account_facts() {
     let lease =
         block_on(
             selector.select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
@@ -1858,6 +1885,7 @@ fn repeated_cloudflare_path_block_marks_only_the_affected_account_invalid() {
     let lease =
         block_on(
             selector.select(&SelectCodexCredential {
+                protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
                 upstream_model: "gpt-5.4",
                 request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                     .expect("request URL"),
@@ -1902,6 +1930,7 @@ fn cloudflare_challenge_expires_provider_owned_cookies_at_cooldown_boundary() {
         Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
     let first_attempt = attempt_with_required(BTreeSet::new(), Some(required.clone()));
     let first = block_on(selector.select(&SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &request_url,
         attempt: &first_attempt,
@@ -1917,6 +1946,7 @@ fn cloudflare_challenge_expires_provider_owned_cookies_at_cooldown_boundary() {
 
     let second_attempt = attempt_with_required(BTreeSet::new(), Some(required));
     let second = block_on(selector.select(&SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &request_url,
         attempt: &second_attempt,
@@ -1949,6 +1979,7 @@ fn cloudflare_path_block_deletes_provider_owned_cookies() {
         Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
     let first_attempt = attempt_with_required(BTreeSet::new(), Some(required.clone()));
     let first = block_on(selector.select(&SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &request_url,
         attempt: &first_attempt,
@@ -1964,6 +1995,7 @@ fn cloudflare_path_block_deletes_provider_owned_cookies() {
 
     let second_attempt = attempt_with_required(BTreeSet::new(), Some(required));
     let second = block_on(selector.select(&SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &request_url,
         attempt: &second_attempt,
@@ -2029,6 +2061,7 @@ fn response_cookie_rotation_returns_a_current_account_for_later_fenced_writes() 
         Some(ProviderAccountId::new("acct_primary").expect("account id")),
     );
     let lease = block_on(selector.select(&SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &request_url,
         attempt: &attempt,
@@ -2142,12 +2175,14 @@ fn smart_queue_weight_changes_the_selected_wait_queue() {
         let next_attempt = make_attempt(None);
         let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
         let head_request = SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &url,
             attempt: &head_attempt,
             session_affinity_key: None,
         };
         let next_request = SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             attempt: &next_attempt,
             ..head_request
         };
@@ -2214,6 +2249,7 @@ fn smart_queue_keeps_native_and_required_account_pins_when_another_account_is_fr
         );
         let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
         let request = SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &url,
             attempt: &attempt,
@@ -2245,6 +2281,7 @@ fn account_queue_is_bounded_and_resumes_after_capacity_is_released() {
     let attempt = queued_attempt(Duration::from_secs(2));
     let url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
     let request = SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &url,
         attempt: &attempt,
@@ -2273,6 +2310,7 @@ fn account_queue_cancellation_releases_wait_capacity_and_timeout_is_local() {
     let attempt = queued_attempt(Duration::from_millis(20));
     let url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
     let request = SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &url,
         attempt: &attempt,
@@ -2345,6 +2383,7 @@ fn model_access_routes_luna_and_other_models_to_separate_accounts_even_with_unkn
         let selector = selector(&store, leases);
         let attempt = model_restricted_attempt(None, BTreeSet::new());
         let lease = block_on(selector.select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: model,
             request_url:
                 &Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("URL"),
@@ -2375,6 +2414,7 @@ fn model_access_never_escapes_to_a_forbidden_account_after_failover_or_required_
         let selector = selector(&store, Arc::clone(&leases));
         let attempt = model_restricted_attempt(required, excluded);
         let result = block_on(selector.select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url:
                 &Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("URL"),
@@ -2413,6 +2453,7 @@ async fn model_access_overrides_soft_session_affinity() {
     let attempt = model_restricted_attempt(None, BTreeSet::new());
     let lease = selector
         .select(&SelectCodexCredential {
+            protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
             upstream_model: "gpt-5.4",
             request_url: &Url::parse("https://chatgpt.com/backend-api/codex/responses")
                 .expect("URL"),
@@ -2453,6 +2494,7 @@ fn model_access_queue_waits_for_allowed_account_without_using_free_forbidden_acc
     );
     let url = Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
     let request = SelectCodexCredential {
+        protocol: gateway_protocol::openai::OPENAI_PROTOCOL,
         upstream_model: "gpt-5.4",
         request_url: &url,
         attempt: &attempt,

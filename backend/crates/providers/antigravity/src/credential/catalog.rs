@@ -205,10 +205,7 @@ impl CatalogService {
         )
         .with_dedicated_web_search(search_models)
         .with_generation_protocol(gateway_protocol::genai::GENAI_PROTOCOL)
-        .with_translated_generation_protocols([
-            gateway_protocol::openai::OPENAI_PROTOCOL,
-            gateway_protocol::anthropic::ANTHROPIC_PROTOCOL,
-        ])
+        .with_translated_generation_protocols([gateway_protocol::chat_completions::CHAT_PROTOCOL])
         .with_upstream_feature_validation();
         let mut models = BTreeMap::new();
         for (id, metadata) in members {

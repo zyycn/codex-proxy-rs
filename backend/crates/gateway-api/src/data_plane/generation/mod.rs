@@ -6,9 +6,7 @@ mod request;
 mod response;
 mod validation;
 
-pub(crate) use http::{
-    GenerationHttpRequest, HttpResponseAdapter, ResponseAuthorization, execute_prepared_generation,
-};
+pub(crate) use http::{GenerationHttpRequest, ResponseAuthorization, execute_prepared_generation};
 pub use request::{ContinuationIntent, DecodedGenerationRequest, GenerationRequestMetadata};
 
 use axum::http::HeaderMap;
@@ -18,6 +16,7 @@ use gateway_protocol::openai::OPENAI_PROTOCOL;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GenerationEndpoint {
+    Chat,
     Responses,
     Messages,
     MessageTokenCount,
@@ -36,6 +35,7 @@ impl GenerationEndpoint {
 
     pub(crate) const fn wire(self) -> &'static str {
         match self {
+            Self::Chat => gateway_protocol::chat_completions::CHAT_PROTOCOL,
             Self::Responses => OPENAI_PROTOCOL,
             Self::GenAi | Self::GenAiTokenCount => gateway_protocol::genai::GENAI_PROTOCOL,
             Self::Messages | Self::MessageTokenCount => ANTHROPIC_PROTOCOL,
@@ -44,6 +44,7 @@ impl GenerationEndpoint {
 
     pub(crate) const fn path(self) -> &'static str {
         match self {
+            Self::Chat => super::router::CHAT_COMPLETIONS_PATH,
             Self::Responses => super::router::RESPONSES_PATH,
             Self::GenAi | Self::GenAiTokenCount => super::genai::MODEL_ACTION_PATH,
             Self::Messages => super::router::MESSAGES_PATH,
@@ -53,7 +54,7 @@ impl GenerationEndpoint {
 
     pub(crate) const fn operation(self) -> OperationKind {
         match self {
-            Self::Responses | Self::Messages | Self::GenAi => OperationKind::Generate,
+            Self::Chat | Self::Responses | Self::Messages | Self::GenAi => OperationKind::Generate,
             Self::MessageTokenCount | Self::GenAiTokenCount => OperationKind::CountTokens,
         }
     }
@@ -74,6 +75,17 @@ impl GenerationInput {
     ) -> Result<DecodedGenerationRequest, gateway_core::engine::middleware::MiddlewareError> {
         use gateway_core::engine::middleware::MiddlewareError;
         match self.endpoint {
+            GenerationEndpoint::Chat => {
+                super::chat_completions::decode_request(body, headers, maximum).map_err(|error| {
+                    MiddlewareError::Gateway(
+                        gateway_core::error::GatewayError::new(
+                            gateway_core::error::GatewayErrorKind::InvalidRequest,
+                            "The Chat request is invalid.",
+                        )
+                        .with_source(error),
+                    )
+                })
+            }
             GenerationEndpoint::GenAi | GenerationEndpoint::GenAiTokenCount => {
                 super::genai::decode(
                     &self.model,

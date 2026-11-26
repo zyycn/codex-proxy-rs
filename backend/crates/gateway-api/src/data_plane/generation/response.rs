@@ -19,6 +19,7 @@ use crate::data_plane::{
 };
 
 pub(super) enum GenerationEncoder {
+    Chat(crate::data_plane::chat_completions::delivery::ChatEncoder),
     Responses(OpenAiResponsesEncoder),
     GenAi {
         failed: bool,
@@ -33,6 +34,7 @@ pub(super) enum GenerationEncoder {
 impl GenerationEncoder {
     pub(super) fn new(protocol: GenerationEndpoint) -> Self {
         match protocol {
+            GenerationEndpoint::Chat => Self::Chat(Default::default()),
             GenerationEndpoint::Responses => Self::Responses(OpenAiResponsesEncoder::new()),
             GenerationEndpoint::GenAi | GenerationEndpoint::GenAiTokenCount => {
                 Self::GenAi { failed: false }
@@ -49,6 +51,7 @@ impl GenerationEncoder {
 
     pub(super) fn push_sse(&mut self, event: &ProviderEvent) -> Vec<Bytes> {
         match self {
+            Self::Chat(encoder) => encoder.push(event),
             Self::Responses(encoder) => encoder.push_sse(event),
             Self::GenAi { failed } => {
                 let Some(wire) = event
@@ -142,6 +145,7 @@ impl GenerationEncoder {
         match self {
             Self::Responses(encoder) => encoder.is_completed(),
             // 原生 GenAI 以 EOF 结束，finishReason 后仍可收到独立用量帧
+            Self::Chat(encoder) => encoder.completed,
             Self::GenAi { .. } => false,
             Self::Messages { completed, .. } => *completed,
         }
@@ -150,6 +154,7 @@ impl GenerationEncoder {
     pub(super) fn has_wire_failure(&self) -> bool {
         match self {
             Self::Responses(encoder) => encoder.has_wire_failure(),
+            Self::Chat(encoder) => encoder.failed,
             Self::Messages { failed, .. } | Self::GenAi { failed } => *failed,
         }
     }
@@ -157,6 +162,13 @@ impl GenerationEncoder {
     pub(super) fn error_frame(&self, error: &GatewayError) -> Bytes {
         let (status, error_type, code) = gateway_error_contract(error.kind());
         match self {
+            Self::Chat(_) => {
+                crate::data_plane::chat_completions::chat_error_frame(&json!({"error": {
+                    "type": error.client_error_type().unwrap_or(error_type),
+                    "code": error.client_error_code().unwrap_or(code),
+                    "message": error.client_message(),
+                }}))
+            }
             Self::Responses(encoder) => Bytes::from(response_failed_sse_event_with_id(
                 encoder.response_id(),
                 error.client_error_type().unwrap_or(error_type),
@@ -180,6 +192,7 @@ impl GenerationEncoder {
 impl GenerationEndpoint {
     pub(super) const fn stream_error_encoder(self) -> Option<fn(&Value) -> Bytes> {
         match self {
+            Self::Chat => Some(crate::data_plane::chat_completions::chat_error_frame),
             Self::Responses => None,
             Self::GenAi | Self::GenAiTokenCount => Some(crate::data_plane::genai::stream_error),
             Self::Messages | Self::MessageTokenCount => Some(messages::stream_error),
@@ -191,7 +204,7 @@ impl GenerationEndpoint {
         response: axum::response::Response,
     ) -> axum::response::Response {
         match self {
-            Self::Responses => response,
+            Self::Chat | Self::Responses => response,
             Self::GenAi | Self::GenAiTokenCount => {
                 crate::data_plane::genai::project_error_response(response).await
             }
@@ -203,7 +216,7 @@ impl GenerationEndpoint {
 
     pub(super) fn terminal_bytes(self) -> Bytes {
         match self {
-            Self::Responses => Bytes::from_static(DONE_SSE_FRAME.as_bytes()),
+            Self::Chat | Self::Responses => Bytes::from_static(DONE_SSE_FRAME.as_bytes()),
             // Messages 的 message_stop 已在 wire 中交付，空帧只确认宿主交付终结
             Self::Messages | Self::MessageTokenCount | Self::GenAi | Self::GenAiTokenCount => {
                 Bytes::new()
@@ -212,6 +225,39 @@ impl GenerationEndpoint {
     }
 
     pub(super) fn collect(self, events: &[ProviderEvent]) -> Result<Vec<u8>, ResponseEncodeError> {
+        if self == Self::Chat {
+            let mut accumulator = gateway_protocol::chat_completions::ChatAccumulator::default();
+            let mut json_body = None;
+            let mut chunks = false;
+            for wire in events
+                .iter()
+                .filter_map(ProviderEvent::wire_event)
+                .filter(|wire| wire.protocol() == self.wire())
+            {
+                if let Some(raw) = wire.raw_json_body() {
+                    if chunks || json_body.replace(raw).is_some() {
+                        return Err(ResponseEncodeError::InvalidOutputItems);
+                    }
+                } else {
+                    if json_body.is_some() {
+                        return Err(ResponseEncodeError::InvalidOutputItems);
+                    }
+                    chunks = true;
+                    accumulator
+                        .push(wire.data())
+                        .map_err(|_| ResponseEncodeError::InvalidOutputItems)?;
+                }
+            }
+            if let Some(raw) = json_body {
+                return Ok(raw.to_vec());
+            }
+            return serde_json::to_vec(
+                &accumulator
+                    .finish()
+                    .map_err(|_| ResponseEncodeError::MissingWireTerminal)?,
+            )
+            .map_err(|_| ResponseEncodeError::Serialization);
+        }
         if self == Self::Responses {
             return serde_json::to_vec(&crate::data_plane::responses::response::collect_response(
                 events,

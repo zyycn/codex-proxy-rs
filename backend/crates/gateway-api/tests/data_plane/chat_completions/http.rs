@@ -36,7 +36,7 @@ use gateway_core::{
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
-use super::{chat_request, completed, created, message};
+use super::{chat_request, completed, created};
 use crate::data_plane::{
     api_router, authenticated_client, authenticated_client_for_provider_with_limit,
     middleware::{RequestMiddleware, ResponseFrameAction},
@@ -50,6 +50,7 @@ use crate::support::generation::{Finish, Session};
 #[derive(Clone, Debug)]
 pub(super) struct Captured {
     pub body: Value,
+    pub protocol: String,
     pub context: Value,
     pub endpoint: String,
 }
@@ -99,6 +100,7 @@ impl ExecutionService for Execution {
             };
             *self.captured.lock().unwrap() = Some(Captured {
                 body: Value::Object(generation.protocol_payload().body().clone()),
+                protocol: generation.protocol_payload().protocol().to_owned(),
                 context: Value::Object(generation.protocol_payload().context().clone()),
                 endpoint: request.metadata.endpoint,
             });
@@ -209,7 +211,7 @@ impl MiddlewarePlan for InspectMiddleware {
             let headers = request.headers().to_vec();
             request = request
                 .replace_parts(
-                    "openai".to_owned(),
+                    "chat_completions".to_owned(),
                     headers,
                     Bytes::from(body.to_string()),
                     None,
@@ -240,18 +242,18 @@ async fn rejects_missing_authentication_before_decoding_or_execution() {
 }
 
 #[tokio::test]
-async fn request_middleware_sees_responses_and_preserves_the_chat_endpoint() {
+async fn request_middleware_sees_original_chat_and_preserves_the_endpoint() {
     let middleware = Arc::new(InspectMiddleware {
         inner: RequestMiddleware {
             expected_operation: Some(gateway_core::operation::OperationKind::Generate),
             ..RequestMiddleware::default()
         },
         update: Some(|body| {
-            body["input"] = json!("rewritten by request middleware");
+            body["messages"][0]["content"] = json!("rewritten by request middleware");
         }),
         ..InspectMiddleware::default()
     });
-    let mut execution = Execution::new(Session::new(vec![completed(json!([message("ok")]))]));
+    let mut execution = Execution::new(Session::new(vec![created(), completed("ok")]));
     execution.middleware = Some(middleware.frozen());
     let fixture = Fixture::with_execution(execution).await;
     let response = fixture.post(chat_request(false)).await;
@@ -259,15 +261,19 @@ async fn request_middleware_sees_responses_and_preserves_the_chat_endpoint() {
     let downstream = json_body(response).await;
     assert_eq!(downstream["object"], "chat.completion");
     let observed = middleware.requests.lock().unwrap();
-    assert!(observed[0].get("messages").is_none());
-    assert_eq!(observed[0]["input"][0]["role"], "user");
+    assert!(observed[0].get("input").is_none());
+    assert_eq!(observed[0]["messages"][0]["role"], "user");
     assert_eq!(
         middleware.inner.endpoints.lock().unwrap().as_slice(),
         [PATH]
     );
     let captured = fixture.captured();
     assert_eq!(captured.endpoint, PATH);
-    assert_eq!(captured.body["input"], "rewritten by request middleware");
+    assert_eq!(captured.protocol, "chat_completions");
+    assert_eq!(
+        captured.body["messages"][0]["content"],
+        "rewritten by request middleware"
+    );
     assert_eq!(fixture.trace.commits.load(Ordering::SeqCst), 1);
 }
 
@@ -288,7 +294,7 @@ async fn dropping_chat_body_cancels_and_finalizes_the_original_execution() {
 
 #[tokio::test]
 async fn gzip_and_headers_reuse_the_responses_ingress_contract() {
-    let mut session = Session::new(vec![completed(json!([message("ok")]))]);
+    let mut session = Session::new(vec![created(), completed("ok")]);
     session.response_headers = vec![
         ProviderResponseHeader::new("x-future-multi", Bytes::from_static(b"first")),
         ProviderResponseHeader::new("x-future-multi", Bytes::from_static(b"second")),
@@ -368,10 +374,13 @@ async fn corrupt_or_oversized_compressed_chat_never_starts_execution() {
 }
 
 #[tokio::test]
-async fn response_middleware_is_validated_as_responses_before_chat_projection() {
-    for matching_identity in [true, false] {
-        let replacement = json!({"id":if matching_identity {"resp_chat_test"} else {"resp_other"},
-            "status":"completed","output":[message("plugin text")]});
+async fn response_middleware_must_preserve_chat_shape_and_identity() {
+    for (matching_identity, raw_json) in
+        [(true, false), (false, false), (true, true), (false, true)]
+    {
+        let replacement = json!({"id":if matching_identity {"chatcmpl_fixture"} else {"chatcmpl_other"},
+            "object":"chat.completion","created":100,"model":"model-a",
+            "choices":[{"index":0,"message":{"role":"assistant","content":"plugin text"},"finish_reason":"stop"}]});
         let middleware = Arc::new(
             RequestMiddleware {
                 expected_operation: Some(gateway_core::operation::OperationKind::Generate),
@@ -381,8 +390,11 @@ async fn response_middleware_is_validated_as_responses_before_chat_projection() 
                 replacement.to_string(),
             ))]),
         );
-        let mut execution =
-            Execution::new(Session::new(vec![completed(json!([message("original")]))]));
+        let mut execution = Execution::new(Session::new(if raw_json {
+            vec![super::json_completed()]
+        } else {
+            vec![created(), completed("original")]
+        }));
         execution.middleware = Some(middleware.frozen());
         let fixture = Fixture::with_execution(execution).await;
         let response = fixture.post(chat_request(false)).await;
@@ -406,7 +418,7 @@ async fn response_middleware_is_validated_as_responses_before_chat_projection() 
 #[tokio::test]
 async fn commit_failure_does_not_deliver_buffered_or_first_terminal_chat_success() {
     for streaming in [false, true] {
-        let mut session = Session::new(vec![completed(json!([message("not delivered")]))]);
+        let mut session = Session::new(vec![created(), completed("not delivered")]);
         session.fail_commit = true;
         let fixture = Fixture::new(session).await;
         let response = fixture.post(chat_request(streaming)).await;
@@ -421,11 +433,18 @@ async fn commit_failure_does_not_deliver_buffered_or_first_terminal_chat_success
 #[tokio::test]
 async fn the_same_execution_fixture_finishes_native_responses_with_one_commit() {
     for already_started in [false, true] {
+        let native = |kind: &str, status: &str| {
+            gateway_core::event::ProviderEvent::wire(
+            gateway_core::event::ProtocolWireEvent::json("openai", Some(kind.to_owned()), json!({
+                "type":kind,"response":{"id":"resp_native","object":"response","model":"model-a","status":status,
+                "output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"native baseline"}]}]}
+            })).unwrap())
+        };
         let mut events = Vec::new();
         if already_started {
-            events.push(created());
+            events.push(native("response.created", "in_progress"));
         }
-        events.push(completed(json!([message("native baseline")])));
+        events.push(native("response.completed", "completed"));
         let fixture = Fixture::new(Session::new(events)).await;
         let mut request = request(json!({"model":"model-a","input":"hello","stream":true}));
         *request.uri_mut() = "/v1/responses".parse().unwrap();
@@ -447,12 +466,11 @@ async fn the_same_execution_fixture_finishes_native_responses_with_one_commit() 
 #[tokio::test]
 async fn finalization_failure_never_leaks_success_finish_or_usage() {
     for already_started in [false, true] {
-        let mut events = Vec::new();
-        if already_started {
-            events.push(created());
-        }
-        events.push(completed(json!([])));
-        let mut session = Session::new(events);
+        let mut session = if already_started {
+            Session::new(vec![created(), completed("")])
+        } else {
+            Session::new(Vec::new()).with_batch(vec![created(), completed("")])
+        };
         session.finish = Finish::Error;
         let fixture = Fixture::new(session).await;
         let mut body = chat_request(true);
@@ -460,7 +478,7 @@ async fn finalization_failure_never_leaks_success_finish_or_usage() {
         let response = fixture.post(body).await;
         // 原会话已经接受 200 提交，后续终结错误只能作为流内错误交付
         assert_eq!(response.status(), StatusCode::OK);
-        let (_, chunks) = super::response::sse_body(response).await;
+        let (_, chunks) = super::delivery::sse_body(response).await;
         assert!(chunks.iter().any(|chunk| chunk.get("error").is_some()));
         assert!(
             !chunks
@@ -481,7 +499,7 @@ async fn error_after_admission_keepalive_uses_chat_error_encoding() {
     session.finish = Finish::Error;
     let fixture = Fixture::new(session).await;
     let response = fixture.post(chat_request(true)).await;
-    let (body, chunks) = super::response::sse_body(response).await;
+    let (body, chunks) = super::delivery::sse_body(response).await;
     assert!(body.starts_with(": keep-alive\n\n"));
     assert!(chunks.iter().any(|chunk| chunk.get("error").is_some()));
     assert!(!body.contains("response.failed"));
@@ -498,7 +516,7 @@ async fn early_middleware_failure_is_recorded_at_ingress_without_a_reserved_mode
         }
         .with_json_short_circuit(Bytes::from_static(b"{}")),
     );
-    let mut execution = Execution::new(Session::new(vec![completed(json!([message("OK")]))]));
+    let mut execution = Execution::new(Session::new(vec![created(), completed("OK")]));
     execution.middleware = Some(middleware.frozen());
     let execution = Arc::new(execution);
     let diagnostics = Arc::new(crate::support::RecordingDiagnostics::default());

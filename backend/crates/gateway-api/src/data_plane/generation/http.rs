@@ -34,7 +34,6 @@ use gateway_core::event::{ProviderEvent, ProviderResponseHeader};
 use gateway_core::lifecycle::{CancellationToken, ConnectionGuard};
 use gateway_protocol::openai::OPENAI_PROTOCOL;
 use gateway_protocol::openai::sse::response_failed_sse_event_with_id;
-use serde_json::Value;
 use tokio::time::Instant;
 
 use crate::data_plane::error::{
@@ -69,19 +68,12 @@ pub(crate) struct GenerationHttpRequest {
     pub middleware_body: Bytes,
 }
 
-/// 下游协议只投影出口字节 执行会话和计量仍归原 owner
-pub(crate) struct HttpResponseAdapter {
-    pub endpoint: &'static str,
-    pub wrap: Box<dyn FnOnce(MiddlewareResponse) -> MiddlewareResponse + Send>,
-    pub stream_error: fn(&Value) -> Bytes,
-}
-
 impl GenerationEndpoint {
     fn expected_http_body(self, stream: bool) -> ExpectedBody {
         if stream {
             // 原生 GenAI 客户端会将网关插入的 SSE 注释解析为无效帧
             ExpectedBody::Sse {
-                keep_alive: matches!(self, Self::Responses | Self::Messages),
+                keep_alive: matches!(self, Self::Chat | Self::Responses | Self::Messages),
             }
         } else {
             ExpectedBody::SingleJson
@@ -94,7 +86,6 @@ pub(crate) async fn execute_prepared_generation(
     prepared: PreparedRootExecution,
     request: GenerationHttpRequest,
     authorization: Option<Arc<dyn ResponseAuthorization>>,
-    adapter: Option<HttpResponseAdapter>,
 ) -> Response {
     let GenerationHttpRequest {
         peer_address,
@@ -128,13 +119,8 @@ pub(crate) async fn execute_prepared_generation(
     // 中间件正文已经由入口按上限解压；传输编码和旧长度不能与改写后的正文混用
     middleware_headers.remove(CONTENT_ENCODING);
     middleware_headers.remove(CONTENT_LENGTH);
-    let endpoint = adapter
-        .as_ref()
-        .map_or(protocol.path(), |adapter| adapter.endpoint);
-    let stream_error = adapter
-        .as_ref()
-        .map(|adapter| adapter.stream_error)
-        .or_else(|| protocol.stream_error_encoder());
+    let endpoint = protocol.path();
+    let stream_error = protocol.stream_error_encoder();
     let input = RequestInput {
         endpoint: endpoint.to_owned(),
         protocol: protocol.wire().to_owned(),
@@ -231,10 +217,6 @@ pub(crate) async fn execute_prepared_generation(
                 };
                 let response =
                     validated_middleware_response(response, validation, stream, protocol);
-                let response = match adapter {
-                    Some(adapter) => (adapter.wrap)(response),
-                    None => response,
-                };
                 into_http_response(response, expected, protocol.wire()).await
             }
             Err(error) => error_response(error),
@@ -245,7 +227,10 @@ pub(crate) async fn execute_prepared_generation(
             response,
             keepalive,
             stream_error,
-            protocol == GenerationEndpoint::Responses,
+            matches!(
+                protocol,
+                GenerationEndpoint::Responses | GenerationEndpoint::Chat
+            ),
         )
         .await
     } else {
@@ -1014,6 +999,25 @@ impl MiddlewareBody for StreamingExecutionBody {
                 .map_err(MiddlewareError::Engine)?;
             self.committed = true;
             self.batch_pending = false;
+            if self.protocol == GenerationEndpoint::Chat && self.awaiting_terminal_eof {
+                match self.verify_terminal_eof().await {
+                    Ok(()) => {
+                        self.pending.push_back(done_frame(self.protocol));
+                        self.output_finished = true;
+                    }
+                    Err(error) => {
+                        self.pending.clear();
+                        let error = match error {
+                            MiddlewareError::Engine(error) => gateway_error_from_engine(&error),
+                            _ => GatewayError::new(
+                                GatewayErrorKind::UpstreamUnavailable,
+                                "The Chat response could not be finalized.",
+                            ),
+                        };
+                        self.push_stream_error(error);
+                    }
+                }
+            }
             Ok(())
         })
     }

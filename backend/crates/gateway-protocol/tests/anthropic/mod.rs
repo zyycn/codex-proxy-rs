@@ -2,7 +2,6 @@
 
 mod capabilities;
 mod request;
-mod response;
 mod session;
 mod stream;
 mod usage;

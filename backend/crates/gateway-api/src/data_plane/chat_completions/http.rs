@@ -1,13 +1,18 @@
-//! Chat HTTP 入口只规范化协议 共用 Responses 的执行与交付链路
+//! Chat HTTP 入口保留原始协议，由目标 Provider 直接转换
 
-use std::{net::SocketAddr, time::SystemTime};
+use std::net::SocketAddr;
 
 use axum::{
     body::Bytes,
     extract::{Extension, State, connect_info::ConnectInfo},
-    http::{HeaderMap, StatusCode, header::CONTENT_ENCODING},
+    http::{
+        HeaderMap, StatusCode,
+        header::{CONTENT_ENCODING, CONTENT_LENGTH},
+    },
     response::Response,
 };
+use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
+use gateway_protocol::chat_completions::{self, CHAT_PROTOCOL};
 
 use crate::ApiState;
 use crate::data_plane::{
@@ -15,24 +20,17 @@ use crate::data_plane::{
     body::{RequestDecodeError, decompress_request_body},
     error::{gateway_error_response, protocol_error_response},
     generation::{
-        DecodedGenerationRequest, GenerationEndpoint, GenerationHttpRequest, HttpResponseAdapter,
-        execute_prepared_generation,
+        ContinuationIntent, DecodedGenerationRequest, GenerationEndpoint, GenerationHttpRequest,
+        GenerationRequestMetadata, execute_prepared_generation,
     },
-    responses::decode_request_with_headers,
-    router::CHAT_COMPLETIONS_PATH,
-};
-
-use super::{
-    delivery::{chat_error_frame, project_middleware_response},
-    request::convert_request,
-    response::ChatIdentity,
+    responses::OpenAiRequestHeaders,
 };
 
 pub(in crate::data_plane) async fn chat_completions(
     State(state): State<ApiState>,
     connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
     ingress_id: Option<Extension<tower_http::request_id::RequestId>>,
-    headers: HeaderMap,
+    mut headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     let service = state.data_plane().clone();
@@ -40,12 +38,17 @@ pub(in crate::data_plane) async fn chat_completions(
         Ok(client) => client,
         Err(error) => return client_access_error_response(error),
     };
-    let (decoded, middleware_body, include_usage) = match decode_request(
-        &body,
-        &headers,
-        client.snapshot().responses_max_decompressed_body_bytes(),
-    ) {
-        Ok(request) => request,
+    let maximum = client.snapshot().responses_max_decompressed_body_bytes();
+    let body = match decompress_request_body(&body, &headers, maximum) {
+        Ok(body) => Bytes::copy_from_slice(&body),
+        Err(error) => {
+            return protocol_error_response(StatusCode::BAD_REQUEST, error.protocol_body());
+        }
+    };
+    headers.remove(CONTENT_ENCODING);
+    headers.remove(CONTENT_LENGTH);
+    let decoded = match decode_request(&body, &headers, maximum) {
+        Ok(decoded) => decoded,
         Err(error) => {
             return protocol_error_response(StatusCode::BAD_REQUEST, error.protocol_body());
         }
@@ -54,22 +57,6 @@ pub(in crate::data_plane) async fn chat_completions(
         Ok(prepared) => prepared,
         Err(error) => return gateway_error_response(&error),
     };
-    let identity = ChatIdentity {
-        id: format!("chatcmpl-{}", prepared.request_id().as_str()),
-        created: SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
-        model: decoded.metadata().requested_model().to_owned(),
-    };
-    let streaming = decoded.metadata().stream();
-    let adapter = HttpResponseAdapter {
-        endpoint: CHAT_COMPLETIONS_PATH,
-        wrap: Box::new(move |response| {
-            project_middleware_response(response, identity, streaming, include_usage)
-        }),
-        stream_error: chat_error_frame,
-    };
     execute_prepared_generation(
         service,
         prepared,
@@ -77,26 +64,70 @@ pub(in crate::data_plane) async fn chat_completions(
             peer_address: connect_info.map(|Extension(ConnectInfo(address))| address),
             ingress_id,
             headers,
-            input: GenerationEndpoint::Responses.input(decoded),
-            middleware_body,
+            input: GenerationEndpoint::Chat.input(decoded),
+            middleware_body: body,
         },
         None,
-        Some(adapter),
     )
     .await
 }
 
-fn decode_request(
+pub(in crate::data_plane) fn decode_request(
     body: &[u8],
     headers: &HeaderMap,
-    maximum_body_bytes: usize,
-) -> Result<(DecodedGenerationRequest, Bytes, bool), RequestDecodeError> {
-    let body = decompress_request_body(body, headers, maximum_body_bytes)?;
-    let converted = convert_request(&body)?;
-    let body =
-        serde_json::to_vec(&converted.body).map_err(|_| RequestDecodeError::MalformedJson)?;
-    let mut decoded_headers = headers.clone();
-    decoded_headers.remove(CONTENT_ENCODING);
-    let decoded = decode_request_with_headers(&body, &decoded_headers, maximum_body_bytes)?;
-    Ok((decoded, Bytes::from(body), converted.include_usage))
+    maximum: usize,
+) -> Result<DecodedGenerationRequest, RequestDecodeError> {
+    let body = decompress_request_body(body, headers, maximum)?;
+    let parsed = chat_completions::parse_request(&body).map_err(decode_error)?;
+    let model = parsed
+        .body
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let stream = parsed
+        .body
+        .get("stream")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let payload = ProtocolPayload::from_json_bytes(CHAT_PROTOCOL, Bytes::copy_from_slice(&body))
+        .map_err(|_| RequestDecodeError::CanonicalContract {
+            field: "chat request".to_owned(),
+        })?
+        .with_context(OpenAiRequestHeaders::from_headers(headers).session_context());
+    Ok(DecodedGenerationRequest {
+        operation: Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+        metadata: GenerationRequestMetadata {
+            requested_model: model,
+            stream,
+            store: false,
+            continuation: ContinuationIntent::None,
+            client_ip: None,
+            user_agent: None,
+        },
+    })
+}
+
+fn decode_error(error: chat_completions::ChatError) -> RequestDecodeError {
+    use chat_completions::ChatError;
+    match error {
+        ChatError::MalformedJson => RequestDecodeError::MalformedJson,
+        ChatError::ExpectedObject => RequestDecodeError::ExpectedObject,
+        ChatError::MissingField { field } => RequestDecodeError::MissingField { field },
+        ChatError::InvalidType { field, expected } => {
+            RequestDecodeError::InvalidType { field, expected }
+        }
+        ChatError::EmptyField { field } => RequestDecodeError::EmptyField { field },
+        ChatError::InvalidValue { field } => RequestDecodeError::InvalidValue { field },
+        ChatError::UnknownField { field } => RequestDecodeError::UnknownField { field },
+        ChatError::UnsupportedField { field } => RequestDecodeError::UnsupportedField { field },
+        ChatError::UnsupportedCombination { field, other } => {
+            RequestDecodeError::UnsupportedCombination { field, other }
+        }
+        ChatError::InvalidResponse | ChatError::IncompleteStream => {
+            RequestDecodeError::CanonicalContract {
+                field: "chat request".to_owned(),
+            }
+        }
+    }
 }

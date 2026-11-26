@@ -10,7 +10,7 @@ pub mod openai;
 /// Google GenAI 原生生成协议
 pub mod genai;
 
-/// Anthropic Messages 与 Responses 的线协议转换
+/// Anthropic Messages 原生解析、计量与流聚合
 pub mod anthropic;
 
 /// 协议请求中的共享能力事实
@@ -18,3 +18,6 @@ pub mod request;
 
 /// CPR 互联只读观测协议
 pub mod peer;
+
+/// Chat Completions 直接转换
+pub mod chat_completions;

@@ -17,7 +17,7 @@
 </div>
 
 > [!NOTE]
-> 生成请求支持 [OpenAI Responses](docs/api.md#responses-请求与传输)、[Chat Completions](docs/api.md#chat-completions-请求) 和 [Anthropic Messages](docs/api.md#messages-请求) 三种协议
+> 原生生成支持 [OpenAI Responses](docs/api.md#responses-请求与传输)、[Anthropic Messages](docs/api.md#messages-请求) 和 [GenAI](docs/api.md#antigravity-客户端原生生成)；[Chat Completions](docs/api.md#chat-completions-请求) 直接转换到所选账号协议，其他跨协议转换不内置
 
 ## 快速预览
 

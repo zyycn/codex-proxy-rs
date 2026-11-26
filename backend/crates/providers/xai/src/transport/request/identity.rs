@@ -44,67 +44,11 @@ const ACCOUNT_BOUND_FIELDS: &[&str] = &[
     "x-grok-conv-id",
     "x-grok-session-id",
 ];
-const SESSION_FIELDS: &[&str] = &[
-    "prompt_cache_key",
-    "session_id",
-    "sessionId",
-    "conversation_id",
-    "conversationId",
-];
-const PROTOCOL_CONTEXT_SESSION_FIELDS: &[&str] = &["conversation_id", "session_id", "thread_id"];
 const MAX_SESSION_SEED_BYTES: usize = 1_024;
-const GROK_CACHE_ROUTE_TOOLS: &[&str] = &["web_search", "x_search"];
 pub(super) fn sanitize_account_identity(body: &mut Map<String, Value>) {
     for field in IDENTITY_FIELDS.iter().chain(ACCOUNT_BOUND_FIELDS) {
         body.remove(*field);
     }
-}
-
-pub(super) fn sanitize_client_metadata(body: &mut Map<String, Value>) {
-    // Codex 的 client_metadata 是本地 transport envelope，可能包含工作目录、仓库地址、
-    // installation/session 标识
-    // 会话亲和信息已在调用本函数前提取，整个 envelope 都不能
-    // 越过 Grok Build 边界
-    body.remove("client_metadata");
-    body.remove("metadata");
-}
-
-pub(super) fn enable_grok_prompt_cache_route(
-    body: &mut Map<String, Value>,
-    upstream_model: &str,
-    response: &mut GrokResponseTransform,
-) {
-    let tools = body
-        .entry("tools".to_owned())
-        .or_insert_with(|| Value::Array(Vec::new()));
-    let Value::Array(tools) = tools else {
-        return;
-    };
-    response.observe_upstream_cache_tools(tools);
-    if is_cache_media_model(upstream_model) || has_tool_type(tools, "image_generation") {
-        return;
-    }
-    if tools.is_empty() {
-        for tool in GROK_CACHE_ROUTE_TOOLS {
-            tools.push(json_object([("type", Value::String((*tool).to_owned()))]));
-            response.mark_injected_cache_tool(tool);
-        }
-        // 无客户端工具时以 none 选中缓存路由，同时不授予搜索能力
-        body.insert("tool_choice".to_owned(), Value::String("none".to_owned()));
-    } else if !has_tool_type(tools, "x_search") {
-        tools.push(json_object([(
-            "type",
-            Value::String("x_search".to_owned()),
-        )]));
-        response.mark_injected_cache_tool("x_search");
-    }
-}
-
-fn is_cache_media_model(model: &str) -> bool {
-    let model = model.trim().to_ascii_lowercase();
-    ["image", "imagine", "video"]
-        .into_iter()
-        .any(|marker| model.contains(marker))
 }
 
 pub(super) fn explicit_session_seed(
@@ -113,79 +57,10 @@ pub(super) fn explicit_session_seed(
 ) -> Option<String> {
     request
         .prompt_cache_key()
-        .and_then(valid_session_seed)
-        .map(ToOwned::to_owned)
-        .or_else(|| first_session_value(body))
-        .or_else(|| {
-            body.get("metadata")
-                .and_then(Value::as_object)
-                .and_then(first_session_value)
-        })
-        .or_else(|| {
-            PROTOCOL_CONTEXT_SESSION_FIELDS.iter().find_map(|field| {
-                request
-                    .protocol_payload()
-                    .context()
-                    .get(*field)
-                    .and_then(Value::as_str)
-                    .and_then(valid_session_seed)
-                    .map(ToOwned::to_owned)
-            })
-        })
-}
-
-fn first_session_value(body: &Map<String, Value>) -> Option<String> {
-    let prompt_cache_key = body
-        .get("prompt_cache_key")
-        .and_then(Value::as_str)
-        .and_then(valid_session_seed)
-        .map(ToOwned::to_owned);
-    prompt_cache_key
-        .or_else(|| {
-            let metadata = body.get("metadata")?.as_object()?;
-            ["session_id", "sessionId"]
-                .into_iter()
-                .find_map(|field| metadata.get(field).and_then(Value::as_str))
-                .and_then(valid_session_seed)
-                .map(ToOwned::to_owned)
-                .or_else(|| {
-                    metadata
-                        .get("user_id")
-                        .and_then(Value::as_str)
-                        .and_then(session_seed_from_user_id)
-                })
-        })
-        .or_else(|| {
-            SESSION_FIELDS[1..]
-                .iter()
-                .find_map(|field| body.get(*field).and_then(Value::as_str))
-                .and_then(valid_session_seed)
-                .map(ToOwned::to_owned)
-        })
-}
-
-fn valid_session_seed(value: &str) -> Option<&str> {
-    let value = value.trim();
-    (!value.is_empty()
-        && value.len() <= MAX_SESSION_SEED_BYTES
-        && !value.chars().any(char::is_control))
-    .then_some(value)
-}
-
-fn session_seed_from_user_id(value: &str) -> Option<String> {
-    let value = value.trim();
-    if let Ok(Value::Object(embedded)) = serde_json::from_str::<Value>(value)
-        && let Some(seed) = ["session_id", "sessionId"]
-            .into_iter()
-            .find_map(|field| embedded.get(field).and_then(Value::as_str))
-            .and_then(valid_session_seed)
-    {
-        return Some(seed.to_owned());
-    }
-    value
-        .rfind("_session_")
-        .and_then(|index| valid_session_seed(&value[index + "_session_".len()..]))
-        .map(ToOwned::to_owned)
+        .or_else(|| body.get("prompt_cache_key").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= MAX_SESSION_SEED_BYTES)
+        .map(str::to_owned)
 }
 
 pub(super) fn resolve_session_identity(
@@ -252,20 +127,12 @@ fn message_anchors(body: &Map<String, Value>) -> (String, String) {
         .get("instructions")
         .map(flatten_message_content)
         .filter(|value| !value.is_empty())
-        .or_else(|| body.get("system").map(flatten_message_content))
         .unwrap_or_default();
     let mut first_user = String::new();
-    if let Some(messages) = body.get("messages").and_then(Value::as_array) {
-        collect_role_anchors(messages, &mut system, &mut first_user);
-    }
-    if first_user.is_empty() {
-        match body.get("input") {
-            Some(Value::String(value)) => first_user = value.trim().to_owned(),
-            Some(Value::Array(items)) => {
-                collect_role_anchors(items, &mut system, &mut first_user);
-            }
-            _ => {}
-        }
+    match body.get("input") {
+        Some(Value::String(value)) => first_user = value.trim().to_owned(),
+        Some(Value::Array(items)) => collect_role_anchors(items, &mut system, &mut first_user),
+        _ => {}
     }
     (system, first_user)
 }

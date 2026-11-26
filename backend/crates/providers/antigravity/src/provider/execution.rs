@@ -7,13 +7,11 @@ use gateway_core::{
     account::AccountHistorySnapshot,
     engine::{
         AttemptContext,
-        execution::ClientTransport,
         provider::{
             ProviderCallMetadata, ProviderRequest, ProviderSelectionObservation, ProviderStream,
         },
     },
     error::{ProviderError, ProviderErrorKind as Kind},
-    event::GatewayEvent,
     operation::Operation,
     upstream::{UpstreamSendState, UpstreamTransport},
 };
@@ -26,17 +24,16 @@ impl AntigravityProvider {
         request: ProviderRequest,
         ctx: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
-        if !matches!(
-            request.operation().protocol(),
-            GENAI_PROTOCOL
-                | "token-count"
-                | gateway_protocol::openai::OPENAI_PROTOCOL
-                | gateway_protocol::anthropic::ANTHROPIC_PROTOCOL
-        ) {
-            return Err(unsent(Kind::Unsupported));
+        match request.operation() {
+            Operation::Generate(_)
+                if matches!(
+                    request.operation().protocol(),
+                    GENAI_PROTOCOL | gateway_protocol::chat_completions::CHAT_PROTOCOL
+                ) => {}
+            Operation::CountTokens(count)
+                if matches!(count.payload().protocol(), GENAI_PROTOCOL | "token-count") => {}
+            _ => return Err(unsent(Kind::Unsupported)),
         }
-        // 在选号和中间件改写前保留客户端的非生成与续接语义
-        super::translation::validate_request_mode(request.operation())?;
         let model = request
             .candidate()
             .upstream_model()
@@ -88,10 +85,7 @@ impl AntigravityProvider {
                 .get(self.kind.as_str())
                 .and_then(|models| models.get(model.as_str())),
         );
-        // AGY 没有可跨轮引用的响应，Responses WS 客户端可在新连接上直接发送完整输入
-        let transport = ctx.client_transport();
-        let reconnect_websocket = transport == ClientTransport::WebSocket
-            && request.operation().protocol() == gateway_protocol::openai::OPENAI_PROTOCOL;
+        let terminal_context = ctx.clone();
         ctx.execute_middleware(
             request.operation().clone(),
             self.kind.clone(),
@@ -101,7 +95,13 @@ impl AntigravityProvider {
                 if operation.requires_web_search() != search {
                     return Err(ProviderError::invalid_request("Middleware changed the required web search after model selection."));
                 }
-                let (operation, translator) = super::translation::prepare(operation, transport, affinity.as_ref())?;
+                let (operation, translator, count_translator) = if matches!(operation, Operation::CountTokens(_)) {
+                    let (operation, translator) = super::count::prepare(operation)?;
+                    (operation, None, translator)
+                } else {
+                    let (operation, translator) = super::chat::prepare(operation, &terminal_context, affinity.as_ref())?;
+                    (operation, translator, None)
+                };
                 let headers = crate::transport::request_headers(&operation, headers, selected.account_switch);
                 if operation.protocol() != GENAI_PROTOCOL {
                     return Err(unsent(Kind::Unsupported));
@@ -158,20 +158,19 @@ impl AntigravityProvider {
                         Box::pin(crate::transport::events(response, context))
                     };
                     while let Some(event) = events.next().await {
-                        let mut event = match event {
+                        let event = match event {
                             Ok(event) => event,
                             Err(error) => Err(record_failure(error).await)?,
                         };
-                        if reconnect_websocket && event.canonical_facts().iter()
-                            .any(|fact| matches!(fact, GatewayEvent::Completed(_)))
-                        {
-                            event.request_websocket_reconnect();
-                        }
                         yield event;
                     }
                 };
                 let stream = ProviderStream::new(metadata, Box::pin(events), selected.lease);
                 let stream = match translator {
+                    Some(translator) => stream.with_native_response_translator(translator),
+                    None => stream,
+                };
+                let stream = match count_translator {
                     Some(translator) => stream.with_native_response_translator(translator),
                     None => stream,
                 };

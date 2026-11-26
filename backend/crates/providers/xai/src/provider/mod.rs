@@ -23,7 +23,7 @@ use gateway_core::error::{
 };
 use gateway_core::event::{
     GatewayEvent, ProviderEvent, ProviderResponseMetadata, ProviderResponseObservation,
-    ProviderResponseTimings, ResponseMeta,
+    ProviderResponseTimings,
 };
 use gateway_core::operation::{
     CapabilityRequirements, Feature, GenerateRequest, Operation, OperationKind,
@@ -51,24 +51,20 @@ use crate::credential::{
     GrokCredentialRefreshService, GrokQuotaError,
 };
 use crate::profile::{GROK_CLI_RELEASE_POLL_INTERVAL, GrokCliReleaseService};
-use crate::reasoning_replay::{
-    GrokReasoningReplay, GrokReasoningReplayCapture, GrokReasoningReplayKey,
-    valid_reasoning_ciphertext,
-};
-use crate::transport::canonical::{GrokCanonicalDecoder, GrokNativeResponseTranslator};
+use crate::transport::canonical::GrokCanonicalDecoder;
 use crate::transport::config::XAI_PROVIDER_NAME;
 use crate::transport::headers::{GrokClientIdentity, build_grok_headers};
 use crate::transport::{
-    GROK_RESPONSES_URL, GrokCompactionDecodeError, GrokCompactionRequest,
-    GrokCompactionSummaryDecoder, GrokCredentialFailure, GrokInferenceChunkStream,
-    GrokInferenceRequest, GrokInferenceResponse, GrokInferenceTransport,
-    GrokInferenceTransportError, GrokInferenceTransportErrorKind, GrokInferenceTransportMetrics,
-    GrokProviderConfigError, GrokQuotaFailureKind, GrokRequestEncodeError, GrokResponsesRequest,
-    GrokSessionAffinityKey, GrokSessionSelection, GrokSessionSelector, GrokSessionSelectorError,
-    SelectedGrokSession, classify_grok_quota_failure,
+    GROK_RESPONSES_URL, GrokCredentialFailure, GrokInferenceRequest, GrokInferenceResponse,
+    GrokInferenceTransport, GrokInferenceTransportError, GrokInferenceTransportErrorKind,
+    GrokInferenceTransportMetrics, GrokProviderConfigError, GrokQuotaFailureKind,
+    GrokRequestEncodeError, GrokResponsesRequest, GrokSessionAffinityKey, GrokSessionSelection,
+    GrokSessionSelector, GrokSessionSelectorError, SelectedGrokSession,
+    classify_grok_quota_failure,
 };
 use crate::{GrokCatalogCapabilityEvidence, GrokCatalogModel};
 
+mod chat;
 mod continuation;
 mod failure;
 mod outbound;
@@ -89,8 +85,6 @@ const RESPONSE_NOT_FOUND_CODE: &str = "not_found";
 /// 官方 Grok Build Provider；会话选择与 HTTP SSE transport 均由外部注入
 ///
 /// 每次调用只选择一个 OAuth 会话
-/// 仅当 xAI 明确拒绝历史 reasoning 密文时，
-/// 允许在同账号、同凭据、同会话绑定上剥离密文后有界重试一次
 /// 凭据轮换、
 /// endpoint fallback 以及公开 xAI API key 推理都不在该 adapter 内
 #[derive(Clone)]
@@ -101,7 +95,6 @@ pub struct GrokBuildProvider {
     credential_recovery: Arc<dyn GrokCredentialRecovery>,
     account_feedback: Arc<AccountFeedbackStats>,
     client_identity: GrokClientIdentity,
-    reasoning_replay: GrokReasoningReplay,
     wire_profile: XaiWireProfileState,
     responses_url: Url,
 }
@@ -143,7 +136,6 @@ impl GrokBuildProvider {
             credential_recovery,
             account_feedback,
             client_identity: GrokClientIdentity::new(),
-            reasoning_replay: GrokReasoningReplay::new(),
             wire_profile,
             responses_url,
         })
@@ -354,6 +346,18 @@ impl GrokBuildProvider {
         middleware_headers: Vec<MiddlewareHeader>,
         selected: SelectedGrokAttempt,
     ) -> Result<ProviderStream, ProviderError> {
+        if operation.protocol() == gateway_protocol::chat_completions::CHAT_PROTOCOL {
+            if operation.capability_requirements() != selected.frozen_requirements {
+                return Err(provider_error(
+                    ProviderErrorKind::InvalidRequest,
+                    UpstreamSendState::NotSent,
+                ));
+            }
+            let Operation::Generate(generate) = operation else {
+                return Err(protocol_not_sent());
+            };
+            return self.execute_selected_chat(generate, middleware_headers, selected);
+        }
         let SelectedGrokAttempt {
             upstream_model,
             selected,
@@ -373,13 +377,7 @@ impl GrokBuildProvider {
             ));
         }
         let previous_session = decode_xai_session_state(&generate)?;
-        let operation_account =
-            if crate::transport::compaction::has_terminal_compaction_trigger(&generate) {
-                validate_compaction_context(&context)?;
-                previous_session_account(previous_session.as_ref())?
-            } else {
-                continuation_account(&context, previous_session.as_ref())?
-            };
+        let operation_account = continuation_account(&context, previous_session.as_ref())?;
         let operation_account = merge_frozen_account_owner(&context, operation_account)?;
         validate_selected_grok_account(&selected, &context, operation_account.as_ref())?;
         let prepared = PreparedGrokAttempt {
@@ -391,11 +389,7 @@ impl GrokBuildProvider {
             account_selection_wait_ms,
             context,
         };
-        if crate::transport::compaction::has_terminal_compaction_trigger(&prepared.generate) {
-            self.execute_prepared_compaction(prepared).await
-        } else {
-            self.execute_prepared_generate(prepared).await
-        }
+        self.execute_prepared_generate(prepared).await
     }
 
     async fn execute_prepared_generate(
@@ -436,40 +430,6 @@ impl GrokBuildProvider {
             selected.account_id(),
             request_input.as_slice(),
         )?;
-        let inherited_replay_session_id = context
-            .continuation()
-            .is_none()
-            .then(|| {
-                previous_session
-                    .as_ref()
-                    .and_then(|state| state.session_id.as_deref())
-            })
-            .flatten();
-        let reasoning_replay_key = upstream_request
-            .reasoning_replay_session_id()
-            .or(inherited_replay_session_id)
-            .and_then(|session_id| {
-                self.reasoning_replay.key(
-                    wire_upstream_model.as_str(),
-                    session_id,
-                    selected.account_id().as_str(),
-                )
-            });
-        if !upstream_request.has_previous_response_id()
-            && let (Some(key), Some(input)) = (
-                reasoning_replay_key.as_ref(),
-                upstream_request.replay_input_items(),
-            )
-            && let Some(input) = self.reasoning_replay.apply(key, &input)
-        {
-            upstream_request
-                .set_replay_input(input)
-                .map_err(map_request_error)?;
-        }
-        let native_response_translator =
-            GrokNativeResponseTranslator::for_request(&upstream_request);
-        let reasoning_replay_capture =
-            reasoning_replay_key.map(|key| self.reasoning_replay.capture(key));
         let session_capture = (!matches!(
             context.continuation(),
             Some(ContinuationBinding::Pinned(_) | ContinuationBinding::External(_))
@@ -482,7 +442,7 @@ impl GrokBuildProvider {
                 .body()
                 .get("store")
                 .and_then(Value::as_bool)
-                == Some(true),
+                != Some(false),
             account_id: selected.account_id().as_str().to_owned(),
             session_id: upstream_request.session_id().map(str::to_owned),
             output_items: BTreeMap::new(),
@@ -504,9 +464,7 @@ impl GrokBuildProvider {
                 upstream_model: wire_upstream_model,
                 context,
                 session: Arc::clone(&selected),
-                native_response_boundary: true,
                 session_capture,
-                reasoning_replay_capture,
             },
         );
         let stream = ProviderStream::new(metadata, events, selected);
@@ -515,88 +473,12 @@ impl GrokBuildProvider {
         } else {
             stream
         };
-        Ok(stream.with_native_response_translator(native_response_translator))
-    }
-
-    async fn execute_prepared_compaction(
-        &self,
-        prepared: PreparedGrokAttempt,
-    ) -> Result<ProviderStream, ProviderError> {
-        let PreparedGrokAttempt {
-            generate,
-            middleware_headers,
-            previous_session,
-            upstream_model,
-            selected,
-            account_selection_wait_ms,
-            context,
-        } = prepared;
-        validate_compaction_context(&context)?;
-        let inherited_session_id = previous_session
-            .as_ref()
-            .and_then(|previous| previous.session_id.clone());
-        let upstream_request = GrokCompactionRequest::encode(
-            &generate,
-            upstream_model.as_str(),
-            context.client_api_key_ref(),
-        )
-        .map_err(map_request_error)?;
-        let wire_upstream_model = UpstreamModelId::new(
-            upstream_request
-                .upstream_model()
-                .ok_or_else(protocol_not_sent)?
-                .to_owned(),
-        )
-        .map_err(|_| protocol_not_sent())?;
-        let explicit_replay_session_id = upstream_request
-            .reasoning_replay_session_id()
-            .map(str::to_owned);
-        let upstream_session_id = inherited_session_id
-            .clone()
-            .or_else(|| explicit_replay_session_id.clone());
-        let selected = Arc::new(selected);
-        let reasoning_replay_key = explicit_replay_session_id
-            .as_deref()
-            .or(inherited_session_id.as_deref())
-            .and_then(|session_id| {
-                self.reasoning_replay.key(
-                    wire_upstream_model.as_str(),
-                    session_id,
-                    selected.account_id().as_str(),
-                )
-            });
-        let allows_account_state_mutation = selected.allows_account_state_mutation();
-        let metadata =
-            provider_call_metadata(&upstream_model, &selected, account_selection_wait_ms)?;
-        let events = cold_compaction_http_sse_stream(
-            Arc::clone(&self.selector),
-            Arc::clone(&self.transport),
-            GrokCompactionStreamAttempt {
-                client_identity: self.client_identity.clone(),
-                wire_profile: self.request_wire_profile(&context)?,
-                credential_recovery: Arc::clone(&self.credential_recovery),
-                responses_url: self.responses_url.clone(),
-                request: upstream_request,
-                middleware_headers,
-                upstream_model: wire_upstream_model,
-                upstream_session_id,
-                context,
-                session: Arc::clone(&selected),
-                reasoning_replay: self.reasoning_replay.clone(),
-                reasoning_replay_key,
-            },
-        );
-        let stream = ProviderStream::new(metadata, events, selected);
-        Ok(if allows_account_state_mutation {
-            stream.with_account_feedback(Arc::clone(&self.account_feedback))
-        } else {
-            stream
-        })
+        Ok(stream)
     }
 }
 
 fn native_request_requirements(request: &GenerateRequest) -> CapabilityRequirements {
-    // 这里只读取本 Provider 已知的 Responses 字段；工具别名等原生保护字段另行校验
+    // 这里只读取本 Provider 已知的 Responses 能力事实
     Operation::Generate(GenerateRequest::from_protocol_payload(
         request.protocol_payload().clone(),
     ))
@@ -621,27 +503,7 @@ fn grok_selection_facts(
         decode_xai_session_state(generate)?
     };
     let native_source = !adapted && generate.protocol_payload().protocol() == OPENAI_PROTOCOL;
-    let native_compaction =
-        native_source && crate::transport::compaction::has_terminal_compaction_trigger(generate);
-    let (selection_model, operation_account, affinity) = if native_compaction {
-        validate_compaction_context(context)?;
-        let operation_account = previous_session_account(previous_session.as_ref())?;
-        let request = GrokCompactionRequest::encode(
-            generate,
-            upstream_model.as_str(),
-            context.client_api_key_ref(),
-        )
-        .map_err(map_request_error)?;
-        let selection_model = request
-            .upstream_model()
-            .ok_or_else(protocol_not_sent)?
-            .to_owned();
-        (
-            selection_model,
-            merge_frozen_account_owner(context, operation_account)?,
-            request.affinity().cloned(),
-        )
-    } else if native_source {
+    let (selection_model, operation_account, affinity) = if native_source {
         let operation_account = continuation_account(context, previous_session.as_ref())?;
         let request = GrokResponsesRequest::encode(
             generate,
@@ -756,27 +618,6 @@ fn provider_call_metadata(
     )))
 }
 
-fn validate_compaction_context(context: &AttemptContext) -> Result<(), ProviderError> {
-    if context.continuation().is_some()
-        || context.continuation_attempt() != ContinuationAttempt::None
-    {
-        return Err(provider_error(
-            ProviderErrorKind::InvalidRequest,
-            UpstreamSendState::NotSent,
-        ));
-    }
-    Ok(())
-}
-
-fn previous_session_account(
-    previous_session: Option<&XaiSessionState>,
-) -> Result<Option<ProviderAccountId>, ProviderError> {
-    previous_session
-        .map(|previous| ProviderAccountId::new(previous.account_id.clone()))
-        .transpose()
-        .map_err(|_| protocol_not_sent())
-}
-
 fn merge_frozen_account_owner(
     context: &AttemptContext,
     operation_account: Option<ProviderAccountId>,
@@ -852,6 +693,8 @@ fn compile_grok_model_capabilities(model: GrokCatalogModel) -> ProviderModelCapa
             .max_output_tokens()
             .map(std::num::NonZeroU64::get),
     )
+    .with_native_generation_protocols([gateway_protocol::openai::OPENAI_PROTOCOL])
+    .with_translated_generation_protocols([gateway_protocol::chat_completions::CHAT_PROTOCOL])
     .with_upstream_feature_validation()
     .with_feature(
         Feature::Reasoning,

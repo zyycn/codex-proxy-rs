@@ -1,4 +1,4 @@
-//! Messages 会话在原生与 Responses 上游的选号、隔离和最终身份复验
+//! Messages 原生会话的选号、隔离和最终身份复验
 
 use super::*;
 use gateway_core::account::AccountAffinity;
@@ -43,9 +43,7 @@ fn attempt(client: &str) -> AttemptContext {
     )
 }
 
-async fn fixture(
-    native_messages: bool,
-) -> (
+async fn fixture() -> (
     MockServer,
     Arc<CodexProvider>,
     Arc<MemorySessionAffinity>,
@@ -53,37 +51,22 @@ async fn fixture(
 ) {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path(if native_messages {
-            "/messages"
-        } else {
-            "/codex/responses"
-        }))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            if native_messages {
-                MESSAGES_SSE
-            } else {
-                CAPTURE_COMPLETED_SSE
-            },
-            "text/event-stream",
-        ))
+        .and(path("/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(MESSAGES_SSE, "text/event-stream"))
         .mount(&server)
         .await;
     let store = Arc::new(MemoryAccountStore::default());
     for id in ["acct_affinity_switch_a", "acct_affinity_switch_b"] {
-        if native_messages {
-            store
-                .seed_api_key_for_protocol(
-                    id,
-                    server.uri(),
-                    ResponsesTransport::Http,
-                    ApiKeyProtocol::Messages,
-                )
-                .await;
-        } else {
-            create_account(&store, id).await;
-            store.set_oauth_transport(id, ResponsesTransport::Http);
-        }
+        store
+            .seed_api_key_for_protocol(
+                id,
+                server.uri(),
+                ResponsesTransport::Http,
+                ApiKeyProtocol::Messages,
+            )
+            .await;
     }
+
     let affinity = Arc::new(MemorySessionAffinity::default());
     let leases = Arc::new(TestLeaseCoordinator::default());
     let provider = provider_with_affinity_and_base_url_and_leases(
@@ -97,8 +80,8 @@ async fn fixture(
 
 #[tokio::test]
 async fn claude_sessions_keep_accounts_across_identity_formats_and_isolate_client_keys() {
-    for native_messages in [false, true] {
-        let (server, provider, affinity, _) = fixture(native_messages).await;
+    {
+        let (server, provider, affinity, _) = fixture().await;
         let mut selected = Vec::new();
         let mut keys = Vec::new();
         for (client, header, user_id) in [
@@ -171,7 +154,7 @@ async fn claude_sessions_keep_accounts_across_identity_formats_and_isolate_clien
 
 #[tokio::test]
 async fn messages_strict_affinity_does_not_send_to_an_idle_alternate_when_bound_account_is_busy() {
-    let (server, provider, affinity, leases) = fixture(false).await;
+    let (server, provider, affinity, leases) = fixture().await;
     let request = || planned_request("openai", operation(Some(SESSION), json!("user")));
     let first = provider
         .clone()
@@ -231,8 +214,8 @@ impl MiddlewarePlan for ChangeClaudeSession {
 
 #[tokio::test]
 async fn rewritten_claude_session_cannot_bypass_another_accounts_binding() {
-    for native_messages in [false, true] {
-        let (server, provider, affinity, _) = fixture(native_messages).await;
+    {
+        let (server, provider, affinity, _) = fixture().await;
         drop(
             provider
                 .clone()

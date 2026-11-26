@@ -1,14 +1,10 @@
-//! 每次执行独立持有的 SSE 聚合与转换状态
+//! Messages 原生 SSE 聚合与完整消息编码
 
 mod accumulator;
-mod to_messages;
-mod to_responses;
 
 pub use accumulator::MessagesAccumulator;
-pub use to_messages::ResponsesToMessagesStream;
-pub use to_responses::MessagesToResponsesStream;
 
-use super::TranslationError;
+use super::MessageError;
 use serde_json::{Value, json};
 
 /// 将已收到的完整原生消息交付给请求 SSE 的客户端，保留内容块与扩展字段
@@ -16,9 +12,9 @@ use serde_json::{Value, json};
 /// # Errors
 ///
 /// 对象不是完整 Messages 响应或缺少内容数组时返回错误
-pub fn message_to_stream_events(mut message: Value) -> Result<Vec<Value>, TranslationError> {
+pub fn message_to_stream_events(mut message: Value) -> Result<Vec<Value>, MessageError> {
     if message.get("type").and_then(Value::as_str) != Some("message") {
-        return Err(TranslationError::InvalidEvent(
+        return Err(MessageError::InvalidEvent(
             "The upstream response is not a message.",
         ));
     }
@@ -26,7 +22,7 @@ pub fn message_to_stream_events(mut message: Value) -> Result<Vec<Value>, Transl
         .get_mut("content")
         .and_then(Value::as_array_mut)
         .map(std::mem::take)
-        .ok_or(TranslationError::InvalidEvent(
+        .ok_or(MessageError::InvalidEvent(
             "The upstream message content is missing.",
         ))?;
     let stop_reason = message["stop_reason"].take();

@@ -62,14 +62,10 @@ impl MiddlewarePlan for Rewrite {
 }
 
 #[tokio::test]
-async fn outbound_sends_final_method_headers_and_binary_bytes_for_generation_and_compaction() {
-    for compact in [false, true] {
+async fn outbound_sends_final_method_headers_and_binary_bytes_for_generation() {
+    {
         let server = MockServer::start().await;
-        let response = if compact {
-            compaction_sse(&valid_compaction_summary("outbound compaction"), None)
-        } else {
-            SUCCESS_SSE.to_vec()
-        };
+        let response = SUCCESS_SSE.to_vec();
         Mock::given(method("PATCH"))
             .and(path("/v1/responses"))
             .respond_with(ResponseTemplate::new(200).set_body_raw(response, "text/event-stream"))
@@ -89,11 +85,7 @@ async fn outbound_sends_final_method_headers_and_binary_bytes_for_generation_and
         )
         .await;
         let calls = Arc::new(AtomicUsize::new(0));
-        let operation = if compact {
-            compaction_operation()
-        } else {
-            operation()
-        };
+        let operation = operation();
         let events = provider
             .execute(
                 provider_request_with_operation("xai", operation),

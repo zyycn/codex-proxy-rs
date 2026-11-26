@@ -12,6 +12,8 @@ name = "main"
 path = "tests/main.rs"
 
 [dependencies]
+sha2 = "0.11.0"
+url = "2.5.8"
 http = "1.5.0"
 httpdate = "1.0.3"
 memchr = "2.8.3"

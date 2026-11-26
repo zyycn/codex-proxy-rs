@@ -1,4 +1,4 @@
-//! 验证三种入站协议的会话绑定、租户隔离与发送前原子认领
+//! 验证原生 GenAI 与 Chat 的会话绑定、租户隔离与发送前原子认领
 
 use crate::support::{Fixture, context_with_policy, context_with_scope, request};
 use futures::TryStreamExt;
@@ -64,14 +64,9 @@ async fn each_inbound_protocol_reuses_its_explicit_session_and_renews_ttl() {
             json!({"headers":{"x-http-session-id":"session-a"}}),
         ),
         (
-            gateway_protocol::openai::OPENAI_PROTOCOL,
-            json!({"input":[], "client_metadata":{"session_id":"session-a"}}),
-            json!({}),
-        ),
-        (
-            gateway_protocol::anthropic::ANTHROPIC_PROTOCOL,
-            json!({"messages":[]}),
-            json!({"opaque_request_headers":[["x-claude-code-session-id","c2Vzc2lvbi1h"]]}),
+            gateway_protocol::chat_completions::CHAT_PROTOCOL,
+            json!({"model":"fixture-model","messages":[{"role":"user","content":"hello"}]}),
+            json!({"headers":{"x-http-session-id":"session-a"}}),
         ),
     ] {
         for ttl in [7200, 3600] {
@@ -94,7 +89,7 @@ async fn each_inbound_protocol_reuses_its_explicit_session_and_renews_ttl() {
     let bindings = fixture.store.bindings.lock().unwrap();
     assert_eq!(
         bindings.len(),
-        3,
+        2,
         "each protocol has an independent identity namespace"
     );
     assert!(

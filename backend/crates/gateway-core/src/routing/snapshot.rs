@@ -1668,8 +1668,11 @@ impl RuntimeSnapshot {
                 .and_then(|models| models.get(upstream_model));
             // 原生入口不能借同名模型、发现型目录的匿名透传或插件声明跨协议分派
             if operation.requires_native_protocol()
-                && capabilities.and_then(|model| model.generation_protocol)
-                    != Some(operation.protocol())
+                && !capabilities.is_some_and(|model| {
+                    model
+                        .native_generation_protocols
+                        .contains(operation.protocol())
+                })
             {
                 continue;
             }

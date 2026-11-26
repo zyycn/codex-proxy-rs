@@ -221,7 +221,7 @@ WebSocket message 和 frame 不设置网关私有长度上限；请求字段与�
 | --- | --- | --- |
 | `POST` | `/v1/responses` | OpenAI Responses JSON；`stream=true` 返回 SSE，否则返回完整 JSON |
 | `GET` | `/v1/responses` | 通过 HTTP Upgrade 建立 Responses WebSocket |
-| `POST` | `/v1/chat/completions` | Chat Completions 转 Responses 执行；返回单 choice 的 Chat JSON 或 SSE |
+| `POST` | `/v1/chat/completions` | Chat Completions 直接转换到所选账号协议；返回单 choice 的 Chat JSON 或 SSE |
 | `POST` | `/v1/messages` | Anthropic Messages JSON；`stream=true` 返回 SSE，否则返回完整 JSON |
 | `POST` | `/v1/messages/count_tokens` | 返回 Messages 请求的输入 Token 数；原生计数与本地估算边界见下 |
 | `POST` | `/v1/alpha/search` | Codex standalone web search；JSON 请求与响应正文原样转发 |
@@ -234,17 +234,18 @@ WebSocket message 和 frame 不设置网关私有长度上限；请求字段与�
 | `GET` | `/v1/usage` | 查询当前 Client Key 的日与周额度，仅使用网关已结算的 USD 账本 |
 | `GET` | `/v1/cpr/link` | 返回当前 Key 获准公开的预算及直连账号池观测 |
 
-生成接口支持三种入站协议；API Key 账号通过 `protocol` 选择 Responses 或 Messages 上游，仍使用 `openai` Provider。
-OAuth 账号使用 Responses 上游。入站路由不决定上游协议，实际执行由 Client Key 的账号范围、模型和调度结果决定
+生成接口接受 Responses、Messages、GenAI 和 Chat。API Key 账号通过 `protocol` 选择 Responses 或 Messages 上游，仍使用 `openai` Provider；OAuth 账号使用 Responses 上游。xAI 使用原生 Responses，Antigravity 使用 GenAI
 
-| 入站 | Responses 上游 | Messages 上游 |
-| --- | --- | --- |
-| Responses | 原生 Responses wire | Responses 与 Messages 双向转换 |
-| Chat Completions | Chat 与 Responses 双向转换 | Chat 经 Responses 与 Messages 双向转换 |
-| Messages | Messages 与 Responses 双向转换 | 原生 Messages wire |
+| 入站 | Responses 上游 | Messages 上游 | GenAI 上游 |
+| --- | --- | --- | --- |
+| Responses | 原生 wire | 不支持 | 不支持 |
+| Messages | 不支持 | 原生 wire | 不支持 |
+| GenAI | 不支持 | 不支持 | 原生 wire |
+| Chat Completions | 直接转换 | 直接转换 | 直接转换 |
 
-同协议保留原生业务 wire，观测和计量不用于重建响应正文；跨协议按目标格式转换请求、完整响应及 SSE。
-Messages 与 Responses 的转换边界见 [Messages 请求](#messages-请求)，账号配置见[账号能力、导入与 OAuth](#账号能力导入与-oauth)
+选路先匹配入站协议、模型和 Client Key 的账号范围，再由 Provider 确定账号及传输。
+原生响应保留业务 wire，观测和计量不用于重建正文。只有 Chat 内置转换请求、完整响应和 SSE，往返均不借另一平台协议中转。
+账号配置见[账号能力、导入与 OAuth](#账号能力导入与-oauth)
 
 ### Antigravity 客户端原生生成
 
@@ -270,21 +271,18 @@ CPR 在 AGY 的原生与转换入口透传未被过滤的 HTTP 扩展头，保�
 
 `countTokens` 接受 `contents` 或完整的 `generateContentRequest`；后者存在时优先使用其内容。计数与生成使用相同的 AGY 系统提示词配置，调用 Cloud Code 的独立计数接口，不生成助手输出、不记为生成用量，也不在失败时回退到本地估算。该入口仅返回 JSON，不接受 `alt=sse`
 
-AGY 上游计数与生成响应的 `usageMetadata.promptTokenCount` 口径不完全一致：系统提示、工具定义及工具结果未完整计入计数返回值。原生与 Messages 计数均保留这一上游口径，不能作为完整上下文占用或计费用量的精确值
+AGY 上游计数与生成响应的 `usageMetadata.promptTokenCount` 口径不完全一致：系统提示、工具定义及工具结果未完整计入计数返回值。原生计数保留这一上游口径，不能作为完整上下文占用或计费用量的精确值
 
-Antigravity 模型也可通过 `/v1/responses`、`/v1/chat/completions` 和 `/v1/messages` 调用，均支持 JSON 与 SSE。转换入口支持文本、内嵌图片／文档、函数工具及结果、生成参数和 JSON Schema；未知内容块返回请求错误，模型自身不支持的参数由上游校验。原生入口不经过转换器；常规生成与计数在出站时使用同一份 AGY 系统提示词配置，替换客户端系统指令，其余原生字段保持原始表达
+Antigravity 模型也可通过 `/v1/chat/completions` 调用，支持 JSON 与 SSE；不接受 Responses 或 Messages 的内置跨协议调用。
+Chat 直接映射文本、图片／文档、函数与 custom 工具历史、生成参数和 JSON Schema。未知内容块或无法表达的语义返回请求错误，模型参数的实际支持范围由上游校验。
+原生入口保留工具结果和思考签名；常规生成与计数在出站时使用同一份 AGY 系统提示词配置，替换客户端系统指令，其余原生字段保持原始表达
 
-Responses 转向 GenAI 时，输出上限、采样参数和 JSON Schema 直接映射；`max_output_tokens` 省略或为 `null` 时不补写输出上限。`reasoning.effort` 显式映射为推理预算，`none` 关闭推理，`auto` 使用动态预算，未指定时保留上游默认。生成参数不受 Messages 的默认输出上限、强制工具或无思考续轮规则影响，也不因推理设置省略采样参数；具体型号支持的预算与参数组合由上游校验
-
-Responses 编码请求可以同时声明函数和可选的 `web_search`。AGY 向编码模型发送可用函数，保留 `tool_choice` 和 `allowed_tools` 的约束。显式选择搜索，或要求必须调用工具且只允许搜索时，网关取最后一条用户文本作为查询，向该账号目录的首个 `webSearchModelIds` 型号发送独立的实时搜索请求。账号及其授权分组须同时允许原型号与搜索型号
-
-搜索支持 `filters.allowed_domains` 和 `filters.blocked_domains`。强制搜索遇到缓存模式、无法满足的搜索选项或缺少可用搜索型号时返回请求错误。JSON 与 SSE 均按上游实际查询与来源返回 `web_search_call` 和正文引用；传入 `include: ["web_search_call.action.sources"]` 可读取搜索来源列表
-
-工具多轮调用须带回完整助手输出。Responses 的 `reasoning.encrypted_content` 和 Messages 的 `thinking.signature` 携带 GenAI 工具与思考签名及其所属内容，客户端应原样回传。Chat 沿用现有合同，只返回可读思考内容；转换器对缺少签名的工具调用使用 Google 官方的 `skip_thought_signature_validator` 兜底值，不增加服务端签名缓存。工具与思考的真实签名优先于兜底；普通可见文本的可选签名不附加到转换输出，以保持 CLI 最终文本完整。省略签名或使用兜底可能影响后续模型表现，见 [Google 签名规则](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking/thought-signatures)。Antigravity 的 Responses 转换入口收到有效的 `previous_response_id` 时返回 `400 previous_response_not_found`。客户端应移除该 ID，携带完整对话历史和工具结果重试
+Chat 工具多轮调用须携带完整助手输出和对应结果。Chat 只返回可读思考内容；对 Chat 历史中的工具调用使用 Google 的 `skip_thought_signature_validator` 标记，不增加服务端签名缓存。
+原生 GenAI 的真实签名仍原样回传，见 [Google 签名规则](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking/thought-signatures)
 
 ### Chat Completions 请求
 
-`POST /v1/chat/completions` 接受 Chat 消息历史，转换为 Responses 请求执行，再交付 Chat 格式结果。
+`POST /v1/chat/completions` 接受 Chat 消息历史，在账号选定后直接转换为实际目标协议，再直接交付 Chat 格式结果。
 每次请求须提供非空字符串 `model` 和非空数组 `messages`，多轮对话由客户端携带完整历史；
 没有 Chat 查询、删除或服务端历史续接接口。`stream` 省略、`null` 或 `false` 时返回 JSON，`true` 时返回 SSE
 
@@ -308,7 +306,7 @@ print(completion.choices[0].message.content)
 
 #### 请求字段
 
-入口负责将 Chat 结构映射为 Responses；下表描述这一入口映射，选择 Messages 上游后还会按目标协议转换。
+入口只解析 Chat，Provider 在账号选定后调用对应的直接转换器。下表的目标字段名描述 Responses 上游映射；Messages 与 GenAI 使用各自的原生结构，见表后说明。
 同语义字段的模型支持范围、取值范围与业务有效性由 Provider 和上游判断。
 只有结构无法解码或不能正确表达的语义在本地返回 `400`，错误中的 `param` 指向字段，不回显字段值
 
@@ -343,8 +341,16 @@ print(completion.choices[0].message.content)
 网关拒绝 `function_call`、`function` 消息角色、音频输出和无法映射的内容类型。
 入口不接收 `input`、`previous_response_id` 或 `conversation`；需要服务端续接时使用 `/v1/responses`
 
-未知客户端附加字段在协议包装对象中忽略，不据名称自动转交 Responses；schema、metadata、工具参数和
+未知客户端附加字段在协议包装对象中忽略，不据名称自动转交目标上游；schema、metadata、工具参数和
 已识别的原生对象内部不做递归过滤。新工具声明可交给上游，但返回的业务输出仍须具有明确的 Chat 映射
+
+Messages 目标直接生成 `system`、`messages`、`tool_use`／`tool_result` 和 JSON Schema；输出上限采用同一优先级并受所选模型能力约束。
+推理设置按所选账号目录决定 adaptive 或手动预算，工具选择与采样参数按 Messages 合同处理。
+`service_tier: priority` 映射为 `speed: fast` 并补充目标 beta，`default` 映射为 `standard_only`；不代表两种上游有相同的服务承诺
+
+GenAI 目标直接生成 `systemInstruction`、`contents`、`functionCall`／`functionResponse` 和 `generationConfig`。
+两个目标都校验工具调用与结果的配对；custom 工具以单个字符串输入包装成函数，并在 Chat 回程还原。
+多模态字段按目标能力映射，不支持的内容或声明返回字段错误，不转成另一平台协议重试
 
 #### 响应与共用规则
 
@@ -384,7 +390,7 @@ Responses 上游使用 `$.input`，Messages 上游使用 `$.messages`
 ### Messages 请求
 
 `POST /v1/messages` 接受非空字符串 `model`、非空 `messages` 数组和非负整数 `max_tokens`。
-转向 OpenAI Responses 上游时，`max_tokens` 仍为入站必填字段，但不限制实际输出。
+该入口只选择原生 Messages 账号。
 消息角色为 `user`、`assistant` 或 `system`，`content` 为字符串或内容块数组；初始系统指令放在顶层 `system`，
 会话中的 `system` 消息保留其位置，具体模型支持情况由上游校验。
 `stream` 缺省或为 `false` 时返回 JSON，`true` 返回 SSE。每轮须通过 `messages` 发送完整上下文，包括 Claude Code 用 `--resume` 恢复的本地会话。此入口不支持服务端续接或 WebSocket
@@ -392,7 +398,7 @@ Responses 上游使用 `$.input`，Messages 上游使用 `$.messages`
 Messages 生成请求通过 OpenAI Provider 选号时，优先使用 `x-claude-code-session-id` 识别 Claude Code 会话，
 缺少有效头部时，从 `metadata.user_id` 的 JSON 字符串读取 `session_id`，或读取字符串的 `_session_<id>` 后缀（此处 ID 只接受十六进制字符与连字符）。
 会话标识最长 256 字节，不接受控制字符；普通用户标识和对话内容不用于绑定账号。
-同一 Client Key 下的会话沿用[账号亲和与换号](#账号亲和与换号)设置，转向 Responses 上游时也适用
+同一 Client Key 下的会话沿用[账号亲和与换号](#账号亲和与换号)设置
 
 ```bash
 curl https://gateway.example.com/v1/messages \
@@ -406,37 +412,9 @@ Messages 上游保留 `system`、工具、thinking、缓存控制和未知扩展
 流式结果使用 `message_start`、`content_block_start/delta/stop`、`message_delta` 和 `message_stop` 等原生事件，
 同协议 SSE 保留原始事件帧；流结束不附加 OpenAI 的 `[DONE]`。`usage` 保留输入、输出及缓存用量，缺失值不补造
 
-跨 Responses 与 Messages 转换参考 CLIProxyAPI（CPA）的字段映射与降级规则：文本、图片、文档、工具调用及结果按目标结构映射，
-无对应语义的可选字段或内容可能被忽略或降级，具体参数仍由目标上游校验。
-推理签名与加密内容按来源回传，不能作为另一协议的原生签名使用；未知内容需要完整保留时应选择同协议上游。
-Messages 细粒度工具流转向 Responses 时保留原始 function 参数字符串，完成状态取自上游停止原因；
-以 `max_tokens` 等明确中断结束时返回 `incomplete`。
-截断的 custom 包装提取已生成字符串，未完成转义按原片段保留。
+Messages 原生字段不经过 Chat 转换器，也不转换为 Responses 或 GenAI。
 Messages 上游返回的单个非流式 JSON 正文最多 16 MiB，超限即结束请求；此上限不针对 SSE 全流。
-Messages 非流式聚合要求工具输入可解析；结构无法解码或缺少必要终态时返回错误
-
-转向 Messages 时，工具结果按紧邻调用轮次配对，并排在用户消息其他内容之前。
-缺失结果补为调用中断错误，延迟或孤立结果按普通内容承载；同一用户轮次的重复结果保留最后一条。
-Responses 流已交付工具调用时，即使终帧不再列出输出项，Messages 仍返回 `stop_reason: tool_use`；明确的截断或暂停原因优先。
-
-Responses 的 `allowed_tools` 只向 Messages 上游声明本轮允许的工具，历史调用仍保留原名；
-若没有可用工具，或上游不能执行 `required` 约束，则拒绝请求。
-跨协议搜索保留域名允许和禁止列表；缓存或索引搜索不会转为实时联网。Messages 搜索带有单工具 `max_uses` 限制时，转向 Responses 的生成请求会被拒绝
-
-跨协议推理设置读取顶层 `thinking`、`output_config.effort` 或 `reasoning.effort`。
-转向 Messages 时按所选账号模型目录声明的能力选择 adaptive 或手动预算，并约束输出上限和 effort 等级。
-不支持关闭的 adaptive 模型将 `none` 降到最低可用 effort；手动预算至少为 1024、严格小于输出上限，不足时关闭推理。
-生成请求只读取账号已发现的能力；目录缺失或未声明能力时沿用 CPA 手动预算，`auto` 使用 8192，不根据模型别名猜测能力。
-强制工具与手动推理冲突时显式关闭推理；紧接着只回传工具结果且未指定 effort 时，沿用无思考模式。
-adaptive 路径将普通强制选择降为 `auto`，保留串行约束。
-仅设置 `parallel_tool_calls:false` 也会生成串行工具选择，`none` 不携带并行选项。
-转向 Messages 并启用推理时省略不相容的 `temperature/top_p`，同协议不执行这些转换
-
-服务档位按目标协议映射：Responses `default` 对应 Messages `standard_only`，`auto` 保留，无法对应的档位省略。
-按 CPA 将 Responses `priority` 与 Messages `speed:fast` 双向映射；这两个字段不代表相同的服务承诺。
-跨协议生成 fast 请求时补充 `fast-mode-2026-02-01` beta，并保留已有 beta；目标是否支持 fast 由上游校验。
-Messages 转向 Codex OAuth 时省略转换生成的 `auto/default`，转向 Responses API Key 时保留。
-会话内配置、工具增删和指令生效期限等扩展需要完整保留时使用同协议上游
+非流式聚合要求工具输入可解析；结构无法解码或缺少必要终态时返回错误
 
 Messages 错误使用 `{"type":"error","error":{"type":"...","message":"..."}}`；SSE 开始后使用 `event: error`。
 入口沿用 Client Key 的账号范围、模型权限、并发、预算、取消和[请求解压](#请求解压)保护。
@@ -454,8 +432,6 @@ Messages 费用按管理员显式配置的模型价格计算，未配置时保�
 | --- | --- |
 | Messages，地址为官方 `https://api.anthropic.com`，HTTPS 端口为 443 | 请求上游 API 前缀下的 `messages/count_tokens`，返回原生计数结果 |
 | 自定义 Messages 上游 | 对 Messages 内容使用本地 tokenizer 估算 |
-| Responses 上游，包括 OAuth | 先投影为 Responses 内容，再使用本地 tokenizer 估算 |
-| Antigravity | 转换为 GenAI 输入并应用 AGY 系统提示词，调用 Cloud Code `countTokens`，将 `totalTokens` 投影为 `input_tokens` |
 
 本地估算按模型选择 tokenizer，计算可提取的文本、工具定义与工具内容，不包含图片、音频、视频、二进制文档及隐藏推理的模型专用成本。
 它不保证与上游账单或完整多模态上下文一致，也不发送上游生成请求或产生上游用量。
@@ -839,7 +815,7 @@ Images 与 Search 保留通过现有过滤规则的普通业务请求头及多�
 
 #### xAI 适配
 
-xAI Provider 将 Grok wire 转换为 Responses wire。上游结构化错误的 message/code/type 可透出，内嵌的账号指纹 UUID 脱敏。
+xAI Provider 使用上游原生 Responses wire，只有 Chat 请求装配直接转换。上游结构化错误的 message/code/type 可透出，内嵌的账号指纹 UUID 脱敏。
 模型名完整保留，不剥离前缀；别名使用显式模型映射。目录读取失败返回错误，不用硬编码型号补全能力
 
 xAI 的 `reasoning.effort` 接受 `none / minimal / low / medium / high / xhigh / max`，去除两端
@@ -1735,7 +1711,7 @@ sub2api 的 `platform=openai`、`type=apikey` 使用 `credentials.base_url` / `c
 
 Responses API Key 账号与 OAuth 共用 Responses、Images 和 standalone Search 请求与响应链路，
 包括 Responses Lite 和原生压缩协议的透传，实际支持情况由上游决定；不提供独立 compact 路由。
-Messages API Key 账号支持生成与输入计数，通过协议转换承接 Responses 和 Chat 入站；不提供 Images、standalone Search、Live 或 Responses 原生续接能力。
+Messages API Key 账号支持原生生成与输入计数，通过直接转换承接 Chat 入站；不提供 Images、standalone Search、Live 或 Responses 原生续接能力。
 模型目录、连接测试和本地用量统计可用；OAuth 刷新/重新授权、ChatGPT 额度、个人资料、订阅和重置卡不适用。
 客户端的 `image_generation` 和 `X-OpenAI-Actor-Authorization` 声明不改变账号的实际能力。
 未识别为 CPR 互联的 API Key 账号，其列表和详情 `usage` 汇总账号创建后仍保留的本地请求记录，
@@ -2542,11 +2518,11 @@ Guardian 以 `subagent_kind` 或 `client_metadata.x-openai-subagent` 值 `guardi
 - `strict` 优先同一账号，启用账号排队时等待繁忙的绑定账号，关闭排队、绑定失效或允许换号时重新绑定
 
 Antigravity 原生 GenAI 请求使用 `X-Http-Session-Id`，缺失时使用 `X-Session-Id`；这些头只作为会话标识
-Responses 和 Messages 转入 Antigravity 时分别复用 Codex 逻辑会话和 Claude Code 会话解析，在转换前按 Client Key、模型及入站协议隔离绑定，发给 Google 的 `sessionId` 从该绑定键派生
+Chat 通过显式会话头建立绑定，按 Client Key、模型及入站协议隔离，发给 Google 的 `sessionId` 从该绑定键派生
 无显式会话及计数请求不建立绑定。账号资格失效后按调度策略重选，凭据、额度、模型目录和权限仍由 Antigravity 检查
 
 xAI 沿用自身显式会话及对话开头的识别规则，按 Client Key 和模型隔离绑定
-选号使用共享的版本绑定、TTL 和模式；上游 session ID、加密推理重放与原生响应续接继续由 xAI 处理
+选号使用共享的版本绑定、TTL 和模式；上游 session ID 与原生响应续接继续由 xAI 处理，同账号重放保留原生输出
 
 OpenAI 在上述模式下还保留以下协议规则，包括带明确 Claude Code 会话身份的 [Messages 请求](#messages-请求)：
 
@@ -2791,7 +2767,7 @@ Grok CLI 通用身份默认使用 `grok-shell / headless / linux / x86_64`，版
 {"versionMode":"latest","clientVersion":null,"clientIdentifier":"grok-shell","clientMode":"headless","targetOs":"linux","targetArch":"x86_64"}
 ```
 
-配置作用于 Client Key 的 xAI 模型请求和压缩请求，影响 `x-grok-client-version`、`x-grok-client-identifier`、
+配置作用于 Client Key 的 xAI 模型请求，影响 `x-grok-client-version`、`x-grok-client-identifier`、
 `x-grok-client-mode` 与 User-Agent；OAuth、后台目录和额度查询使用 Provider 内置官方画像。
 User-Agent 使用 `grok-shell/<版本> (<系统>; <架构>)`，其中 `arm64` 按官方规则展示为 `aarch64`。
 `clientIdentifier` 只控制对应请求头，不替换 User-Agent 中的 `grok-shell` 产品名。
@@ -3591,7 +3567,7 @@ GitHub 的 `location` 使用 `kind: "github"`、`repository: "owner/repo"`、`ta
 `http`、`websocket` 和 `service` 不使用 Key、分组、Provider 或模型范围，这些数组必须为空；插件在处理器内匹配路径、消息或服务操作。
 `request` 与 `routing` 支持 Key、分组和公开模型范围，Provider 范围必须为空；`attempt`、`outbound`、`upstream`、`scheduling`、`retry` 与 `observation` 可使用 Provider 范围
 
-`outbound` 准备原生 Provider 交给 transport 的请求，覆盖 OpenAI Provider 的 Responses HTTP / WS、Messages 生成与原生输入计数、Images、Search、Live 创建，以及 xAI 生成与压缩。
+`outbound` 准备原生 Provider 交给 transport 的请求，覆盖 OpenAI Provider 的 Responses HTTP / WS、Messages 生成与原生输入计数、Images、Search、Live 创建，以及 xAI 原生生成。
 它使用最终上游模型匹配范围，下一层返回准备后的请求，不执行发送；字节、headers、HTTP 方法和目标的合同见 [SDK 出站请求准备](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#上游出站准备)。
 该阶段不包括 OAuth、额度刷新等后台请求，也不包括由 `upstream_adapter` 自行执行的发送
 

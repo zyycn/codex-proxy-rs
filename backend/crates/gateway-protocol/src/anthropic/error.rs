@@ -1,10 +1,10 @@
-//! 协议转换的结构错误
+//! Messages 原生解析的结构错误
 
 use thiserror::Error;
 
-/// 可安全传递给协议边界的转换错误
+/// 可安全传递给 Messages 协议边界的解析错误
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub enum TranslationError {
+pub enum MessageError {
     /// 请求结构无法解析
     #[error("{0}")]
     InvalidRequest(&'static str),

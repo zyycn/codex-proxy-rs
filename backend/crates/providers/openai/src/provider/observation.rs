@@ -592,6 +592,11 @@ pub(super) fn compile_model_capabilities(model: &CodexCatalogModel) -> ProviderM
         BTreeSet::from([OperationKind::Generate, OperationKind::CountTokens]),
         None,
     )
+    .with_native_generation_protocols([
+        gateway_protocol::openai::OPENAI_PROTOCOL,
+        gateway_protocol::anthropic::ANTHROPIC_PROTOCOL,
+    ])
+    .with_translated_generation_protocols([gateway_protocol::chat_completions::CHAT_PROTOCOL])
     .with_upstream_feature_validation();
     ProviderModelCapabilities::new(model.request_model().clone(), capabilities)
         .with_presentation(codex_model_presentation(model))

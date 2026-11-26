@@ -159,7 +159,6 @@ async fn model_responses(
             middleware_body,
         },
         Some(authorization),
-        None,
     )
     .await;
     Ok(plugin_response(response))

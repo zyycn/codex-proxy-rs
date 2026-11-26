@@ -57,7 +57,6 @@ pub(crate) async fn responses(
             middleware_body,
         },
         None,
-        None,
     )
     .await
 }

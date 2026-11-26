@@ -6,7 +6,6 @@ mod credential;
 mod oauth_http;
 pub mod profile;
 mod provider;
-mod reasoning_replay;
 mod secret;
 pub mod transport;
 
@@ -64,8 +63,7 @@ pub use transport::{
     GrokBillingTransportFuture, GrokBillingTransportResponse, GrokCanonicalDecoder,
     GrokCatalogApiBackend, GrokCatalogCapabilities, GrokCatalogCapabilityEvidence,
     GrokCatalogLimits, GrokCatalogMetadata, GrokCatalogModel, GrokCatalogReasoningEffort,
-    GrokClientIdentity, GrokCompactionDecodeError, GrokCompactionRequest,
-    GrokCompactionSummaryDecoder, GrokCredentialFailure, GrokCredentialFeedbackFuture,
+    GrokClientIdentity, GrokCredentialFailure, GrokCredentialFeedbackFuture,
     GrokDnsResolutionError, GrokDnsResolutionPlan, GrokDnsResolutionPolicy, GrokEndpointPolicy,
     GrokHeader, GrokHeaderValue, GrokInferenceChunkStream, GrokInferenceClientCacheStatus,
     GrokInferenceDnsObservation, GrokInferenceDnsSource, GrokInferenceRequest,

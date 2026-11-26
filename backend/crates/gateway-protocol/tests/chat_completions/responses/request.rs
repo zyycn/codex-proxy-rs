@@ -1,0 +1,330 @@
+//! Chat 到 Responses 的字段、媒体和工具映射回归
+
+use gateway_protocol::chat_completions::responses::convert_request;
+use serde_json::{Value, json};
+
+fn chat_request(stream: bool) -> Value {
+    json!({"model":"model-a","messages":[{"role":"user","content":"hello"}],"stream":stream})
+}
+
+fn convert(body: Value) -> Value {
+    convert_request(body.as_object().unwrap())
+        .expect("请求映射")
+        .into()
+}
+
+#[test]
+fn preserves_ordered_roles_images_and_modern_tool_round_trip() {
+    let arguments = "{ \"city\" : \"北京\", \"store\":true }";
+    let converted = convert(json!({"model":"model-a","messages":[
+        {"role":"system","content":"system text"},
+        {"role":"developer","content":"developer text"},
+        {"role":"user","content":[{"type":"text","text":"describe"},
+            {"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8=","detail":"high"}}]},
+        {"role":"assistant","content":"checking","tool_calls":[
+            {"id":"call-weather","type":"function","function":{"name":"weather","arguments":arguments}}]},
+        {"role":"tool","tool_call_id":"call-weather","name":"weather","content":"{\"temperature\":25}"},
+        {"role":"user","content":"continue"}
+    ]}));
+    let input = converted["input"].as_array().unwrap();
+    assert_eq!(
+        input
+            .iter()
+            .filter_map(|item| item["role"].as_str())
+            .collect::<Vec<_>>(),
+        ["system", "developer", "user", "assistant", "user"]
+    );
+    assert_eq!(
+        input[2]["content"][1],
+        json!({"type":"input_image","image_url":"data:image/png;base64,aGVsbG8=","detail":"high"})
+    );
+    assert_eq!(
+        input[3]["content"],
+        json!([{"type":"output_text","text":"checking","annotations":[]}])
+    );
+    assert_eq!(
+        input[4],
+        json!({"type":"function_call","call_id":"call-weather","name":"weather","arguments":arguments})
+    );
+    assert_eq!(
+        input[5],
+        json!({"type":"function_call_output","call_id":"call-weather","name":"weather","output":"{\"temperature\":25}"})
+    );
+    assert!(converted.get("previous_response_id").is_none());
+}
+
+#[test]
+fn web_search_options_require_a_hosted_search_and_flatten_location() {
+    for (options, expected) in [
+        (json!({}), json!({"type":"web_search"})),
+        (
+            json!({"search_context_size":"low","user_location":{"type":"approximate",
+                "approximate":{"country":"US","city":"Seattle","region":"WA","timezone":"America/Los_Angeles"}}}),
+            json!({"type":"web_search","search_context_size":"low","user_location":{"type":"approximate",
+                "country":"US","city":"Seattle","region":"WA","timezone":"America/Los_Angeles"}}),
+        ),
+    ] {
+        let mut request = chat_request(false);
+        request["web_search_options"] = options;
+        let body = convert(request);
+        assert_eq!(body["tools"], json!([expected]));
+        assert_eq!(body["tool_choice"], json!({"type":"web_search"}));
+    }
+}
+
+#[test]
+fn maps_inline_user_pdf_without_reencoding_its_data() {
+    let data = "data:application/pdf;base64,JVBERi0xLjQ=";
+    let converted = convert(json!({"model":"model-a","messages":[
+        {"role":"user","content":[{"type":"text","text":"Read the attachment"},
+            {"type":"file","file":{"filename":"document.pdf","file_data":data}}]}
+    ]}));
+    assert_eq!(
+        converted["input"][0]["content"],
+        json!([{"type":"input_text","text":"Read the attachment"},
+            {"type":"input_file","filename":"document.pdf","file_data":data}])
+    );
+}
+
+#[test]
+fn assistant_history_uses_output_content_for_text_and_refusals() {
+    for content in [
+        json!("previous answer"),
+        json!([{"type":"text","text":"previous answer"}]),
+        json!([{"type":"text","text":"previous answer"},{"type":"refusal","refusal":"declined"}]),
+    ] {
+        let converted = convert(json!({"model":"model-a","messages":[
+            {"role":"user","content":"first turn"},
+            {"role":"assistant","content":content},
+            {"role":"user","content":"continue from the previous answer"}
+        ]}));
+        let history = &converted["input"][1];
+        assert_eq!(history["role"], "assistant");
+        assert_eq!(history["status"], "completed");
+        assert!(!history["id"].as_str().unwrap().is_empty());
+        assert_eq!(
+            history["content"][0],
+            json!({"type":"output_text","text":"previous answer","annotations":[]})
+        );
+        if content.is_array() && content.as_array().unwrap().len() == 2 {
+            assert_eq!(
+                history["content"][1],
+                json!({"type":"refusal","refusal":"declined"})
+            );
+        }
+        assert_eq!(converted["input"][2]["content"][0]["type"], "input_text");
+    }
+}
+
+#[test]
+fn preserves_nested_schema_metadata_and_future_opaque_values() {
+    let schema = json!({"type":"object","properties":{
+        "messages":{"type":"string"},"store":{"type":"boolean"},
+        "function_call":{"type":"string"},"future":{"x-extension":[1,2]}},
+        "required":["messages"],"additionalProperties":true});
+    let mut body = chat_request(false);
+    body["model"] = json!("future-model-opaque:β");
+    body["tools"] = json!([{"type":"function","function":{"name":"inspect","parameters":schema}}]);
+    body["tool_choice"] = json!({"type":"function","function":{"name":"inspect"}});
+    body["response_format"] = json!({"type":"json_schema","json_schema":{
+        "name":"result","description":"preserve","strict":true,"schema":schema}});
+    body["metadata"] = json!({"messages":"business data","future":"kept"});
+    body["reasoning_effort"] = json!("future-effort");
+    body["verbosity"] = json!("future-verbosity");
+    body["service_tier"] = json!("future-tier");
+    body["future_client_extension"] = json!({"opaque":true});
+    let converted = convert(body);
+    assert_eq!(converted["model"], "future-model-opaque:β");
+    assert_eq!(converted["tools"][0]["parameters"], schema);
+    assert_eq!(converted["tools"][0]["strict"], false);
+    assert_eq!(
+        converted["tool_choice"],
+        json!({"type":"function","name":"inspect"})
+    );
+    assert_eq!(converted["text"]["format"]["schema"], schema);
+    assert_eq!(converted["text"]["format"]["strict"], true);
+    assert_eq!(
+        converted["metadata"],
+        json!({"messages":"business data","future":"kept"})
+    );
+    assert_eq!(converted["reasoning"]["effort"], "future-effort");
+    assert_eq!(converted["text"]["verbosity"], "future-verbosity");
+    assert_eq!(converted["service_tier"], "future-tier");
+    assert!(converted.get("future_client_extension").is_none());
+}
+
+#[test]
+fn normalizes_neutral_defaults_without_dropping_shared_provider_parameters() {
+    let mut body = chat_request(false);
+    for name in [
+        "stream",
+        "store",
+        "n",
+        "functions",
+        "function_call",
+        "logprobs",
+        "seed",
+    ] {
+        body[name] = Value::Null;
+    }
+    body["frequency_penalty"] = json!(0);
+    body["presence_penalty"] = json!(0);
+    body["stop"] = json!([]);
+    body["max_tokens"] = json!(12);
+    body["max_completion_tokens"] = json!(24);
+    body["temperature"] = json!(0.2);
+    body["top_p"] = json!(0.9);
+    body["prompt_cache_retention"] = json!("24h");
+    let converted = convert(body);
+    assert_eq!(converted["stream"], false);
+    assert_eq!(converted["store"], false);
+    assert_eq!(converted["max_output_tokens"], 24);
+    assert_eq!(converted["temperature"], 0.2);
+    assert_eq!(converted["top_p"], 0.9);
+    assert_eq!(converted["prompt_cache_retention"], "24h");
+}
+
+#[test]
+fn assistant_tool_history_keeps_arguments_opaque_and_cache_annotations_structural() {
+    let cache = json!({"type":"default","future_setting":{"keep":true}});
+    let arguments = "not valid JSON {\n  \"raw\" : 🦀";
+    let converted = convert(json!({"model":"model-a","messages":[
+        {"role":"user","content":[{"type":"text","text":"cached","prompt_cache_breakpoint":cache}]},
+        {"role":"assistant","content":null,"tool_calls":[{"id":"call-raw","type":"function",
+            "function":{"name":"raw","arguments":arguments}}]},
+        {"role":"tool","tool_call_id":"call-raw","content":[{"type":"text","text":"result"}]}
+    ],"prompt_cache_options":{"future":{"keep":true}},"moderation":{"future":{"keep":true}}}));
+    assert_eq!(
+        converted["input"][0]["content"][0]["prompt_cache_breakpoint"],
+        cache
+    );
+    assert_eq!(converted["input"][1]["arguments"], arguments);
+    assert_eq!(
+        converted["input"][2],
+        json!({"type":"function_call_output","call_id":"call-raw","output":[{"type":"input_text","text":"result"}]})
+    );
+    assert_eq!(
+        converted["prompt_cache_options"],
+        json!({"future":{"keep":true}})
+    );
+    assert_eq!(converted["moderation"], json!({"future":{"keep":true}}));
+}
+
+#[test]
+fn optional_chat_controls_degrade_without_blocking_upstream_execution() {
+    for stop in [json!("end"), json!(["end", "stop"]), json!([])] {
+        let converted = convert(json!({"model":"model-a", "messages":[
+            {"role":"user", "name":"speaker", "content":"hello"},
+            {"role":"assistant", "reasoning_content":"display-only", "content":"previous"}
+        ], "stop":stop, "seed":7, "frequency_penalty":0.3, "presence_penalty":0.5,
+            "logit_bias":{"10":-10}, "prediction":{"type":"content", "content":"hint"}}));
+        assert_eq!(converted["input"][0]["content"][0]["text"], "hello");
+        assert_eq!(converted["input"][1]["content"][0]["text"], "previous");
+        for field in [
+            "stop",
+            "seed",
+            "frequency_penalty",
+            "presence_penalty",
+            "logit_bias",
+            "prediction",
+        ] {
+            assert!(converted.get(field).is_none(), "{field}");
+        }
+    }
+}
+
+#[test]
+fn shared_options_and_native_extensions_reach_upstream_without_model_prejudgment() {
+    let mut request = chat_request(false);
+    request.as_object_mut().unwrap().extend(json!({
+        "max_output_tokens":10, "temperature":3.0, "top_p":1.5,
+        "reasoning":{"effort":"low", "summary":"auto", "future":true}, "reasoning_effort":"high",
+        "text":{"verbosity":"low", "future":true}, "verbosity":"high",
+        "response_format":{"type":"future_format", "future":true},
+        "tools":[{"type":"file_search", "vector_store_ids":["vs_test"]}],
+        "tool_choice":"future_choice", "logprobs":true, "top_logprobs":3,
+        "include":["reasoning.encrypted_content"], "truncation":"auto", "max_tool_calls":5
+    }).as_object().unwrap().clone());
+    let converted = convert(request);
+    assert_eq!(converted["max_output_tokens"], 10);
+    assert_eq!(converted["temperature"], 3.0);
+    assert_eq!(converted["top_p"], 1.5);
+    assert_eq!(
+        converted["reasoning"],
+        json!({"effort":"high", "summary":"auto", "future":true})
+    );
+    assert_eq!(
+        converted["text"],
+        json!({"verbosity":"high", "future":true, "format":{"type":"future_format", "future":true}})
+    );
+    assert_eq!(converted["tool_choice"], "future_choice");
+    assert_eq!(
+        converted["include"],
+        json!([
+            "reasoning.encrypted_content",
+            "message.output_text.logprobs"
+        ])
+    );
+    assert_eq!(
+        converted["tools"][0]["vector_store_ids"],
+        json!(["vs_test"])
+    );
+    assert_eq!(converted["top_logprobs"], 3);
+}
+
+#[test]
+fn custom_tools_keep_native_input_and_mixed_call_families_through_history() {
+    let schema = json!({"type":"grammar", "grammar":{"syntax":"lark", "definition":"start: /.+/"}});
+    let converted = convert(json!({"model":"model-a", "tools":[
+        {"type":"custom", "custom":{"name":"patch", "format":schema}},
+        {"type":"function", "function":{"name":"lookup"}}
+    ], "tool_choice":{"type":"allowed_tools", "allowed_tools":{"mode":"auto", "tools":[
+        {"type":"custom", "custom":{"name":"patch"}}, {"type":"function", "function":{"name":"lookup"}}
+    ]}}, "messages":[
+        {"role":"assistant", "tool_calls":[
+            {"id":"call_patch", "type":"custom", "custom":{"name":"patch", "input":"raw\ninput"}},
+            {"id":"call_lookup", "type":"function", "function":{"name":"lookup", "arguments":"{}"}}
+        ]},
+        {"role":"tool", "tool_call_id":"call_patch", "content":"done"},
+        {"role":"tool", "tool_call_id":"call_lookup", "content":[{"type":"image_url", "image_url":{"url":"https://example.com/result.png"}}]},
+        {"role":"assistant", "tool_calls":[{"id":"call_patch", "type":"function", "function":{"name":"lookup", "arguments":"{}"}}]},
+        {"role":"tool", "tool_call_id":"call_patch", "content":"reused id"}
+    ]}));
+    assert_eq!(
+        converted["tools"][0],
+        json!({"type":"custom", "name":"patch", "format":schema})
+    );
+    assert_eq!(
+        converted["tool_choice"],
+        json!({"type":"allowed_tools", "mode":"auto", "tools":[{"type":"custom","name":"patch"},{"type":"function","name":"lookup"}]})
+    );
+    assert_eq!(
+        converted["input"][0],
+        json!({"type":"custom_tool_call","call_id":"call_patch","name":"patch","input":"raw\ninput"})
+    );
+    assert_eq!(converted["input"][2]["type"], "custom_tool_call_output");
+    assert_eq!(converted["input"][3]["output"][0]["type"], "input_image");
+    assert_eq!(converted["input"][5]["type"], "function_call_output");
+}
+
+#[test]
+fn files_and_audio_are_preserved_as_inputs_instead_of_losing_the_user_turn() {
+    for file in [
+        json!({"file_id":"file_test"}),
+        json!({"file_url":"https://example.com/report.txt"}),
+        json!({"file_data":"data:text/plain;base64,aGk=", "filename":"report.txt", "detail":"high"}),
+    ] {
+        let converted = convert(
+            json!({"model":"model-a", "messages":[{"role":"user", "content":[
+                {"type":"file", "file":file}, {"type":"input_audio", "input_audio":{"data":"aGk=", "format":"mp3"}}
+            ]}]}),
+        );
+        let mut expected = file;
+        expected["type"] = json!("input_file");
+        assert_eq!(converted["input"][0]["content"][0], expected);
+        assert_eq!(
+            converted["input"][0]["content"][1],
+            json!({"type":"input_audio","audio_url":"data:audio/mpeg;base64,aGk="})
+        );
+    }
+}
