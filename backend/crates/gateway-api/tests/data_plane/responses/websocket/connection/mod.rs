@@ -218,11 +218,7 @@ fn crossing_limit_terminal_batch(reconnect: bool) -> CoordinatedEvent {
         .expect("completed wire"),
     );
     if reconnect {
-        completed.attach_session_update(
-            gateway_core::operation::ProviderSessionState::new("openai", serde_json::Map::new())
-                .unwrap()
-                .with_websocket_reconnect(),
-        );
+        completed.request_websocket_reconnect();
     }
     CoordinatedEvent::try_batch(vec![completed], CommitRequirement::AlreadyCommitted)
         .expect("terminal WebSocket batch")
@@ -925,8 +921,13 @@ async fn start_active_response_with(
 
 #[tokio::test]
 async fn replay_reconnect_waits_for_queued_requests_and_writes_the_last_terminal() {
+    for reconnect_last in [true, false] {
+        check_queued_reconnect(reconnect_last).await;
+    }
+}
+
+async fn check_queued_reconnect(reconnect_last: bool) {
     let (trace, mut socket, server) = start_active_response().await;
-    trace.reconnect_for_replay.store(true, Ordering::Release);
     for input in ["second", "third"] {
         socket
             .send(ClientMessage::Text(
@@ -950,6 +951,9 @@ async fn replay_reconnect_waits_for_queued_requests_and_writes_the_last_terminal
     assert_eq!(trace.starts.load(Ordering::Acquire), 1);
 
     for completed_count in 1..=3 {
+        trace
+            .reconnect_for_replay
+            .store(completed_count < 3 || reconnect_last, Ordering::Release);
         trace.release_terminal.notify_one();
         let expected_types = if completed_count < 3 {
             vec![
@@ -984,13 +988,24 @@ async fn replay_reconnect_waits_for_queued_requests_and_writes_the_last_terminal
         vec![json!("hello"), json!("second"), json!("third")]
     );
     assert!(!trace.cancelled.load(Ordering::Acquire));
+    if !reconnect_last {
+        // 后续请求可选中支持增量续接的 Provider，先前排队让过的关闭提示只属于原响应
+        socket
+            .send(ClientMessage::Ping(vec![9].into()))
+            .await
+            .unwrap();
+    }
     let next = tokio::time::timeout(Duration::from_secs(2), socket.next())
         .await
-        .expect("replay close timeout")
+        .expect("idle connection disposition")
         .unwrap()
         .unwrap();
-    assert!(matches!(next, ClientMessage::Close(Some(frame))
-        if frame.code == CloseCode::Normal && frame.reason == "Reconnect with full input."));
+    if reconnect_last {
+        assert!(matches!(next, ClientMessage::Close(Some(frame))
+            if frame.code == CloseCode::Normal && frame.reason == "Reconnect with full input."));
+    } else {
+        assert_eq!(next, ClientMessage::Pong(vec![9].into()));
+    }
     server.abort();
 }
 

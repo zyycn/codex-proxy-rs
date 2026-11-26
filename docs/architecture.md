@@ -696,7 +696,8 @@ xAI Provider 负责 Codex custom 工具与 Grok function 工具的双向转换�
 
 客户端到代理与代理到上游的传输选择相互独立。客户端的 `supports_websockets = false`
 不禁止 Provider 使用上游 WebSocket。OpenAI Provider 按线程维护 WS 失败预算，消息大小上限随上游
-物理连接保存。超限回退以终态会话更新提示下游重连；API 负责确认成功写出和入站队列空闲。响应终态前的 Close 1000 仍视为失败，
+物理连接保存。OpenAI 的超限回退与 Antigravity 的 Responses 桥接按各自的续接能力，在终态事件上提示下游重连。
+该提示只属于当前交付，与 Provider 的私有会话状态独立。API 确认成功写出、完成结算且入站队列空闲后关闭连接。响应终态前的 Close 1000 仍视为失败，
 后续恢复请求成功也不改写原失败请求的结果
 
 ## 6. 路由、账号范围与 continuation

@@ -601,9 +601,94 @@ async fn rate_limit_feedback_uses_model_scope_and_the_full_upstream_retry_delay(
 }
 
 #[tokio::test]
-async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
+async fn responses_continuation_requests_full_replay_and_preserves_the_conversation() {
     use gateway_core::{
         engine::provider::ProviderRequest,
+        error::{ContinuationRecoveryDisposition, GatewayError},
+        operation::{GenerateRequest, Operation, ProtocolPayload},
+    };
+    let upstream = MockServer::start().await;
+    let fixture = Fixture::new(&upstream.uri());
+    let execute = |body: serde_json::Value| {
+        let payload =
+            ProtocolPayload::json_object("openai", body.as_object().unwrap().clone()).unwrap();
+        fixture.provider.clone().execute(
+            ProviderRequest::new(
+                Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+                request(false).candidate().clone(),
+            ),
+            context(frozen_profile(), CancellationToken::new()),
+        )
+    };
+    let history = json!([
+        {"role":"user","content":"look up the color"},
+        {"type":"function_call","call_id":"c","name":"lookup","arguments":"{}"},
+        {"type":"function_call_output","call_id":"c","output":"amber"}
+    ]);
+    for (mut body, code, recovery) in [
+        (
+            json!({"generate":false,"input":[]}),
+            Some("unsupported_prewarm"),
+            None,
+        ),
+        (
+            json!({"generate":false,"input":history}),
+            Some("unsupported_prewarm"),
+            None,
+        ),
+        (
+            json!({"previous_response_id":"resp_first","input":[history[2]]}),
+            Some("previous_response_not_found"),
+            Some(ContinuationRecoveryDisposition::ClientReplayRequired),
+        ),
+        (
+            json!({"previous_response_id":42,"input":[history[2]]}),
+            None,
+            None,
+        ),
+    ] {
+        body["model"] = json!("fixture-model");
+        let error = execute(body)
+            .await
+            .err()
+            .expect("only full generation requests reach GenAI");
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        assert_eq!(
+            GatewayError::from_provider(&error).client_error_code(),
+            code
+        );
+        assert_eq!(error.continuation_recovery_disposition(), recovery);
+    }
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+    assert_eq!(fixture.store.scheduling_reads.load(Ordering::SeqCst), 0);
+    Mock::given(path("/v1internal:streamGenerateContent"))
+        .and(body_partial_json(json!({"request":{"contents":[
+            {"role":"user","parts":[{"text":"look up the color"}]},
+            {"role":"model","parts":[{"functionCall":{"id":"c","name":"lookup","args":{}}}]},
+            {"role":"user","parts":[{"functionResponse":{"id":"c","name":"lookup","response":{"output":"amber"}}}]}
+        ]}})))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"amber\"}]},\"finishReason\":\"STOP\"}]}}\n\n", "text/event-stream",
+        ))
+        .expect(1).mount(&upstream).await;
+    let stream = execute(json!({"model":"fixture-model","generate":true,"input":history}))
+        .await
+        .unwrap();
+    assert!(
+        stream
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .iter()
+            .any(|event| event.has_client_event())
+    );
+    released(&fixture).await;
+}
+
+#[tokio::test]
+async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
+    use gateway_core::{
+        engine::{execution::ClientTransport, provider::ProviderRequest},
         event::GatewayEvent,
         operation::{GenerateRequest, Operation, ProtocolPayload},
     };
@@ -614,14 +699,14 @@ async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
         .respond_with(ResponseTemplate::new(200).set_body_raw(concat!(
             "data: {\"response\":{\"responseId\":\"r\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}}\n\n",
             "data: {\"response\":{\"usageMetadata\":{\"promptTokenCount\":7,\"candidatesTokenCount\":2}}}\n\n"
-        ),"text/event-stream")).expect(2).mount(&upstream).await;
-    for (protocol, body) in [
-        (
-            "openai",
-            json!({"model":"fixture-model","input":"hello","max_output_tokens":100,"reasoning":{"effort":"high"},"temperature":0.3,"top_p":0.8,"tools":[{"type":"function","name":"pwd","parameters":{"type":"object"}}],"tool_choice":"required","text":{"format":{"type":"json_schema","schema":{"type":"object"}}}}),
-        ),
+        ),"text/event-stream")).expect(3).mount(&upstream).await;
+    let responses = json!({"model":"fixture-model","input":"hello","max_output_tokens":100,"reasoning":{"effort":"high"},"temperature":0.3,"top_p":0.8,"tools":[{"type":"function","name":"pwd","parameters":{"type":"object"}}],"tool_choice":"required","text":{"format":{"type":"json_schema","schema":{"type":"object"}}}});
+    for (protocol, transport, body) in [
+        ("openai", ClientTransport::WebSocket, responses.clone()),
+        ("openai", ClientTransport::HttpSse, responses),
         (
             "anthropic",
+            ClientTransport::HttpSse,
             json!({"model":"fixture-model","messages":[{"role":"user","content":"hello"}],"max_tokens":100}),
         ),
     ] {
@@ -632,10 +717,19 @@ async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
         let request = ProviderRequest::new(operation, request(false).candidate().clone());
         let mut profile = crate::profile::ClientProfile::from_frozen(&frozen_profile()).unwrap();
         profile.system_prompt = "Frozen AGY prompt".into();
+        let request_context = RequestAttemptContext::new(
+            ModelRequestId::new("req_translation").unwrap(),
+            ClientApiKeyId::new("key_fixture").unwrap(),
+        )
+        .with_request_profile(Some(profile.frozen()))
+        .with_middleware(None, Default::default(), protocol.to_owned(), transport);
         let mut stream = fixture
             .provider
             .clone()
-            .execute(request, context(profile.frozen(), CancellationToken::new()))
+            .execute(
+                request,
+                crate::support::context_with_request(request_context, CancellationToken::new()),
+            )
             .await
             .unwrap();
         let mut output = Vec::new();
@@ -648,6 +742,16 @@ async fn translated_generation_delivers_terminal_wire_after_tail_usage() {
             output.extend(stream.translate_native_response(event, terminal).unwrap());
         }
         let last = output.last().unwrap();
+        assert_eq!(
+            last.prefers_websocket_reconnect(),
+            transport == ClientTransport::WebSocket
+        );
+        assert!(
+            output[..output.len() - 1]
+                .iter()
+                .all(|event| !event.prefers_websocket_reconnect())
+        );
+        assert!(output.iter().all(|event| event.session_update().is_none()));
         assert!(
             last.canonical_facts()
                 .iter()

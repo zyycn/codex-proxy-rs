@@ -813,6 +813,7 @@ pub struct ProviderEvent {
     wire: Option<Box<ProtocolWireEvent>>,
     observation: Option<Box<ProviderResponseObservation>>,
     session_update: Option<Box<ProviderSessionState>>,
+    reconnect_websocket: bool,
     middleware_transformed: bool,
     replayable_prelude: bool,
     middleware_origin_wire: Option<Arc<ProtocolWireEvent>>,
@@ -827,6 +828,7 @@ impl ProviderEvent {
             wire: None,
             observation: None,
             session_update: None,
+            reconnect_websocket: false,
             middleware_transformed: false,
             replayable_prelude: false,
             middleware_origin_wire: None,
@@ -848,6 +850,7 @@ impl ProviderEvent {
             wire: Some(Box::new(wire)),
             observation: None,
             session_update: None,
+            reconnect_websocket: false,
             middleware_transformed: false,
             replayable_prelude: false,
             middleware_origin_wire: None,
@@ -862,6 +865,7 @@ impl ProviderEvent {
             wire: Some(Box::new(wire)),
             observation: None,
             session_update: None,
+            reconnect_websocket: false,
             middleware_transformed: false,
             replayable_prelude: false,
             middleware_origin_wire: None,
@@ -876,10 +880,21 @@ impl ProviderEvent {
             wire: None,
             observation: Some(Box::new(observation)),
             session_update: None,
+            reconnect_websocket: false,
             middleware_transformed: false,
             replayable_prelude: false,
             middleware_origin_wire: None,
         }
+    }
+
+    /// 提示下游在本次成功终态交付后重连，不创建下一轮的 Provider 会话状态
+    pub fn request_websocket_reconnect(&mut self) {
+        self.reconnect_websocket = true;
+    }
+
+    #[must_use]
+    pub const fn prefers_websocket_reconnect(&self) -> bool {
+        self.reconnect_websocket
     }
 
     /// Provider 确认该事件仅为可替换的前导信息，客户端支持后续 attempt 的新前导事件

@@ -3,9 +3,10 @@
 use crate::transport::{sent, unsent};
 use gateway_core::{
     engine::provider::NativeResponseTranslator,
-    error::{ProviderError, ProviderErrorKind},
+    error::{ClientVisibleUpstreamError, ProviderError, ProviderErrorKind},
     event::ProtocolWireEvent,
     operation::Operation,
+    upstream::UpstreamSendState,
 };
 use gateway_protocol::{
     anthropic::{ANTHROPIC_PROTOCOL, MessagesToResponsesStream},
@@ -17,6 +18,42 @@ use gateway_protocol::{
 };
 use serde_json::{Value, json};
 use std::borrow::Cow;
+
+pub(super) fn validate_request_mode(operation: &Operation) -> Result<(), ProviderError> {
+    let Operation::Generate(generate) = operation else {
+        return Ok(());
+    };
+    let payload = generate.protocol_payload();
+    if !matches!(payload.protocol(), OPENAI_PROTOCOL | ANTHROPIC_PROTOCOL) {
+        return Ok(());
+    }
+    // GenAI 只有生成操作，预热即使携带完整输入也不能触发推理
+    if payload.protocol() == OPENAI_PROTOCOL
+        && payload.body().get("generate").and_then(Value::as_bool) == Some(false)
+    {
+        return Err(
+            unsent(ProviderErrorKind::InvalidRequest).with_client_visible_upstream_error(
+                ClientVisibleUpstreamError::new(
+                    "Antigravity does not support prewarm requests (generate=false).",
+                    Some("unsupported_prewarm".to_owned()),
+                    Some("invalid_request_error".to_owned()),
+                ),
+            ),
+        );
+    }
+    match payload.body().get("previous_response_id") {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::String(id))
+            if payload.protocol() == OPENAI_PROTOCOL && !id.trim().is_empty() =>
+        {
+            Err(ProviderError::responses_replay_required(
+                "scope_unavailable",
+                UpstreamSendState::NotSent,
+            ))
+        }
+        _ => Err(unsent(ProviderErrorKind::InvalidRequest)),
+    }
+}
 
 pub(super) fn prepare(
     operation: Operation,
@@ -36,12 +73,8 @@ pub(super) fn prepare(
         return Err(unsent(ProviderErrorKind::Unsupported));
     }
     let original = payload.body();
-    if original
-        .get("previous_response_id")
-        .is_some_and(|v| !v.is_null())
-    {
-        return Err(unsent(ProviderErrorKind::InvalidRequest));
-    }
+    // attempt 中间件可能改变预热或续接字段
+    validate_request_mode(&operation)?;
     let search = if source == OPENAI_PROTOCOL {
         web_search::required_tool(original)
             .map_err(|error| ProviderError::invalid_request(error.message()).with_source(error))?

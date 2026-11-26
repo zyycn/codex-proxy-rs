@@ -7,11 +7,13 @@ use gateway_core::{
     account::AccountHistorySnapshot,
     engine::{
         AttemptContext,
+        execution::ClientTransport,
         provider::{
             ProviderCallMetadata, ProviderRequest, ProviderSelectionObservation, ProviderStream,
         },
     },
     error::{ProviderError, ProviderErrorKind as Kind},
+    event::GatewayEvent,
     operation::Operation,
     upstream::{UpstreamSendState, UpstreamTransport},
 };
@@ -33,6 +35,8 @@ impl AntigravityProvider {
         ) {
             return Err(unsent(Kind::Unsupported));
         }
+        // 在选号和中间件改写前保留客户端的非生成与续接语义
+        super::translation::validate_request_mode(request.operation())?;
         let model = request
             .candidate()
             .upstream_model()
@@ -84,6 +88,9 @@ impl AntigravityProvider {
                 .get(self.kind.as_str())
                 .and_then(|models| models.get(model.as_str())),
         );
+        // AGY 没有可跨轮引用的响应，Responses WS 客户端可在新连接上直接发送完整输入
+        let reconnect_websocket = ctx.client_transport() == ClientTransport::WebSocket
+            && request.operation().protocol() == gateway_protocol::openai::OPENAI_PROTOCOL;
         ctx.execute_middleware(
             request.operation().clone(),
             self.kind.clone(),
@@ -150,10 +157,16 @@ impl AntigravityProvider {
                         Box::pin(crate::transport::events(response, context))
                     };
                     while let Some(event) = events.next().await {
-                        match event {
-                            Ok(event) => yield event,
+                        let mut event = match event {
+                            Ok(event) => event,
                             Err(error) => Err(record_failure(error).await)?,
+                        };
+                        if reconnect_websocket && event.canonical_facts().iter()
+                            .any(|fact| matches!(fact, GatewayEvent::Completed(_)))
+                        {
+                            event.request_websocket_reconnect();
                         }
+                        yield event;
                     }
                 };
                 let stream = ProviderStream::new(metadata, Box::pin(events), selected.lease);

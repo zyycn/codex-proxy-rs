@@ -539,14 +539,13 @@ pub(super) fn attach_openai_session_update(
     let Ok(update) = encode_openai_session_capture(&capture) else {
         return;
     };
-    let update = if capture.oversized_http
+    let terminal = &mut events[terminal_index];
+    if capture.oversized_http
         && capture.continuation_scope == Some(OpenAiContinuationScope::ReplayRequired)
     {
-        update.with_websocket_reconnect()
-    } else {
-        update
-    };
-    events[terminal_index].attach_session_update(update);
+        terminal.request_websocket_reconnect();
+    }
+    terminal.attach_session_update(update);
 }
 
 pub(super) fn terminal_response_output(event: &ProviderEvent) -> Option<&[Value]> {

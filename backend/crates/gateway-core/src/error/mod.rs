@@ -183,6 +183,16 @@ pub struct ClientVisibleUpstreamError {
 }
 
 impl ClientVisibleUpstreamError {
+    /// Responses 客户端据此重新提交完整输入
+    #[must_use]
+    pub fn previous_response_not_found() -> Self {
+        Self::new(
+            "Previous response was not found. Retrying the full request.",
+            Some("previous_response_not_found".to_owned()),
+            Some("invalid_request_error".to_owned()),
+        )
+    }
+
     /// 原样保存结构化上游 `message`、`code` 和 `type`
     #[must_use]
     pub fn new(
@@ -591,6 +601,20 @@ impl ProviderError {
         );
         error.failure_observation_mut().invalid_request_message = Some(message);
         error
+    }
+
+    /// 当前上游无法解析 Responses 历史，仅客户端持有完整输入可重放
+    #[must_use]
+    pub fn responses_replay_required(reason: &'static str, send_state: UpstreamSendState) -> Self {
+        Self::new(ProviderErrorKind::ContinuationRecoveryRequired, send_state)
+            .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
+            .with_continuation_recovery_disposition(
+                ContinuationRecoveryDisposition::ClientReplayRequired,
+            )
+            .with_continuation_unavailable_reason(reason)
+            .with_client_visible_upstream_error(
+                ClientVisibleUpstreamError::previous_response_not_found(),
+            )
     }
 
     pub(crate) fn group_feature_denied(feature: DeniedGroupFeature) -> Self {

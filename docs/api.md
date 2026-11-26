@@ -280,7 +280,7 @@ Responses 编码请求可以同时声明函数和可选的 `web_search`。AGY �
 
 搜索支持 `filters.allowed_domains` 和 `filters.blocked_domains`。强制搜索遇到缓存模式、无法满足的搜索选项或缺少可用搜索型号时返回请求错误。JSON 与 SSE 均按上游实际查询与来源返回 `web_search_call` 和正文引用；传入 `include: ["web_search_call.action.sources"]` 可读取搜索来源列表
 
-工具多轮调用须带回完整助手输出。Responses 的 `reasoning.encrypted_content` 和 Messages 的 `thinking.signature` 携带 GenAI 工具与思考签名及其所属内容，客户端应原样回传。Chat 沿用现有合同，只返回可读思考内容；转换器对缺少签名的工具调用使用 Google 官方的 `skip_thought_signature_validator` 兜底值，不增加服务端签名缓存。工具与思考的真实签名优先于兜底；普通可见文本的可选签名不附加到转换输出，以保持 CLI 最终文本完整。省略签名或使用兜底可能影响后续模型表现，见 [Google 签名规则](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking/thought-signatures)。Antigravity 转换入口不支持 `previous_response_id` 续接
+工具多轮调用须带回完整助手输出。Responses 的 `reasoning.encrypted_content` 和 Messages 的 `thinking.signature` 携带 GenAI 工具与思考签名及其所属内容，客户端应原样回传。Chat 沿用现有合同，只返回可读思考内容；转换器对缺少签名的工具调用使用 Google 官方的 `skip_thought_signature_validator` 兜底值，不增加服务端签名缓存。工具与思考的真实签名优先于兜底；普通可见文本的可选签名不附加到转换输出，以保持 CLI 最终文本完整。省略签名或使用兜底可能影响后续模型表现，见 [Google 签名规则](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking/thought-signatures)。Antigravity 的 Responses 转换入口收到有效的 `previous_response_id` 时返回 `400 previous_response_not_found`。客户端应移除该 ID，携带完整对话历史和工具结果重试
 
 ### Chat Completions 请求
 
@@ -667,13 +667,13 @@ Responses WebSocket 接受文本消息，`response.create` 在同一连接串行
 
 网关分别维护两段链路的心跳：上游 WS 定时发送 Ping 保活并回复 Pong，下游 WS 独立探活；Ping/Pong 不跨段转发，也不转换为 SSE 事件。
 下游探活包含消息接收中的字节进度，完整消息收齐后才进入中间件与请求处理。
-客户端断开时取消当前执行，并释放仍归该客户端所有的上游连接。`response.completed` 结束本轮响应。通常保留客户端 WS 等待下一轮请求，大包回退后的重连规则见下文
+客户端断开时取消当前执行，并释放仍归该客户端所有的上游连接。`response.completed` 结束本轮响应
 
 | 入站 → 上游 | 正常回答结束后的连接处理 |
 | --- | --- |
 | SSE → SSE | 结束本次响应流，底层 HTTP 连接由 HTTP 连接池管理 |
 | SSE → WS | 结束 SSE，上游 WS 归池，按无客户端绑定的空闲期限回收 |
-| WS → SSE | 上游本次响应结束，下游 WS 通常保留；大包回退可触发正常重连 |
+| WS → SSE | 通常保留下游 WS。Antigravity 生成和需要完整重放的 OpenAI 大包回退按下述规则重连 |
 | WS → WS | 保留当前绑定的上游 WS，支持下一轮续接 |
 
 活跃客户端 WS 的绑定不受普通空闲回收期限约束；上游 Close（不限关闭码）、EOF、传输读写失败、总寿命到期或连接被回收仍可能使连接内续接失效，
@@ -711,7 +711,7 @@ OAuth 账号默认 `prefer_websocket`，客户端使用 HTTP/SSE 时仍可能选
 客户端配置的 `supports_websockets` 只控制第一段连接，不是服务端传输策略开关。
 上游在响应终态前发送 Close 1000 仍属于失败，不能按“正常关闭”计为成功
 
-内建 xAI 适配器不支持 `generate=false` 的非生成预热请求，在发送推理请求前返回
+内建 xAI 和 Antigravity 适配器不支持 `generate=false` 的非生成预热请求，在发送推理请求前返回
 `400 unsupported_prewarm`，不会将其当作普通生成调用。`generate=true` 或省略该字段正常执行；
 客户端可跳过预热继续正式请求，外部插件 adapter 按各自的协议能力处理
 
@@ -733,9 +733,10 @@ OpenAI Responses 上游 WS 按握手响应头 `x-codex-websocket-max-message-byt
 切到 HTTP；其他客户端需要自行实现此合同。代理不缓存 transcript，不把增量输入当作独立新链，
 连接内续接失去原连接时仍需客户端恢复
 
-因大小走 HTTP/SSE 且需要完整重放时，网关写出成功终态后，会以关闭码 1000 正常关闭空闲的下游 WS。
-此规则适用于所有客户端。下一步请求应在新连接上发送完整输入，省略 `previous_response_id`。
-已接收的后续请求按序处理，若增量先到，仍按上述 400 合同恢复。启用 WS 帧中间件时保留连接
+Antigravity 的 Responses 请求，以及 OpenAI 因大小走 HTTP/SSE 且需要完整重放的请求，在
+`response.completed` 成功写出并完成结算后，以关闭码 1000 正常关闭空闲的下游 WS。
+客户端在新连接上发送完整输入（含工具调用和结果），省略 `previous_response_id`。
+已接收的后续请求按序处理，若增量先到，仍按 `400 previous_response_not_found` 恢复。启用 WS 帧中间件时保留连接
 
 生成请求、Messages 输入计数、Images 和 Search 的 HTTP 响应在建立模型执行后返回两个关联 ID，OpenAI 与 xAI 规则相同：
 

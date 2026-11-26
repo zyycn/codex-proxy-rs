@@ -642,15 +642,8 @@ async fn initial_quota_recovery_delivers_client_projection_instead_of_upstream_s
 
 #[tokio::test]
 async fn initial_continuation_recovery_delivers_the_official_client_replay_signal() {
-    let provider = ProviderError::new(
-        ProviderErrorKind::ContinuationRecoveryRequired,
-        UpstreamSendState::NotSent,
-    )
-    .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
-        "Previous response was not found. Retrying the full request.",
-        Some("previous_response_not_found".to_owned()),
-        Some("invalid_request_error".to_owned()),
-    ));
+    let provider =
+        ProviderError::responses_replay_required("scope_unavailable", UpstreamSendState::NotSent);
     let error = initial_error(EngineError::Provider(provider), Vec::new()).await;
     assert_eq!(error["type"], "error");
     assert_eq!(error["status"], 400);

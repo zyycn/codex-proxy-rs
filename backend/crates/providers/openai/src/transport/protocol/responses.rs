@@ -28,13 +28,8 @@ fn explicit_guardian_role<'a>(
     }
 }
 
-/// 官方 Codex 客户端据此触发完整历史重放的稳定错误码
-pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_CODE: &str = "previous_response_not_found";
 /// Responses WebSocket 用于回传同一 turn 不透明状态的官方 client metadata 键
 pub(crate) const X_CODEX_TURN_STATE_CLIENT_METADATA_KEY: &str = "x-codex-turn-state";
-/// 本地生成 history unavailable 错误时使用的官方提示文本
-pub(crate) const PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE: &str =
-    "Previous response was not found. Retrying the full request.";
 /// Codex 自动审批（Guardian）请求声明的子代理类型
 const GUARDIAN_SUBAGENT_KIND: &str = "guardian";
 /// 分组显式覆盖后的档位；强制加速仅使用所选账号对该模型的目录声明

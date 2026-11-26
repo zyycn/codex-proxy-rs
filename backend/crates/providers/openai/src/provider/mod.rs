@@ -80,9 +80,8 @@ use crate::transport::diagnostics::{
     CodexFailureCategory, CodexUpstreamFailure, CodexUpstreamSendPhase,
 };
 use crate::transport::protocol::responses::{
-    CodexResponsesRequest, PREVIOUS_RESPONSE_NOT_FOUND_CODE, PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
-    PreviousResponseScope, ResponseEventSignals, TransportRequirement, fast_policy_tier,
-    transport_requirement,
+    CodexResponsesRequest, PreviousResponseScope, ResponseEventSignals, TransportRequirement,
+    fast_policy_tier, transport_requirement,
 };
 use crate::transport::request::{
     CodexRequestEncodeError, RequestAccountScope, align_structured_location_fields,

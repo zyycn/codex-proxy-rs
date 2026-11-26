@@ -715,17 +715,10 @@ async fn session_policy_rejection_returns_bad_request_with_the_policy_code() {
 
 #[tokio::test]
 async fn continuation_recovery_should_preserve_the_official_retry_signal() {
-    let error = GatewayError::from_provider(
-        &ProviderError::new(
-            ProviderErrorKind::ContinuationRecoveryRequired,
-            UpstreamSendState::NotSent,
-        )
-        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
-            "Previous response was not found. Retrying the full request.",
-            Some("previous_response_not_found".to_owned()),
-            Some("invalid_request_error".to_owned()),
-        )),
-    );
+    let error = GatewayError::from_provider(&ProviderError::responses_replay_required(
+        "scope_unavailable",
+        UpstreamSendState::NotSent,
+    ));
 
     let response = gateway_error_response(&error);
     let status = response.status();

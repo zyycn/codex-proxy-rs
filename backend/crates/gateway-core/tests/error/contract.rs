@@ -198,15 +198,8 @@ fn gateway_error_should_keep_client_visible_upstream_fields_out_of_safe_diagnost
 
 #[test]
 fn continuation_recovery_should_keep_its_internal_classification_and_client_contract() {
-    let error = ProviderError::new(
-        ProviderErrorKind::ContinuationRecoveryRequired,
-        UpstreamSendState::NotSent,
-    )
-    .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
-        "Previous response was not found. Retrying the full request.",
-        Some("previous_response_not_found".to_owned()),
-        Some("invalid_request_error".to_owned()),
-    ));
+    let error =
+        ProviderError::responses_replay_required("scope_unavailable", UpstreamSendState::NotSent);
     let gateway = GatewayError::from_provider(&error);
 
     assert_eq!(error.kind().as_str(), "continuation_recovery_required");

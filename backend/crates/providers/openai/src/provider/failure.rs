@@ -692,16 +692,10 @@ pub(super) fn continuation_replay_required_error(reason: &'static str) -> Provid
 }
 
 fn continuation_replay_error(reason: &'static str, send_state: UpstreamSendState) -> ProviderError {
-    ProviderError::new(ProviderErrorKind::ContinuationRecoveryRequired, send_state)
-    .with_continuation_failure(ContinuationFailure::HistoryUnavailable)
-    .with_continuation_recovery_disposition(
-        ContinuationRecoveryDisposition::ClientReplayRequired,
-    )
-    .with_continuation_unavailable_reason(reason)
+    ProviderError::responses_replay_required(reason, send_state)
     .with_diagnostic(ProviderDiagnostic::new(
         "previous response is unavailable in the selected upstream scope; client replay is required",
     ))
-    .with_client_visible_upstream_error(continuation_replay_error_detail())
     .with_client_visible_upstream_response(continuation_replay_response(Vec::new()))
 }
 
@@ -764,14 +758,16 @@ pub(super) fn continuation_recovery_error(
             ContinuationRecoveryDisposition::ClientReplayRequired,
         )
         .with_continuation_unavailable_reason("quota_exhausted")
-        .with_client_visible_upstream_error(continuation_replay_error_detail())
+        .with_client_visible_upstream_error(
+            ClientVisibleUpstreamError::previous_response_not_found(),
+        )
         .with_client_visible_upstream_response(continuation_replay_response(headers))
 }
 
 fn continuation_replay_response(
     headers: Vec<ProviderResponseHeader>,
 ) -> ClientVisibleUpstreamResponse {
-    let detail = continuation_replay_error_detail();
+    let detail = ClientVisibleUpstreamError::previous_response_not_found();
     let body = json!({"error": {
         "message": detail.message(),
         "code": detail.code(),
@@ -783,14 +779,6 @@ fn continuation_replay_response(
         Bytes::from(body.to_string()),
     )
     .with_headers(headers)
-}
-
-fn continuation_replay_error_detail() -> ClientVisibleUpstreamError {
-    ClientVisibleUpstreamError::new(
-        PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
-        Some(PREVIOUS_RESPONSE_NOT_FOUND_CODE.to_owned()),
-        Some("invalid_request_error".to_owned()),
-    )
 }
 
 pub(super) fn map_stream_error(error: CodexClientError) -> MappedProviderFailure {

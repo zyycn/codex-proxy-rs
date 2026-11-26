@@ -70,11 +70,7 @@ impl ConnectionReplaySnapshot {
             return ForwardOutcome::Continue;
         };
         self.provider_state = capture.provider_state.take();
-        let reconnect = delivered == Some(&id)
-            && self
-                .provider_state
-                .as_ref()
-                .is_some_and(ProviderSessionState::prefers_websocket_reconnect);
+        let reconnect = delivered == Some(&id) && capture.reconnect_websocket;
         self.last_response_id = Some(id);
         if reconnect {
             ForwardOutcome::ReconnectIfIdle
@@ -88,6 +84,7 @@ impl ConnectionReplaySnapshot {
 pub(super) struct ReplayCapture {
     response_id: Option<String>,
     provider_state: Option<ProviderSessionState>,
+    reconnect_websocket: bool,
 }
 
 pub(super) type ReplayCaptureHandle = Arc<Mutex<ReplayCapture>>;
@@ -476,7 +473,7 @@ struct WebSocketExecutionBody {
     encoder: OpenAiResponsesEncoder,
     validation: ResponseValidationFacts,
     pending: VecDeque<MiddlewareFrame>,
-    provider_state: Option<ProviderSessionState>,
+    pending_replay: ReplayCapture,
     request_id: Arc<str>,
     capture: ReplayCaptureHandle,
     batch_pending: bool,
@@ -498,7 +495,7 @@ impl WebSocketExecutionBody {
             encoder: OpenAiResponsesEncoder::new(),
             validation,
             pending: VecDeque::new(),
-            provider_state: None,
+            pending_replay: ReplayCapture::default(),
             request_id,
             capture,
             batch_pending: false,
@@ -541,8 +538,9 @@ impl WebSocketExecutionBody {
                             .capture
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        capture.response_id = self.encoder.response_id().map(str::to_owned);
-                        capture.provider_state = self.provider_state.take();
+                        self.pending_replay.response_id =
+                            self.encoder.response_id().map(str::to_owned);
+                        *capture = std::mem::take(&mut self.pending_replay);
                         drop(capture);
                         self.execution.disarm();
                         self.finished = true;
@@ -595,8 +593,9 @@ impl WebSocketExecutionBody {
                 self.validation.observe_event(&event);
                 let transformed = self.transformed_pending || event.middleware_transformed();
                 if let Some(update) = event.take_session_update() {
-                    self.provider_state = Some(update);
+                    self.pending_replay.provider_state = Some(update);
                 }
+                self.pending_replay.reconnect_websocket |= event.prefers_websocket_reconnect();
                 let encoded = self.encoder.push_websocket(&event);
                 if encoded.is_empty() {
                     self.transformed_pending = transformed;

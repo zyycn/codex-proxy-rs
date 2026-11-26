@@ -5462,12 +5462,11 @@ async fn check_request_size_fallback(advertised: bool) {
                 let mut completed = false;
                 while let Some(event) = stream.next().await {
                     let event = event.unwrap();
-                    if let Some(state) = event.session_update() {
-                        assert_eq!(state.prefers_websocket_reconnect(), index == 0);
-                    }
-                    completed |= event
+                    let terminal = event
                         .wire_event()
                         .is_some_and(|wire| wire.event_type() == Some("response.completed"));
+                    assert_eq!(event.prefers_websocket_reconnect(), terminal && index == 0);
+                    completed |= terminal;
                 }
                 assert!(completed);
             }
@@ -5742,12 +5741,12 @@ async fn oversized_websocket_http_response_continues_with_client_tool_history_re
         if let Some(wire) = event.wire_event()
             && wire.event_type() == Some("response.completed")
         {
+            assert!(event.prefers_websocket_reconnect());
             output = wire.data().pointer("/response/output").cloned();
         }
     }
     drop(first);
     let state = state.expect("HTTP response publishes replay requirement");
-    assert!(state.prefers_websocket_reconnect());
     assert_eq!(state.payload()["continuation_scope"], "replay_required");
     let tool_output =
         json!({"type": "function_call_output", "call_id": "call_large", "output": "done"});
