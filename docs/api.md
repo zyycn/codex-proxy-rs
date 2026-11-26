@@ -1884,7 +1884,7 @@ Google 授权后，将浏览器中的完整 `http://localhost:8085/auth/callback
 
 其余字段记录导出时已保存的凭据和账号观测，未知值省略；`createdAt`、`updatedAt` 是本地账号时间，`accessTokenExpiresAt` 是当前 AT 的有效期。导出不触发上游刷新，已过期 AT 也按原值记录。导入使用 RT 换取新 AT 并重新验证 Google 身份与权限，套餐由上游重新发现，文件中的历史观测不覆盖验证结果。出站代理通过导入请求的 `outboundProxyId` 指定
 
-Antigravity 主动额度刷新同时读取套餐与上游模型组额度，优先采用明确的付费套餐。`g1-pro-tier`、`g1-ultra-tier` 分别显示为 `Google AI Pro`、`Google AI Ultra`，缺少套餐不推断为免费账号
+Antigravity 主动额度刷新同时读取套餐与上游模型组额度，优先采用明确的付费套餐。`free-tier`、`g1-pro-tier`、`g1-ultra-tier` 分别显示为 `FREE`、`PRO`、`ULTRA`，未知或缺失的套餐不推断为免费账号
 
 `quota.windows` 返回上游模型组的 5 小时与周额度、已用百分比及重置时间，同组窗口共享 `limitId`，`accountWide` 为 `false`。缺失的上游百分比保持未知。网关从额度分组的成员名单与同次模型目录确定模型 ID，按各窗口重置时间与时长汇总本地请求的 `localUsage`。无匹配请求时总 Token 为 0，成员或窗口边界无法确认时 `localUsage` 为空。账号 `usage` 单独返回近一周的本地用量，分组窗口不参与整号周/月容量预测
 

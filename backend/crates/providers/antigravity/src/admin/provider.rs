@@ -78,8 +78,9 @@ impl ProviderAdmin for AntigravityAdmin {
     }
     fn plan_type_display(&self, plan: &str) -> String {
         match plan {
-            "g1-pro-tier" => "Google AI Pro",
-            "free-tier" => "Antigravity",
+            "free-tier" => "FREE",
+            "g1-pro-tier" => "PRO",
+            "g1-ultra-tier" => "ULTRA",
             _ => plan,
         }
         .to_owned()
