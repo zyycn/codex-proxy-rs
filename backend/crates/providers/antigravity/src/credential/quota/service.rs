@@ -250,13 +250,13 @@ impl QuotaService {
         &self,
         cancel: &CancellationToken,
     ) -> Result<(), WorkerTaskError> {
-        let mut accounts = self
+        let accounts = self
             .accounts
             .list_for_provider(&self.kind, false)
             .await
             .map_err(|e| WorkerTaskError::safe("读取 Antigravity 账号失败").with_source(e))?;
         let ids: Vec<_> = accounts.iter().map(|a| a.id().clone()).collect();
-        let observations: BTreeMap<_, _> = self
+        let mut observations: BTreeMap<_, _> = self
             .accounts
             .get_quota_versions(&ids)
             .await
@@ -264,37 +264,67 @@ impl QuotaService {
             .into_iter()
             .map(|o| (o.account_id.clone(), o))
             .collect();
-        accounts.retain(|a| {
-            a.enabled()
-                && a.authentication_kind() == "oauth"
-                && observations.get(a.id()).is_none_or(|o| {
-                    o.credential_revision != a.revision()
-                        || o.observed_at.elapsed().unwrap_or_default() >= Duration::from_secs(300)
-                        || (a.quota().is_exhausted()
-                            && a.quota()
-                                .reset_at()
-                                .is_some_and(|reset| reset <= SystemTime::now()))
-                })
-        });
-        if accounts.is_empty() {
-            return Ok(());
+        let now = SystemTime::now();
+        let interval = Duration::from_secs(300);
+        let stale_before = now - interval;
+        let mut due = Vec::new();
+        let mut stale = Vec::new();
+        for account in accounts
+            .iter()
+            .filter(|a| a.enabled() && a.authentication_kind() == "oauth")
+        {
+            let snapshot = observations
+                .remove(account.id())
+                .filter(|s| s.credential_revision == account.revision());
+            match snapshot {
+                None => due.push(account.id().clone()),
+                Some(_) if account.quota().exhaustion_refresh_due(now, interval) => {
+                    due.push(account.id().clone())
+                }
+                Some(s) if !account.quota().is_exhausted() && s.observed_at <= stale_before => {
+                    stale.push(s)
+                }
+                Some(_) => {}
+            }
         }
-        accounts.sort_by(|a, b| a.id().cmp(b.id()));
-        let offset = self.cursor.fetch_add(32, Ordering::Relaxed) % accounts.len();
-        accounts.rotate_left(offset);
-        accounts.truncate(32);
-        let mut results = stream::iter(accounts).map(|a| async move { tokio::select! { biased; _ = cancel.cancelled() => Ok(()), result = self.refresh(a.id()) => result } }).buffer_unordered(4);
-        let mut failure = None;
+        let mut outcome = Ok(());
+        if !stale.is_empty() {
+            // 用量读取失败时，独立执行已选出的首查和耗尽复查
+            match self.accounts.accounts_used_since_quota(&stale).await {
+                Ok(active) => due.extend(active),
+                Err(e) => {
+                    outcome =
+                        Err(WorkerTaskError::safe("读取 Antigravity 账号使用记录失败")
+                            .with_source(e))
+                }
+            }
+        }
+        if due.is_empty() {
+            return outcome;
+        }
+        due.sort_unstable();
+        let offset = self.cursor.fetch_add(32, Ordering::Relaxed) % due.len();
+        due.rotate_left(offset);
+        due.truncate(32);
+        let mut results = stream::iter(due)
+            .map(|id| async move {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => Ok(()),
+                    result = self.refresh(&id) => result,
+                }
+            })
+            .buffer_unordered(4);
         while let Some(result) = results.next().await {
             if let Err(e) = result
                 && !matches!(e.kind(), Kind::Conflict | Kind::CredentialRefreshRequired)
+                && outcome.is_ok()
             {
-                failure.get_or_insert(e);
+                outcome =
+                    Err(WorkerTaskError::safe("部分 Antigravity 额度刷新失败").with_source(e));
             }
         }
-        failure.map_or(Ok(()), |e| {
-            Err(WorkerTaskError::safe("部分 Antigravity 额度刷新失败").with_source(e))
-        })
+        outcome
     }
 }
 

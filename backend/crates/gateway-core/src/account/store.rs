@@ -160,6 +160,14 @@ pub trait ProviderAccountStore: Send + Sync {
             .collect())
     }
 
+    /// 批量返回在各自额度快照之后有成功生成请求完成的账号
+    async fn accounts_used_since_quota(
+        &self,
+        _snapshots: &[QuotaObservationVersion],
+    ) -> Result<Vec<ProviderAccountId>, StoreError> {
+        Err(StoreError::new(crate::error::StoreErrorKind::InvalidData))
+    }
+
     async fn compare_and_swap_quota(
         &self,
         observation: QuotaObservation,

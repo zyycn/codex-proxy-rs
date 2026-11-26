@@ -19,6 +19,35 @@ pub(in crate::postgres::provider_accounts) async fn versions(
         .map_err(crate::core_store_error)
 }
 
+pub(in crate::postgres::provider_accounts) async fn accounts_used_since_quota(
+    repository: &PgProviderAccountRepository,
+    snapshots: &[QuotaObservationVersion],
+) -> Result<Vec<CoreProviderAccountId>, CoreStoreError> {
+    let (ids, times): (Vec<_>, Vec<_>) = snapshots
+        .iter()
+        .map(|s| (s.account_id.as_str(), DateTime::<Utc>::from(s.observed_at)))
+        .unzip();
+    // 按账号与完成时间探测共享索引，跨实例及重启复用已记录的请求事实
+    let active: Vec<String> = sqlx::query_scalar(
+        "select s.id from unnest($1::text[], $2::timestamptz[]) as s(id, observed_at)
+             where exists (select 1 from request_analytics_facts r
+                 where r.provider_account_ref = s.id and r.completed_at > s.observed_at
+                 and r.outcome = 'succeeded' and r.operation = 'generate')",
+    )
+    .bind(ids)
+    .bind(times)
+    .fetch_all(&repository.pool)
+    .await
+    .map_err(database_error)?;
+    active
+        .into_iter()
+        .map(|id| {
+            CoreProviderAccountId::new(id)
+                .map_err(|e| CoreStoreError::caused_by(CoreStoreErrorKind::InvalidData, e))
+        })
+        .collect()
+}
+
 pub(in crate::postgres::provider_accounts) async fn write(
     repository: &PgProviderAccountRepository,
     observation: QuotaObservation,

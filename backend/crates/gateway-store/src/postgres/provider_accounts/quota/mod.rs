@@ -5,6 +5,6 @@ mod forecast;
 mod history;
 mod warmup;
 
-pub(super) use document::{versions, write};
+pub(super) use document::{accounts_used_since_quota, versions, write};
 pub(super) use forecast::load_history;
 pub(super) use history::documents;

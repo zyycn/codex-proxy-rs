@@ -16,6 +16,86 @@ async fn upstream(server: &MockServer, remaining: serde_json::Value, delay: Dura
 }
 
 #[tokio::test]
+async fn background_refresh_requires_new_generation_and_an_aged_snapshot() {
+    let server = MockServer::start().await;
+    upstream(&server, json!(0.5), Duration::ZERO).await;
+    let f = Fixture::new(&server.uri());
+    let account = f.store.primary();
+    let cancel = CancellationToken::new();
+    f.quota.reconcile(&cancel).await.unwrap();
+    let initial = account.quota.lock().unwrap().clone().unwrap();
+    let queries = || async {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.url.path() == "/v1internal:retrieveUserQuotaSummary")
+            .count()
+    };
+    assert_eq!(queries().await, 1);
+
+    *account.last_generation.lock().unwrap() = Some(SystemTime::now());
+    f.quota.reconcile(&cancel).await.unwrap();
+    assert_eq!(queries().await, 1);
+
+    let old = initial.observed_at - Duration::from_secs(900);
+    account.quota.lock().unwrap().as_mut().unwrap().observed_at = old;
+    *account.last_generation.lock().unwrap() = Some(old - Duration::from_secs(1));
+    f.quota.read(&initial.account_id).await.unwrap();
+    f.quota.reconcile(&cancel).await.unwrap();
+    assert_eq!(queries().await, 1);
+
+    *account.last_generation.lock().unwrap() = Some(SystemTime::now());
+    f.quota.reconcile(&cancel).await.unwrap();
+    f.quota.reconcile(&cancel).await.unwrap();
+    assert_eq!(queries().await, 2);
+    f.quota.refresh(&initial.account_id).await.unwrap();
+    assert_eq!(queries().await, 3);
+}
+
+#[tokio::test]
+async fn exhausted_quota_is_rechecked_when_due_even_without_generation() {
+    use gateway_core::account::QuotaEvidence;
+    let server = MockServer::start().await;
+    upstream(&server, json!(0.5), Duration::ZERO).await;
+    let f = Fixture::new(&server.uri());
+    let account = f.store.primary();
+    let cancel = CancellationToken::new();
+    f.quota.reconcile(&cancel).await.unwrap();
+    let now = SystemTime::now();
+    let old = now - Duration::from_secs(600);
+    for (observed, reset, due) in [
+        (old, Some(now + Duration::from_secs(300)), false),
+        (old, Some(now), true),
+        (now, None, false),
+        (old, None, true),
+    ] {
+        {
+            let mut loaded = account.loaded.lock().unwrap();
+            loaded.account = loaded.account.clone().with_account_facts(
+                true,
+                CredentialState::Ready,
+                QuotaState::exhausted(QuotaEvidence::UsageLimitReached, observed, reset),
+                None,
+                None,
+            );
+        }
+        f.quota.reconcile(&cancel).await.unwrap();
+        assert_eq!(
+            account
+                .loaded
+                .lock()
+                .unwrap()
+                .account
+                .quota()
+                .is_exhausted(),
+            !due
+        );
+    }
+}
+
+#[tokio::test]
 async fn quota_and_catalog_refresh_use_current_global_identity() {
     let server = MockServer::start().await;
     upstream(&server, json!(0.5), Duration::ZERO).await;
@@ -191,6 +271,16 @@ async fn failed_or_stale_refresh_preserves_persisted_quota() {
     let cancelled = CancellationToken::new();
     cancelled.cancel();
     f.quota.reconcile(&cancelled).await.unwrap();
+    f.quota.reconcile(&CancellationToken::new()).await.unwrap();
+    assert_eq!(
+        f.quota
+            .read(account.id())
+            .await
+            .unwrap()
+            .plan_type
+            .as_deref(),
+        Some("g1-pro-tier")
+    );
 }
 
 #[tokio::test]

@@ -401,6 +401,13 @@ impl ProviderAccountStore for PgProviderAccountRepository {
         super::quota::versions(self, accounts).await
     }
 
+    async fn accounts_used_since_quota(
+        &self,
+        snapshots: &[gateway_core::account::QuotaObservationVersion],
+    ) -> Result<Vec<CoreProviderAccountId>, CoreStoreError> {
+        super::quota::accounts_used_since_quota(self, snapshots).await
+    }
+
     async fn apply_quota_access(
         &self,
         change: QuotaAccessChange,

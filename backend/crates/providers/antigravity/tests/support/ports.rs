@@ -594,6 +594,22 @@ impl ProviderAccountStore for MemoryPorts {
         *quota = Some(observation);
         Ok(QuotaWriteOutcome::Updated)
     }
+    async fn accounts_used_since_quota(
+        &self,
+        snapshots: &[QuotaObservationVersion],
+    ) -> Result<Vec<ProviderAccountId>, StoreError> {
+        Ok(snapshots
+            .iter()
+            .filter(|s| {
+                self.accounts[&s.account_id]
+                    .last_generation
+                    .lock()
+                    .unwrap()
+                    .is_some_and(|at| at > s.observed_at)
+            })
+            .map(|s| s.account_id.clone())
+            .collect())
+    }
     async fn touch_quota_observation(
         &self,
         _touch: QuotaObservationTouch,

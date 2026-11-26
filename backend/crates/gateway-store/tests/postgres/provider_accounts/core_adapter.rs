@@ -3,6 +3,56 @@
 use super::*;
 
 #[tokio::test]
+async fn quota_activity_uses_successful_generation_completion_after_each_snapshot() {
+    use gateway_core::account::QuotaObservationVersion;
+    let Some(database) = TestDatabase::create("quota_generation_activity").await else {
+        return;
+    };
+    let repo = PgProviderAccountRepository::new(database.pool.clone());
+    let start = Utc::now() - TimeDelta::minutes(10);
+    let mut snapshots = Vec::new();
+    for (name, operation, outcome, offset_ms) in [
+        ("acct_active", "generate", "succeeded", 500),
+        ("acct_observed", "generate", "succeeded", 1000),
+        ("acct_count", "count_tokens", "succeeded", 0),
+        ("acct_failed", "generate", "failed", 0),
+    ] {
+        seed_model_request(
+            &database.pool,
+            ModelRequestSeed {
+                request_id: name,
+                account_id: name,
+                provider_kind: "antigravity",
+                model: "fixture-model",
+                total_tokens: 5,
+                cost_amount: "0",
+                started_at: start,
+            },
+        )
+        .await
+        .unwrap();
+        sqlx::query("update model_requests set operation=$2, outcome=$3 where id=$1")
+            .bind(name)
+            .bind(operation)
+            .bind(outcome)
+            .execute(&database.pool)
+            .await
+            .unwrap();
+        snapshots.push(QuotaObservationVersion {
+            account_id: ProviderAccountId::new(name).unwrap(),
+            credential_revision: CredentialRevision::new(1).unwrap(),
+            observed_at: (start + TimeDelta::milliseconds(offset_ms)).into(),
+        });
+    }
+    super::super::drain_analytics(&database.pool).await;
+    assert_eq!(
+        repo.accounts_used_since_quota(&snapshots).await.unwrap(),
+        vec![ProviderAccountId::new("acct_active").unwrap()]
+    );
+    database.close().await;
+}
+
+#[tokio::test]
 async fn scoped_account_list_empty_scope_does_not_use_database() {
     let pool = sqlx::postgres::PgPoolOptions::new()
         .connect_lazy("postgres://test:test@localhost/test")
