@@ -598,7 +598,7 @@ GenAI 模型目录通过 Core 的原生操作路由判断过滤冻结账号范�
 
 Antigravity 目录声明原生 GenAI 和 Chat 转换能力，Responses、Messages 不借用 Chat 能力进入该平台。
 `provider/chat.rs` 装配 Chat ↔ GenAI 直接转换；`transport` 负责 Cloud Code 封装、原生 wire 与调用事实，
-并按冻结画像统一替换 AGY 系统指令。默认提示和可编辑配置归 Provider 的 `profile`，纯协议层不持有 AGY 身份规则
+并将冻结画像的提示词前置到客户端系统指令，保留客户端规则、工具说明和工作区上下文。默认提示和可编辑配置归 Provider 的 `profile`，纯协议层不持有 AGY 身份规则
 
 Antigravity 的业务头使用 API 保留的不透明多值字节，transport 统一执行账号身份、HTTP 传输及切号追踪头过滤。选号阶段从原会话绑定和 Core 的账号归属冻结切号事实，认领冲突后重新读取，不从重试排除集合推测归属
 

@@ -1,4 +1,4 @@
-//! 只改写 Cloud Code 身份字段，其他字段直接复制原始 JSON 字节
+//! 合成系统提示并改写 Cloud Code 身份字段，其他字段保留原始 JSON 字节
 
 use serde::{
     Deserialize, Deserializer,
@@ -16,6 +16,7 @@ pub(super) fn request_body(
 ) -> Result<Box<RawValue>, ProviderError> {
     let rewrite = || {
         let raw: &RawValue = serde_json::from_slice(body)?;
+        let instruction = prepend_system_prompt(raw, instruction)?;
         edit_object(
             raw,
             |name, value| {
@@ -59,10 +60,49 @@ pub(super) fn request_body(
                 }
                 Ok(Edit::Keep)
             },
-            Some(("systemInstruction", instruction)),
+            Some(("systemInstruction", &instruction)),
         )
     };
     rewrite().map_err(|error| unsent(ProviderErrorKind::InvalidRequest).with_source(error))
+}
+
+fn prepend_system_prompt(
+    request: &RawValue,
+    prompt: &RawValue,
+) -> Result<Box<RawValue>, serde_json::Error> {
+    let Fields(fields) = serde_json::from_str(request.get())?;
+    let client = ["systemInstruction", "system_instruction"]
+        .into_iter()
+        .find_map(|key| {
+            fields
+                .iter()
+                .rev()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| *value)
+        });
+    let Some(client) = client.filter(|value| value.get() != "null") else {
+        return Ok(prompt.to_owned());
+    };
+    #[derive(Deserialize)]
+    struct Content<'a> {
+        #[serde(default, borrow)]
+        parts: Vec<&'a RawValue>,
+    }
+    let mut parts = serde_json::from_str::<Content<'_>>(prompt.get())?.parts;
+    // 客户端系统指令还包含规则、工具说明和工作区上下文，不能按身份提示整体替换
+    parts.extend(serde_json::from_str::<Content<'_>>(client.get())?.parts);
+    let parts = serde_json::value::to_raw_value(&parts)?;
+    edit_object(
+        client,
+        |name, _| {
+            Ok(if name == "parts" {
+                Edit::Remove
+            } else {
+                Edit::Keep
+            })
+        },
+        Some(("parts", &parts)),
+    )
 }
 
 enum Edit {
