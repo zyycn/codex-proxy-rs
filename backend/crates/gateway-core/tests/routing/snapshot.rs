@@ -113,7 +113,12 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
             ProviderModel::new(
                 provider.clone(),
                 UpstreamModelId::new("family").unwrap(),
-                caps().with_reasoning_variants(variants),
+                caps()
+                    .with_reasoning_variants(variants)
+                    .with_dedicated_web_search(BTreeMap::from([(
+                        declared.clone(),
+                        UpstreamModelId::new("search").unwrap(),
+                    )])),
             )
             .with_presentation(
                 ModelPresentation::default()
@@ -184,6 +189,34 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
         ),
         Err(RoutingError::GroupModelDenied)
     ));
+    let native_search = Operation::Generate(
+        GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(
+                "genai",
+                serde_json::json!({"tools":[{"googleSearch":{}}]})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap()
+            .with_context(
+                serde_json::json!({"stream":false})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .requiring_native_protocol(),
+    );
+    assert!(matches!(
+        snapshot.plan(
+            &PublicModelId::new("alias").unwrap(),
+            &native_search,
+            scope.clone(),
+            &RoutingContext::default()
+        ),
+        Err(RoutingError::GroupModelDenied)
+    ));
     let old_account =
         Arc::new(scope.restricted_to(&BTreeSet::new(), &BTreeSet::from([other.clone()])));
     assert!(matches!(
@@ -242,7 +275,31 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
         Arc::clone(scope.directory()),
         ClientRoutingScope::all_accounts(),
     );
+    let routed = snapshot
+        .plan(
+            &base,
+            &native_search,
+            Arc::new(all.clone()),
+            &RoutingContext::default(),
+        )
+        .unwrap();
+    let [target] = routed.candidates() else {
+        panic!("one search target across multiple allowed members")
+    };
+    assert_eq!(target.upstream_model().unwrap().as_str(), "search");
+    assert!(target.account_scope().allows(&declared));
+    assert!(!target.account_scope().allows(&other));
+    assert!(!target.account_scope().allows(&high_only));
     let only_high_scope = all.restricted_to(&BTreeSet::new(), &BTreeSet::from([high_only]));
+    assert!(matches!(
+        snapshot.plan(
+            &base,
+            &native_search,
+            Arc::new(only_high_scope.clone()),
+            &RoutingContext::default()
+        ),
+        Err(RoutingError::WebSearchUnavailable)
+    ));
     let only_high = snapshot.public_model_profiles_for_scope(&only_high_scope);
     assert_eq!(only_high.len(), 2);
     for profile in only_high {

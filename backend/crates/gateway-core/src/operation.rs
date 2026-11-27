@@ -923,7 +923,7 @@ impl Operation {
         }
     }
 
-    /// Responses 要求本轮执行托管搜索时，按账号快照选择搜索目标
+    /// 请求强制执行托管搜索时，按账号目录选择搜索目标
     #[must_use]
     pub fn requires_web_search(&self) -> bool {
         matches!(self, Self::Generate(request) if {
@@ -933,6 +933,16 @@ impl Operation {
                 gateway_protocol::chat_completions::CHAT_PROTOCOL => payload.body().get("web_search_options").is_some_and(serde_json::Value::is_object),
                 _ => false,
             }
+        })
+    }
+
+    /// 原生单次搜索可通过账号的搜索目标解析未选档的模型组
+    #[must_use]
+    pub fn is_native_web_search(&self) -> bool {
+        matches!(self, Self::Generate(request) if {
+            let payload = request.protocol_payload();
+            payload.protocol() == gateway_protocol::genai::GENAI_PROTOCOL
+                && gateway_protocol::genai::is_standalone_web_search(payload.body(), payload.context())
         })
     }
 

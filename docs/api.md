@@ -252,7 +252,9 @@ OpenAI Provider 的 OAuth 账号使用 Responses 上游，API Key 账号通过 `
 
 客户端用 `Authorization: Bearer <Client Key>` 或 `x-goog-api-key: <Client Key>` 访问以下 GenAI 短路径。模型名取自 URL，入口只在当前 Key 的账号范围内选择声明 GenAI 协议的原生模型。目前由 Antigravity 使用 OAuth 账号查询上游项目和可用模型。目录与凭据版本绑定，调度选定账号后，网关把原生正文、项目和模型发送到该注册对应的资源服务。个人账号的登录可用性见下文的 Antigravity OAuth。
 
-上游目录声明的模型分组支持使用基础模型名，并通过 `generationConfig.thinkingConfig.thinkingLevel` 指定档位，例如 `gemini-4-hydrogen` 配合 `MEDIUM`。网关只选择该账号目录明确列出的分组成员，账号和分组模型限制按最终型号校验；目录中至少有一个可访问档位时才显示基础模型名。缺少或不支持的档位返回 400，显式完整型号及指向完整型号的模型映射保持原目标。分组能力随上游目录刷新，旧缓存未包含分组时仍只提供完整型号
+上游目录声明的模型分组支持使用基础模型名，并通过 `generationConfig.thinkingConfig.thinkingLevel` 指定档位，例如 `gemini-4-hydrogen` 配合 `MEDIUM`。网关只选择该账号目录明确列出的分组成员，账号和分组模型限制按最终型号校验；目录中至少有一个可访问档位时才显示基础模型名。普通生成和计数缺少或不支持的档位时返回 400。显式完整型号及指向完整型号的模型映射保持原目标。分组能力随上游目录刷新，旧缓存未包含分组时仍只提供完整型号
+
+使用分组名调用 `generateContent` 时，若唯一工具为 `googleSearch` 且未指定 `thinkingConfig`，网关使用所选账号目录中 `webSearchModelIds` 的首个搜索型号，保留搜索选项。同一账号及授权分组须同时允许至少一个具体分组成员和该搜索型号
 
 | 方法 | 路径 | 交付 |
 | --- | --- | --- |

@@ -656,6 +656,7 @@ pub struct DirectAccountModel<'a> {
 /// 已绑定 Provider 的请求候选；模型端点携带真实上游模型，原生端点不虚构模型
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCandidate {
+    dedicated_web_search: bool,
     provider: ProviderKind,
     requires_direct_authentication: bool,
     upstream_model: Option<UpstreamModelId>,
@@ -664,6 +665,12 @@ pub struct ProviderCandidate {
 }
 
 impl ProviderCandidate {
+    /// 搜索目标和账号范围已经由目录解析，Provider 依此选择上游请求类型
+    #[must_use]
+    pub const fn uses_dedicated_web_search(&self) -> bool {
+        self.dedicated_web_search
+    }
+
     /// 模型按直连账号身份选择，Provider 必须在发送前核对实际凭据。
     #[must_use]
     pub const fn requires_direct_authentication(&self) -> bool {

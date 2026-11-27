@@ -861,16 +861,11 @@ async fn unsupported_chat_search_options_fail_before_sending_and_release_the_lea
     use gateway_core::{
         engine::provider::ProviderRequest,
         operation::{GenerateRequest, Operation, ProtocolPayload},
+        routing::{PublicModelId, RoutingContext},
     };
     let upstream = MockServer::start().await;
     let fixture = Fixture::new(&upstream.uri());
-    {
-        let mut catalog = fixture.store.primary().catalog.lock().unwrap();
-        let (_, bytes) = catalog.as_mut().unwrap();
-        let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
-        value["webSearchModelIds"] = json!(["fixture-model"]);
-        *bytes = value.to_string().into();
-    }
+    let snapshot = search_snapshot(&fixture).await;
     for options in [
         json!({"user_location":{"type":"approximate","approximate":{"country":"US"}}}),
         json!({"search_context_size":"high"}),
@@ -880,11 +875,19 @@ async fn unsupported_chat_search_options_fail_before_sending_and_release_the_lea
             ProtocolPayload::json_object("chat_completions", body.as_object().unwrap().clone())
                 .unwrap(),
         ));
+        let plan = snapshot
+            .plan(
+                &PublicModelId::new("fixture-model").unwrap(),
+                &operation,
+                fixture.store.account_scope(),
+                &RoutingContext::default(),
+            )
+            .unwrap();
         let error = fixture
             .provider
             .clone()
             .execute(
-                ProviderRequest::new(operation, request(false).candidate().clone()),
+                ProviderRequest::new(operation, plan.candidates()[0].clone()),
                 context(frozen_profile(), CancellationToken::new()),
             )
             .await
@@ -905,21 +908,19 @@ async fn unsupported_chat_search_options_fail_before_sending_and_release_the_lea
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
 
-#[tokio::test]
-async fn chat_search_uses_catalog_target_and_delivers_grounded_terminal() {
+async fn search_snapshot(fixture: &Fixture) -> gateway_core::routing::RuntimeSnapshot {
     use gateway_core::{
-        engine::provider::ProviderRequest,
-        event::GatewayEvent,
-        operation::{GenerateRequest, Operation, ProtocolPayload},
-        routing::{ConfigRevision, ProviderModel, PublicModelId, RoutingContext, RuntimeSnapshot},
+        routing::{ConfigRevision, ProviderModel, RuntimeSnapshot},
         settings::SettingsValues,
     };
-    let server = MockServer::start().await;
-    let fixture = Fixture::new(&server.uri());
     {
         let mut catalog = fixture.store.primary().catalog.lock().unwrap();
         let (_, bytes) = catalog.as_mut().unwrap();
         let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        for level in ["low", "high"] {
+            value["models"][format!("family-{level}")] = json!({"displayName": level});
+        }
+        value["groupedModels"] = json!({"family":{"supportedThinkingLevels":[{"thinkingSuffix":"low"},{"thinkingSuffix":"high"}]}});
         value["webSearchModelIds"] = json!(["search-only", "not-selected"]);
         *bytes = value.to_string().into();
     }
@@ -930,7 +931,7 @@ async fn chat_search_uses_catalog_target_and_delivers_grounded_terminal() {
             .iter()
             .any(|m| m.upstream_model().as_str() == "search-only")
     );
-    let snapshot = RuntimeSnapshot::new(
+    RuntimeSnapshot::new(
         ConfigRevision::new(1).unwrap(),
         SettingsValues::new(1, "smart", Default::default(), None, None),
         vec![kind.clone()],
@@ -946,7 +947,115 @@ async fn chat_search_uses_catalog_target_and_delivers_grounded_terminal() {
             .collect(),
         vec![],
     )
-    .unwrap();
+    .unwrap()
+}
+
+#[tokio::test]
+async fn native_search_resolves_groups_and_preserves_explicit_models_and_grounding() {
+    use gateway_core::{
+        engine::provider::ProviderRequest,
+        operation::{GenerateRequest, Operation, ProtocolPayload},
+        routing::{PublicModelId, RoutingContext},
+        validation::RoutingError,
+    };
+    let server = MockServer::start().await;
+    let fixture = Fixture::new(&server.uri());
+    let snapshot = search_snapshot(&fixture).await;
+    let body = json!({
+        "contents":[{"role":"user","parts":[{"text":"Find the source"}]}],
+        "tools":[{"googleSearch":{"enhancedContent":{"imageSearch":{"maxResultCount":5}}}}],
+        "generationConfig":{"candidateCount":1}
+    });
+    let operation = |body: &serde_json::Value, stream| {
+        Operation::Generate(
+            GenerateRequest::from_protocol_payload(
+                ProtocolPayload::json_object("genai", body.as_object().unwrap().clone())
+                    .unwrap()
+                    .with_context(json!({"stream":stream}).as_object().unwrap().clone()),
+            )
+            .requiring_native_protocol(),
+        )
+    };
+    let plan = |model: &str, op: &Operation| {
+        snapshot.plan(
+            &PublicModelId::new(model).unwrap(),
+            op,
+            fixture.store.account_scope(),
+            &RoutingContext::default(),
+        )
+    };
+    let grounded = json!({"candidates":[{"content":{"parts":[{"text":"Found"}]},"finishReason":"STOP",
+        "groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://example.org/source"}}]}}]});
+    for (requested, target, kind) in [
+        ("family", "search-only", "web_search"),
+        ("family-low", "family-low", "agent"),
+    ] {
+        let op = operation(&body, false);
+        let route = plan(requested, &op).unwrap();
+        let [candidate] = route.candidates() else {
+            panic!("one eligible target")
+        };
+        Mock::given(path("/v1internal:generateContent"))
+            .and(body_partial_json(
+                json!({"model":target,"requestType":kind,"request":body}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"response":grounded})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let events = fixture
+            .provider
+            .clone()
+            .execute(
+                ProviderRequest::new(op, candidate.clone()),
+                context(frozen_profile(), CancellationToken::new()),
+            )
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        let wire = events
+            .iter()
+            .find_map(|event| event.wire_event()?.raw_json_body())
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(wire).unwrap(),
+            grounded
+        );
+        released(&fixture).await;
+    }
+    let mut mixed = body.clone();
+    mixed["tools"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"functionDeclarations":[{"name":"lookup"}]}));
+    let mut explicit = body.clone();
+    explicit["generationConfig"]["thinkingConfig"] = json!({"thinkingLevel":"UNSUPPORTED"});
+    for op in [
+        operation(&body, true),
+        operation(&mixed, false),
+        operation(&explicit, false),
+    ] {
+        assert!(matches!(
+            plan("family", &op),
+            Err(RoutingError::InvalidReasoningVariant)
+        ));
+    }
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn chat_search_uses_catalog_target_and_delivers_grounded_terminal() {
+    use gateway_core::{
+        engine::provider::ProviderRequest,
+        event::GatewayEvent,
+        operation::{GenerateRequest, Operation, ProtocolPayload},
+        routing::{PublicModelId, RoutingContext},
+    };
+    let server = MockServer::start().await;
+    let fixture = Fixture::new(&server.uri());
+    let snapshot = search_snapshot(&fixture).await;
     let body = json!({"model":"fixture-model","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"你好"}],"web_search_options":{}});
     let op = Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object("chat_completions", body.as_object().unwrap().clone())

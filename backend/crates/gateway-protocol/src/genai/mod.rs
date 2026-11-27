@@ -3,6 +3,7 @@
 mod request;
 mod response;
 
+pub use request::is_standalone_web_search;
 pub(crate) use request::{request_facts, thinking_level};
 pub use response::{
     GenerateContentObservation, GenerationFinish, UsageMetadata, has_finish_signal,

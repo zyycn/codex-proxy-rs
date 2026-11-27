@@ -49,6 +49,30 @@ pub(crate) fn request_facts(body: &Map<String, Value>, facts: &mut RequestFacts)
         });
 }
 
+/// 原生独立搜索使用单次 JSON 调用，工具声明中的搜索选项保留给上游
+#[must_use]
+pub fn is_standalone_web_search(body: &Map<String, Value>, context: &Map<String, Value>) -> bool {
+    if context.get("stream").and_then(Value::as_bool) != Some(false)
+        || thinking_config(body).is_some()
+    {
+        return false;
+    }
+    let Some([tool]) = body
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+    else {
+        return false;
+    };
+    tool.as_object().is_some_and(|tool| {
+        tool.len() == 1
+            && tool
+                .get("googleSearch")
+                .or_else(|| tool.get("google_search"))
+                .is_some_and(Value::is_object)
+    })
+}
+
 pub(crate) fn thinking_level(body: &Map<String, Value>) -> Option<&str> {
     field(thinking_config(body), "thinkingLevel", "thinking_level")?
         .as_str()

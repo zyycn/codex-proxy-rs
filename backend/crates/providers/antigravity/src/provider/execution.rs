@@ -41,7 +41,7 @@ impl AntigravityProvider {
         let started = Instant::now();
         let affinity =
             super::affinity::session_key(request.operation(), ctx.client_api_key_ref(), &model);
-        let search = request.operation().requires_web_search();
+        let search = request.candidate().uses_dedicated_web_search();
         let selected = self
             .select_account(&model, &ctx, affinity.as_ref(), search)
             .await?;
@@ -89,7 +89,8 @@ impl AntigravityProvider {
             Some(model.as_str().to_owned()),
             selected.account.id().clone(),
             Box::new(move |operation, headers| Box::pin(async move {
-                if operation.requires_web_search() != search {
+                let requests_search = operation.requires_web_search() || (search && operation.is_native_web_search());
+                if requests_search != search {
                     return Err(ProviderError::invalid_request("Middleware changed the required web search after model selection."));
                 }
                 let (operation, translator, count_translator) = if matches!(operation, Operation::CountTokens(_)) {
