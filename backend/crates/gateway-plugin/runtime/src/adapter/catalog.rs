@@ -93,6 +93,7 @@ pub(crate) async fn prepare(
             let p = model.presentation;
             Ok(ContributedModel {
                 owner: instance.id.clone(),
+                protocol: target.protocol.clone(),
                 id: PublicModelId::new(model.id)
                     .map_err(|_| AdminError::invalid("适配模型 ID 无效"))?,
                 provider: ProviderKind::new(target.provider.as_str())

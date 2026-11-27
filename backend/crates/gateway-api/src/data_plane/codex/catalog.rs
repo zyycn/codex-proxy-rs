@@ -1,6 +1,9 @@
 //! Codex 模型目录的原生对象保留、通用画像投影与客户端权限裁剪
 
-use crate::data_plane::{error::openai_error_response, service::DataPlaneService};
+use crate::data_plane::{
+    error::{catalog_unavailable_response, openai_error_response},
+    service::DataPlaneService,
+};
 use axum::{
     Json,
     http::StatusCode,
@@ -37,7 +40,7 @@ pub(crate) async fn model_catalog(
         .execution()
         .client_model_catalog(
             client,
-            "codex",
+            gateway_protocol::openai::OPENAI_PROTOCOL,
             version,
             context.as_ref().and_then(|ctx| ctx.extensions.peer_route()),
         )
@@ -80,16 +83,6 @@ pub(crate) async fn model_catalog(
         })),
     )
         .into_response()
-}
-
-fn catalog_unavailable_response() -> Response {
-    openai_error_response(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Model catalog is temporarily unavailable.",
-        "server_error",
-        "model_catalog_unavailable",
-    )
-    .into_response()
 }
 
 fn adapted_codex_model_json(profile: &PublicModelProfile, index: usize) -> Value {

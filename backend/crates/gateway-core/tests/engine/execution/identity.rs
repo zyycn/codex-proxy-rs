@@ -51,7 +51,7 @@ fn identity_queries_keep_frozen_permissions_without_using_execution_resources() 
             &service,
             client.clone(),
             CancellationToken::default(),
-            "codex".into(),
+            "openai".into(),
             "0.154.0".into(),
         )
         .await
@@ -70,7 +70,7 @@ fn identity_queries_keep_frozen_permissions_without_using_execution_resources() 
             &service,
             client,
             cancellation,
-            "codex".into(),
+            "openai".into(),
             "0.154.0".into(),
         )
         .await;
@@ -138,7 +138,7 @@ fn execution_scope_limits_apply_only_when_starting_a_model() {
                 &service,
                 client,
                 CancellationToken::default(),
-                "codex".into(),
+                "openai".into(),
                 "0.154.0".into(),
             )
             .await

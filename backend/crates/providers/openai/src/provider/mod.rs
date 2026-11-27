@@ -613,11 +613,15 @@ impl Provider for CodexProvider {
         Option<Vec<gateway_core::routing::ProviderModelDescriptor>>,
         gateway_core::routing::ProviderCatalogUnavailable,
     > {
-        if protocol != "codex" {
+        if !matches!(
+            protocol,
+            gateway_protocol::openai::OPENAI_PROTOCOL
+                | gateway_protocol::anthropic::ANTHROPIC_PROTOCOL
+        ) {
             return Ok(None);
         }
         self.catalog
-            .client_model_catalog(scope)
+            .client_model_catalog(scope, protocol)
             .await
             .map(Some)
             .map_err(|_| gateway_core::routing::ProviderCatalogUnavailable)

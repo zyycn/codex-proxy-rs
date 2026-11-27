@@ -1,6 +1,7 @@
 //! 对应生产职责的行为测试
 
 use super::*;
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 
 #[tokio::test]
 async fn invalidation_queues_background_refresh_without_an_upstream_etag() {
@@ -212,7 +213,7 @@ async fn api_key_background_catalog_preserves_negotiated_reasoning_levels_and_en
         ["z-unknown-reasoning", "vendor/model"]
     );
     let models = service
-        .client_model_catalog(&client_scope(&[account]))
+        .client_model_catalog(&client_scope(&[account]), OPENAI_PROTOCOL)
         .await
         .unwrap();
     assert_eq!(

@@ -214,6 +214,10 @@ async fn model_group_menu_routes_chat_and_native_generation_to_declared_members(
                 "gemini-4-hydrogen-high": {"displayName":"Hydrogen High","maxTokens":900000,"maxOutputTokens":262144,"supportsImages":true,"tagDescription":"Leaving on Nov 30."},
                 "gemini-4-hydrogen-sonar": {"displayName":"Hydrogen Sonar"}
             },
+            "agentModelSorts": [{"groups": [
+                {"modelIds":["gemini-4-hydrogen-medium"]},
+                {"modelIds":["gemini-4-hydrogen-high","gemini-4-hydrogen-medium","absent"]}
+            ]}],
             "groupedModels": {
                 "gemini-4-hydrogen": {"displayName":"Gemini 4 Hydrogen","supportedThinkingLevels":[
                     {"thinkingSuffix":"MEDIUM"}, {"thinkingSuffix":"high"},
@@ -237,17 +241,7 @@ async fn model_group_menu_routes_chat_and_native_generation_to_declared_members(
         .iter()
         .find(|model| model.upstream_model().as_str() == "gemini-4-hydrogen")
         .unwrap();
-    let menu = group.presentation().unwrap();
-    assert_eq!(menu.display_name(), Some("Gemini 4 Hydrogen"));
-    assert_eq!(menu.supported_reasoning_efforts(), ["medium", "high"]);
-    assert_eq!(menu.default_reasoning_effort(), Some("medium"));
-    assert_eq!(
-        models
-            .iter()
-            .filter(|entry| entry.presentation().is_some())
-            .count(),
-        1
-    );
+    assert!(models.iter().all(|entry| entry.presentation().is_none()));
     let snapshot = RuntimeSnapshot::new(
         ConfigRevision::new(1).unwrap(),
         SettingsValues::new(2, "smart", Default::default(), None, None),
@@ -255,29 +249,33 @@ async fn model_group_menu_routes_chat_and_native_generation_to_declared_members(
         models
             .iter()
             .map(|model| {
-                let entry = ProviderModel::new(
+                ProviderModel::new(
                     kind.clone(),
                     model.upstream_model().clone(),
                     model.capabilities().clone(),
-                );
-                match model.presentation() {
-                    Some(presentation) => entry.with_presentation(presentation.clone()),
-                    None => entry,
-                }
+                )
             })
             .collect(),
         vec![],
     )
     .unwrap();
-    let profiles = snapshot.public_model_profiles_for_scope(&fixture.store.account_scope());
-    let menu = profiles[0].presentation();
-    assert!(menu.image_input());
-    assert_eq!(menu.context_window_tokens(), Some(900000));
-    assert_eq!(
-        menu.max_context_window_tokens(),
-        menu.context_window_tokens()
+    let discovery = Operation::Generate(
+        GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("genai", Default::default()).unwrap(),
+        )
+        .requiring_native_protocol(),
     );
-    assert_eq!(menu.description(), Some("Leaving on Nov 30."));
+    let entries = snapshot.agent_models_for_operation(&fixture.store.account_scope(), &discovery);
+    assert_eq!(
+        entries
+            .iter()
+            .map(|(id, name)| (id.as_str(), name.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("gemini-4-hydrogen-medium", "Hydrogen Medium"),
+            ("gemini-4-hydrogen-high", "Hydrogen High")
+        ]
+    );
     for stream in [false, true] {
         let response = json!({"response":{"candidates":[{"content":{"parts":[{"text":"OK"}]},"finishReason":"STOP"}]}});
         let path_name = if stream {

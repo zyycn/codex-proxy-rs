@@ -3757,7 +3757,7 @@ impl Provider for CatalogProvider {
     > {
         assert!(scope.allows(&ProviderAccountId::new("acct_start").expect("account")));
         assert!(!scope.allows(&ProviderAccountId::new("acct_other").expect("account")));
-        assert_eq!((protocol, version), ("codex", "0.154.0"));
+        assert_eq!((protocol, version), ("openai", "0.154.0"));
         match self {
             Self::Unavailable => return Err(gateway_core::routing::ProviderCatalogUnavailable),
             Self::Empty => return Ok(Some(Vec::new())),
@@ -3835,6 +3835,7 @@ fn client_catalog_forwards_scope_maps_whole_objects_and_omits_unroutable_models(
         .into_iter()
         .map(|(id, account)| ContributedModel {
             owner: "catalog-plugin".into(),
+            protocol: "openai".into(),
             id: PublicModelId::new(id).unwrap(),
             provider: ProviderKind::new("openai").unwrap(),
             accounts: [ProviderAccountId::new(account).unwrap()].into(),
@@ -3878,7 +3879,7 @@ fn client_catalog_forwards_scope_maps_whole_objects_and_omits_unroutable_models(
             Arc::new(crate::RecordingDiagnostics::default()),
         );
         let client = service.authenticate("sk_start_test").expect("authenticate");
-        let result = block_on(service.client_model_catalog(&client, "codex", "0.154.0", None));
+        let result = block_on(service.client_model_catalog(&client, "openai", "0.154.0", None));
         if matches!(provider, CatalogProvider::Unavailable) {
             assert!(
                 result.is_err(),
@@ -3955,11 +3956,18 @@ fn client_catalog_prefers_scoped_profiles_in_provider_order() {
         });
         let contributions = [
             ("extra", "acct_start"),
+            ("messages-only", "acct_start"),
             ("z-last", "acct_other"),
             ("shared-model", "acct_start"),
         ]
         .map(|(id, account)| ContributedModel {
             owner: "catalog-plugin".into(),
+            protocol: if id == "messages-only" {
+                "anthropic"
+            } else {
+                "openai"
+            }
+            .into(),
             id: PublicModelId::new(id).unwrap(),
             provider: kind.clone(),
             accounts: [ProviderAccountId::new(account).unwrap()].into(),
@@ -3999,7 +4007,7 @@ fn client_catalog_prefers_scoped_profiles_in_provider_order() {
         );
         let client = service.authenticate("sk_start_test").unwrap();
         let models =
-            block_on(service.client_model_catalog(&client, "codex", "0.154.0", None)).unwrap();
+            block_on(service.client_model_catalog(&client, "openai", "0.154.0", None)).unwrap();
         let profiles = models
             .iter()
             .map(|entry| {

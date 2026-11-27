@@ -13,7 +13,8 @@ use gateway_core::{
     error::{ProviderError, ProviderErrorKind as Kind},
     operation::OperationKind,
     routing::{
-        AccountModelMetadata, ModelCapabilities, ProviderModelCapabilities, UpstreamModelId,
+        AccountModelMetadata, AgentModelListing, ModelCapabilities, ProviderModelCapabilities,
+        UpstreamModelId,
     },
 };
 use std::{
@@ -169,14 +170,7 @@ impl CatalogService {
             BTreeMap::<UpstreamModelId, BTreeMap<ProviderAccountId, AccountModelMetadata>>::new();
         let mut groups = BTreeMap::new();
         let mut search_models = BTreeMap::new();
-        let mut catalogs = self.catalogs().await?;
-        // 多个账号的目录有交集时，按稳定来源顺序合并展示名和档位顺序
-        catalogs.sort_by(|(left, _), (right, _)| {
-            left.first()
-                .map(|a| &a.account_id)
-                .cmp(&right.first().map(|a| &a.account_id))
-        });
-        for (accounts, catalog) in catalogs {
+        for (accounts, catalog) in self.catalogs().await? {
             super::model_groups::collect(&mut groups, &catalog, &accounts);
             if let Some(search_model) = catalog
                 .web_search_models
@@ -191,7 +185,7 @@ impl CatalogService {
             }
             for (key, model) in catalog.models {
                 let id = UpstreamModelId::new(key).map_err(|_| unsent(Kind::Protocol))?;
-                let metadata = account_metadata(model);
+                let metadata = account_metadata(&id, model, catalog.agent_model_order.as_ref());
                 members.entry(id).or_default().extend(
                     accounts
                         .iter()
@@ -217,16 +211,17 @@ impl CatalogService {
             models.insert(id, model.with_catalog_accounts(accounts));
         }
         // 上游已有同名实体时保留原生型号，不让其他账号的分组覆盖它
-        for (id, group) in groups {
+        for (id, variants) in groups {
             models.entry(id.clone()).or_insert_with(|| {
-                let accounts = group
-                    .variants
+                let accounts = variants
                     .values()
                     .flat_map(|v| v.accounts.iter().cloned())
                     .collect();
-                group
-                    .into_model(id, capabilities.clone())
-                    .with_catalog_accounts(accounts)
+                ProviderModelCapabilities::new(
+                    id,
+                    capabilities.clone().with_reasoning_variants(variants),
+                )
+                .with_catalog_accounts(accounts)
             });
         }
         Ok(models.into_values().collect())
@@ -310,29 +305,28 @@ impl CatalogService {
     }
 }
 
-fn account_metadata(model: Model) -> AccountModelMetadata {
-    let description = model
-        .description
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let tag = model
-        .tag_description
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let description = match (description, tag) {
-        (Some(text), Some(tag)) if text != tag => Some(format!("{text} {tag}")),
-        _ => description.or(tag).map(str::to_owned),
+fn account_metadata(
+    id: &UpstreamModelId,
+    model: Model,
+    agent_order: Option<&BTreeMap<String, usize>>,
+) -> AccountModelMetadata {
+    let agent_listing = match agent_order {
+        None => AgentModelListing::Unspecified,
+        Some(order) => match order.get(id.as_str()) {
+            Some(&order) => AgentModelListing::Listed {
+                order,
+                display_name: if model.name.trim().is_empty() {
+                    id.as_str().to_owned()
+                } else {
+                    model.name
+                },
+            },
+            None => AgentModelListing::Hidden,
+        },
     };
-    // AGY 只声明一个上下文窗口，默认值与可覆盖上限都取 maxTokens
-    let context_window = model.context_window.filter(|n| *n > 0);
     AccountModelMetadata {
-        description,
-        context_window_tokens: context_window,
-        max_context_window_tokens: context_window,
+        agent_listing,
         max_output_tokens: model.max_output_tokens.filter(|n| *n > 0),
-        image_input: model.supports_images == Some(true),
     }
 }
 

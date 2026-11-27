@@ -11061,7 +11061,7 @@ async fn provider_compiles_catalog_presentation_for_codex_models() {
         .query_client_model_catalog(
             &ClientApiKeyId::new("key_catalog").unwrap(),
             &scope,
-            "codex",
+            "openai",
             "0.154.0",
             None,
         )
@@ -11979,7 +11979,7 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
             .query_client_model_catalog(
                 &ClientApiKeyId::new("key_catalog").unwrap(),
                 &contract_account_scope(),
-                "codex",
+                "openai",
                 "1.0.0",
                 None,
             )

@@ -1,6 +1,7 @@
 //! 跨模块行为合同测试
 
 use super::*;
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 
 #[tokio::test]
 async fn discovery_refresh_and_export_use_the_current_global_profile() {
@@ -126,7 +127,7 @@ async fn restored_catalog_is_account_scoped_and_keeps_original_objects() {
         ),
     ] {
         let models = service
-            .client_model_catalog(&client_scope(&accounts))
+            .client_model_catalog(&client_scope(&accounts), OPENAI_PROTOCOL)
             .await
             .expect("catalog");
         assert_eq!(
@@ -148,7 +149,7 @@ async fn restored_catalog_is_account_scoped_and_keeps_original_objects() {
     }
     assert!(
         service
-            .client_model_catalog(&client_scope(&[]))
+            .client_model_catalog(&client_scope(&[]), OPENAI_PROTOCOL)
             .await
             .is_err()
     );
@@ -179,13 +180,21 @@ async fn client_catalog_cache_does_not_survive_credential_rotation() {
     }
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     service.refresh_catalogs().await.unwrap();
-    let first = service.client_model_catalog(&scope).await.expect("old");
+    let first = service
+        .client_model_catalog(&scope, OPENAI_PROTOCOL)
+        .await
+        .expect("old");
     store
         .repository()
         .rotate_refreshed_oauth_secret(&account, secret("rotated-access"), None, None)
         .await
         .expect("rotate");
-    assert!(service.client_model_catalog(&scope).await.is_err());
+    assert!(
+        service
+            .client_model_catalog(&scope, OPENAI_PROTOCOL)
+            .await
+            .is_err()
+    );
     assert!(matches!(
         service.account_catalog_documents(&account).await,
         Err(CodexCredentialCatalogError::Credential(
@@ -193,7 +202,10 @@ async fn client_catalog_cache_does_not_survive_credential_rotation() {
         ))
     ));
     service.refresh_catalogs().await.unwrap();
-    let second = service.client_model_catalog(&scope).await.expect("new");
+    let second = service
+        .client_model_catalog(&scope, OPENAI_PROTOCOL)
+        .await
+        .expect("new");
     assert_ne!(first, second);
     server.verify().await;
 }
@@ -256,7 +268,12 @@ async fn failed_client_catalog_never_falls_back_to_an_out_of_scope_account_or_ca
     let scope = client_scope(&[allowed]);
     assert!(service.refresh_catalogs().await.is_err());
     for _ in 0..2 {
-        assert!(service.client_model_catalog(&scope).await.is_err());
+        assert!(
+            service
+                .client_model_catalog(&scope, OPENAI_PROTOCOL)
+                .await
+                .is_err()
+        );
     }
     assert_eq!(server.received_requests().await.expect("requests").len(), 2);
     server.verify().await;
@@ -473,7 +490,7 @@ async fn failed_oauth_catalog_does_not_hide_healthy_peers_or_borrow_their_models
     let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
     service.refresh_catalogs().await.unwrap();
     let models = service
-        .client_model_catalog(&client_scope(&[failed.clone(), healthy]))
+        .client_model_catalog(&client_scope(&[failed.clone(), healthy]), OPENAI_PROTOCOL)
         .await
         .unwrap();
     assert_eq!(models.len(), 1);
@@ -664,7 +681,7 @@ async fn api_key_catalogs_are_isolated_and_join_oauth_without_claiming_native_me
         ["api-second"]
     );
     let combined = service
-        .client_model_catalog(&client_scope(&[oauth_account, a.clone()]))
+        .client_model_catalog(&client_scope(&[oauth_account, a.clone()]), OPENAI_PROTOCOL)
         .await
         .unwrap();
     assert_eq!(
@@ -782,7 +799,10 @@ async fn api_key_client_catalog_distinguishes_filtered_empty_from_fetch_failure(
         let service = service_with_catalog_cache(&store, upstream.uri(), catalog_cache());
         assert_eq!(service.refresh_catalogs().await.is_ok(), status == 200);
         let result = service
-            .client_model_catalog(&client_scope(&[store.account("acct_api").unwrap()]))
+            .client_model_catalog(
+                &client_scope(&[store.account("acct_api").unwrap()]),
+                OPENAI_PROTOCOL,
+            )
             .await;
         if status == 200 {
             assert!(
@@ -848,7 +868,7 @@ async fn api_key_client_catalog_keeps_native_sources_stable_and_account_scoped()
         (&accounts[2..], "Second native"),
     ] {
         let models = service
-            .client_model_catalog(&client_scope(scope_accounts))
+            .client_model_catalog(&client_scope(scope_accounts), OPENAI_PROTOCOL)
             .await
             .unwrap();
         assert_eq!(models.len(), 1);
@@ -886,9 +906,17 @@ async fn api_key_client_catalog_cache_is_invalidated_by_credential_revision() {
             .expect(1)
             .mount(&upstream)
             .await;
-        assert!(service.client_model_catalog(&scope).await.is_err());
+        assert!(
+            service
+                .client_model_catalog(&scope, OPENAI_PROTOCOL)
+                .await
+                .is_err()
+        );
         service.refresh_catalogs().await.unwrap();
-        let models = service.client_model_catalog(&scope).await.unwrap();
+        let models = service
+            .client_model_catalog(&scope, OPENAI_PROTOCOL)
+            .await
+            .unwrap();
         assert_eq!(models[0].model.as_str(), model);
         upstream.verify().await;
         if model == "before-rotation" {
@@ -912,6 +940,65 @@ async fn api_key_client_catalog_cache_is_invalidated_by_credential_revision() {
                 store.compare_and_swap_credential(update).await.unwrap(),
                 CredentialCasOutcome::Updated(_)
             ));
+        }
+    }
+}
+
+#[tokio::test]
+async fn client_catalog_chooses_same_named_models_within_protocol_and_account_scope() {
+    use gateway_protocol::anthropic::ANTHROPIC_PROTOCOL;
+    use provider_openai::credential::{ApiKeyProtocol, ResponsesTransport};
+    let store = Arc::new(MemoryAccountStore::default());
+    let responses = MockServer::start().await;
+    let messages = MockServer::start().await;
+    for (server, id, protocol) in [
+        (&responses, "responses-only", ApiKeyProtocol::Responses),
+        (&messages, "messages-only", ApiKeyProtocol::Messages),
+    ] {
+        store
+            .seed_api_key_for_protocol(
+                &format!("acct_{id}"),
+                server.uri(),
+                ResponsesTransport::Http,
+                protocol,
+            )
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data":[{"id":id},{"id":"shared"}], "has_more":false
+            })))
+            .mount(server)
+            .await;
+    }
+    let service = service_with_catalog_cache(&store, responses.uri(), catalog_cache());
+    service.refresh_catalogs().await.unwrap();
+    let accounts = [
+        store.account("acct_responses-only").unwrap(),
+        store.account("acct_messages-only").unwrap(),
+    ];
+    for (protocol, matching) in [(OPENAI_PROTOCOL, 0), (ANTHROPIC_PROTOCOL, 1)] {
+        for scope in [
+            &accounts[..],
+            &accounts[matching..=matching],
+            &accounts[1 - matching..=1 - matching],
+        ] {
+            let models = service
+                .client_model_catalog(&client_scope(scope), protocol)
+                .await
+                .unwrap();
+            let ids: Vec<_> = models.iter().map(|entry| entry.model.as_str()).collect();
+            if scope
+                .iter()
+                .any(|account| account.id() == accounts[matching].id())
+            {
+                assert_eq!(
+                    ids,
+                    [["responses-only", "messages-only"][matching], "shared"]
+                );
+            } else {
+                assert!(ids.is_empty());
+            }
         }
     }
 }
@@ -964,7 +1051,7 @@ async fn api_key_catalog_hides_only_known_specialized_models_in_codex_picker() {
     }
     let account = store.account("acct_api").expect("API account");
     let models = service
-        .client_model_catalog(&client_scope(&[account]))
+        .client_model_catalog(&client_scope(&[account]), OPENAI_PROTOCOL)
         .await
         .expect("client catalog");
     let actual_visibility = models.iter().map(|model| {
@@ -1058,7 +1145,10 @@ async fn api_key_catalog_does_not_replace_native_metadata_for_shared_models() {
         service.cached_account_models(&oauth_account).unwrap()
     );
     let mixed = service
-        .client_model_catalog(&client_scope(&[oauth_account, api_account.clone()]))
+        .client_model_catalog(
+            &client_scope(&[oauth_account, api_account.clone()]),
+            OPENAI_PROTOCOL,
+        )
         .await
         .expect("mixed client catalog");
     assert_eq!(mixed.len(), 1);
@@ -1067,7 +1157,10 @@ async fn api_key_catalog_does_not_replace_native_metadata_for_shared_models() {
     };
     assert_eq!(payload, before.models()[0].document());
     let api_only = service
-        .client_model_catalog(&client_scope(std::slice::from_ref(&api_account)))
+        .client_model_catalog(
+            &client_scope(std::slice::from_ref(&api_account)),
+            OPENAI_PROTOCOL,
+        )
         .await
         .expect("API client catalog");
     assert!(matches!(
@@ -1274,7 +1367,10 @@ async fn ten_thousand_restored_accounts_serve_concurrent_native_reads_while_upst
             let scope = scope.clone();
             tokio::spawn(async move {
                 let started = Instant::now();
-                let models = catalog.client_model_catalog(&scope).await.unwrap();
+                let models = catalog
+                    .client_model_catalog(&scope, OPENAI_PROTOCOL)
+                    .await
+                    .unwrap();
                 assert!(!models.is_empty());
                 started.elapsed()
             })

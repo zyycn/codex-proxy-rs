@@ -384,6 +384,7 @@ pub trait ExecutionService: Send + Sync {
         Box::pin(async { Err(ClientAuthenticationError::InvalidKey) })
     }
     fn public_models(&self, client: &AuthenticatedClient) -> Vec<PublicModelId>;
+    /// 按请求的生成协议聚合当前 Key 可用的客户端模型目录
     fn client_model_catalog<'a>(
         &'a self,
         _client: &'a AuthenticatedClient,

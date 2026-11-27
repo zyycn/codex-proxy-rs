@@ -6,6 +6,7 @@ use gateway_core::routing::snapshot::{
     RuntimeSnapshotCompiler, SnapshotFacts, SnapshotProviderAccountFacts, SnapshotStoreError,
     SnapshotStorePort,
 };
+use gateway_protocol::openai::OPENAI_PROTOCOL;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Notify;
 use wiremock::{Request, Respond};
@@ -198,7 +199,7 @@ async fn issue_666_same_plan_special_model_remains_visible_and_routes_only_to_it
         catalog.refresh_catalogs().await.unwrap();
         assert!(
             catalog
-                .client_model_catalog(&contract_account_scope())
+                .client_model_catalog(&contract_account_scope(), OPENAI_PROTOCOL)
                 .await
                 .unwrap()
                 .iter()

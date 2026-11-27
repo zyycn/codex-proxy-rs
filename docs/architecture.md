@@ -145,7 +145,7 @@ flowchart LR
 
 - **模型目录与路由共用事实**：`model_catalog` 的目录贡献保存在发布代次引用中，直接别名由插件负责条目正确性，条目冲突或目标不存在不阻止宿主快照发布。
   请求按顺序取首个匹配别名并直接使用其目标，不递归解析插件别名；Provider、账号权限与目标能力沿原选路流程处理。
-  适配模型从同实例受管适配器继承静态账号范围，Core 按冻结权限与请求能力收窄候选账号，不改变调度评分、亲和或租约。
+  适配模型从同实例受管适配器继承生成协议和静态账号范围，Core 按冻结权限与请求能力收窄候选账号，不改变调度评分、亲和或租约。
   公开列表、详情、客户端目录和受管模型查询复用同一组目录贡献与账号访问范围。Core 保留 Provider 的完整原生对象，在投影通用画像时应用当前账号范围的插件声明。合并顺序见 SDK [模型目录](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型目录)
 - **重试由 Core 裁决**：`retry_policy` 只能停止或继续 Core 已允许的恢复路径；绑定按确定顺序委托，故障回退宿主。
   发送、交付、续接、外部副作用、预算和取消限制不进入插件控制面，策略返回后继续复核
@@ -585,6 +585,7 @@ Antigravity 的 `credential/catalog` 持有与凭据版本绑定的项目与模�
 
 - `responses`、`chat_completions`、`messages`、`genai` 拥有各自协议入口，生成与计数共用 `generation` 的执行交付、取消传播和连接生命周期
 - `codex` 拥有客户端模型目录投影、Guardian、子代理与轮次身份解析，Responses 入口组合这些扩展；Responses 同时服务 OpenAI 与 xAI，不绑定某个 Provider
+- `antigravity` 识别桌面端和 CLI 对聊天选模目录的请求，GenAI 入口按账号声明的展示名和顺序返回可执行型号
 - `openai` 聚合当前绑定 OpenAI Provider 的 Images、独立 Search 与 Live 入口，通过 Core 端口调用上游能力；账号认证和上游传输仍由 Provider 拥有
 - `headers` 拥有数据面入站业务头与响应头边界，各协议直接使用公共头处理；跨协议 HTTP 规则和重试时间解析归 `gateway-protocol/http`，OpenAI/Codex 私有响应头分类归 `gateway-protocol/openai/headers`，API 出口组合两者
 
@@ -715,8 +716,7 @@ xAI 的 Chat 路径将 custom 工具包装为 function 输入，并在直接返�
 
 客户端到代理与代理到上游的传输选择相互独立。客户端的 `supports_websockets = false`
 不禁止 Provider 使用上游 WebSocket。OpenAI Provider 按线程维护 WS 失败预算，消息大小上限随上游
-物理连接保存。OpenAI 的超限回退与 Antigravity 的 Responses 桥接按各自的续接能力，在终态事件上提示下游重连。
-该提示只属于当前交付，与 Provider 的私有会话状态独立。Antigravity 可在路由和客户端准入后本地应答新链 WS 预热，Core 按零次上游尝试结算。
+物理连接保存。超限回退需要完整重放时，OpenAI 在终态事件上提示下游重连。
 API 确认成功写出、完成结算且入站队列空闲后关闭连接。响应终态前的 Close 1000 仍视为失败，
 后续恢复请求成功也不改写原失败请求的结果
 

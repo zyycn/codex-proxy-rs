@@ -82,6 +82,7 @@ async fn anthropic_model_detail_keeps_public_model_access() {
     let router = api_router(ModelsExecution::new()).await;
     for (path, expected) in [
         ("/v1/models/model-a", StatusCode::OK),
+        ("/v1/models/responses-only", StatusCode::NOT_FOUND),
         ("/v1/models/unknown", StatusCode::NOT_FOUND),
     ] {
         let response = router
@@ -225,7 +226,18 @@ impl ExecutionService for ModelsExecution {
         _peer_route: Option<&'a axum::http::HeaderValue>,
     ) -> BoxFuture<'a, Result<Vec<PublicModelDescriptor>, ProviderCatalogUnavailable>> {
         Box::pin(async move {
-            assert_eq!(protocol, "codex");
+            if protocol == gateway_protocol::anthropic::ANTHROPIC_PROTOCOL {
+                return Ok(["model-a", "model-b"]
+                    .into_iter()
+                    .map(|id| {
+                        PublicModelDescriptor::Adapted(PublicModelProfile::new(
+                            PublicModelId::new(id).unwrap(),
+                            ModelPresentation::default(),
+                        ))
+                    })
+                    .collect());
+            }
+            assert_eq!(protocol, gateway_protocol::openai::OPENAI_PROTOCOL);
             self.requested_versions
                 .lock()
                 .expect("versions")
@@ -259,7 +271,7 @@ impl ExecutionService for ModelsExecution {
     }
 
     fn contains_public_model(&self, _: &AuthenticatedClient, model: &PublicModelId) -> bool {
-        matches!(model.as_str(), "model-a" | "model-b")
+        matches!(model.as_str(), "model-a" | "model-b" | "responses-only")
     }
 
     fn start(&self, _: StartExecution) -> BoxFuture<'_, Result<StartedExecution, GatewayError>> {

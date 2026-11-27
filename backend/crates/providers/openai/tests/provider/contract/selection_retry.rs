@@ -158,6 +158,7 @@ async fn contributed_model_scope_survives_affinity_and_account_rotation() {
             ExtensionSetId::new("scope-test".into()).unwrap(),
             Arc::new(Catalog(vec![ContributedModel {
                 owner: "scope-test".into(),
+                protocol: "openai".into(),
                 id: PublicModelId::new("gpt-5.4").unwrap(),
                 provider: kind,
                 accounts: contributed_accounts

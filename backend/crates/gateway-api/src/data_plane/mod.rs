@@ -1,5 +1,6 @@
 //! 模型数据面的客户端入口、鉴权与协议交付
 
+mod antigravity;
 pub mod auth;
 pub mod body;
 mod chat_completions;

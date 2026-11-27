@@ -54,6 +54,7 @@ async fn adapted_catalog_freezes_adapter_accounts_and_preserves_the_active_gener
         .await
         .unwrap();
     assert_eq!(active.models().len(), 1);
+    assert_eq!(active.models()[0].protocol, "openai");
     assert_eq!(
         active.models()[0].accounts.iter().next().unwrap().as_str(),
         "acct_b"
@@ -139,6 +140,9 @@ async fn adapted_catalog_freezes_adapter_accounts_and_preserves_the_active_gener
             .push(adapter);
         let mut model = config["model_catalog"]["models"][0].clone();
         model["adapter_id"] = "second".into();
+        if conflict.is_none() {
+            config["upstream_registration"]["adapters"][1]["protocol"] = "anthropic".into();
+        }
         if conflict == Some("presentation") {
             model["presentation"]["display_name"] = "Other".into();
         }

@@ -11,9 +11,10 @@ pub use crate::account::scope::{
 };
 pub use crate::identity::ProviderKind;
 pub use catalog::{
-    AccountModelMetadata, ContributedModel, ContributedModelAlias, ProviderCatalogGeneration,
-    ProviderCatalogPort, ProviderCatalogUnavailable, ProviderModelCapabilities,
-    ProviderModelContent, ProviderModelDescriptor, PublicModelDescriptor, ReasoningModelVariant,
+    AccountModelMetadata, AgentModelListing, ContributedModel, ContributedModelAlias,
+    ProviderCatalogGeneration, ProviderCatalogPort, ProviderCatalogUnavailable,
+    ProviderModelCapabilities, ProviderModelContent, ProviderModelDescriptor,
+    PublicModelDescriptor, ReasoningModelVariant,
 };
 pub use snapshot::RuntimeSnapshot;
 
@@ -516,6 +517,13 @@ impl ModelCapabilities {
         self
     }
 
+    pub(crate) fn supports_generation_protocol(&self, protocol: &str) -> bool {
+        self.operations.contains(&OperationKind::Generate)
+            && (self.native_generation_protocols.is_empty()
+                || self.native_generation_protocols.contains(protocol)
+                || self.translated_generation_protocols.contains(protocol))
+    }
+
     fn match_operation(
         &self,
         operation: &crate::operation::Operation,
@@ -529,13 +537,7 @@ impl ModelCapabilities {
             return None;
         }
         if matches!(operation, crate::operation::Operation::Generate(_))
-            && !self.native_generation_protocols.is_empty()
-            && !self
-                .native_generation_protocols
-                .contains(operation.protocol())
-            && !self
-                .translated_generation_protocols
-                .contains(operation.protocol())
+            && !self.supports_generation_protocol(operation.protocol())
         {
             return None;
         }

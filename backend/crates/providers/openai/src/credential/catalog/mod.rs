@@ -29,7 +29,9 @@ use uuid::Uuid;
 
 use super::repository::{CodexCredentialRepository, CredentialRepositoryError};
 use crate::profile::CodexWireProfileState;
-use crate::transport::{CodexBackendClient, CodexCatalogModel, CodexRequestContext};
+use crate::transport::{
+    CodexBackendClient, CodexCatalogModel, CodexModelCatalogSnapshot, CodexRequestContext,
+};
 
 const MAX_RESPONSE_ETAG_BYTES: usize = 256;
 const ACCOUNT_CATALOG_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
@@ -121,18 +123,20 @@ impl CodexAccountCatalog {
 }
 
 struct CatalogContent {
+    generation_protocol: &'static str,
     models: Vec<CodexCatalogModel>,
     ids: Vec<String>,
     digest: [u8; 32],
 }
 
 impl CatalogContent {
-    fn new(models: Vec<CodexCatalogModel>, document: &[u8]) -> Self {
+    fn new(snapshot: CodexModelCatalogSnapshot) -> Self {
         use sha2::Digest;
         Self {
-            digest: sha2::Sha256::digest(document).into(),
-            ids: model_ids(&models),
-            models,
+            generation_protocol: snapshot.generation_protocol,
+            digest: sha2::Sha256::digest(&snapshot.document).into(),
+            ids: model_ids(&snapshot.models),
+            models: snapshot.models,
         }
     }
 }
@@ -287,12 +291,6 @@ struct CatalogCacheState {
     pending: BTreeMap<CodexCatalogScope, String>,
 }
 
-struct FetchedAccountModels {
-    models: Vec<CodexCatalogModel>,
-    document: bytes::Bytes,
-    etag: Option<String>,
-}
-
 #[derive(Clone)]
 pub struct CodexCredentialCatalogService {
     repository: CodexCredentialRepository,
@@ -349,6 +347,7 @@ impl CodexCredentialCatalogService {
     pub async fn client_model_catalog(
         &self,
         scope: &FrozenAccountScope,
+        protocol: &str,
     ) -> Result<Vec<ProviderModelDescriptor>, CodexCredentialCatalogError> {
         let snapshot = self
             .cached()?
@@ -401,6 +400,10 @@ impl CodexCredentialCatalogService {
             };
             available = true;
             let api = account.authentication_kind() == super::CODEX_AUTHENTICATION_KIND_API_KEY;
+            // 一个账号目录来自同一协议，先筛选来源再合并同名条目
+            if entry.content.generation_protocol != protocol {
+                continue;
+            }
             for (position, model) in entry.content.models.iter().enumerate() {
                 if !scope.allows_model(account.id(), model.request_model().as_str()) {
                     continue;
@@ -430,7 +433,12 @@ impl CodexCredentialCatalogService {
                 let id = model.request_model().as_str();
                 ProviderModelDescriptor {
                     model: model.request_model().clone(),
-                    content: if model.document().protocol() == "codex" {
+                    content: if protocol == gateway_protocol::anthropic::ANTHROPIC_PROTOCOL {
+                        ProviderModelContent::Adapted(ModelPresentation::new(
+                            Some(model.display_name().to_owned()),
+                            None,
+                        ))
+                    } else if model.document().protocol() == "codex" {
                         ProviderModelContent::Native(model.document().clone())
                     } else {
                         ProviderModelContent::Adapted(
@@ -581,13 +589,13 @@ impl CodexCredentialCatalogService {
         etag: Option<String>,
     ) -> Result<(CodexAccountCatalog, AccountEntry), CodexCredentialCatalogError> {
         let observed_at = SystemTime::now();
-        let fetched = self.fetch_account_models(client, account).await?;
+        let mut fetched = self.fetch_account_models(client, account).await?;
         let observed = AccountCatalogObservation {
             account_id: account.id().clone(),
             revision: account.revision(),
             plan: account.plan_type().map(str::to_owned),
             observed_at,
-            etag: fetched.etag.or_else(|| etag.clone()),
+            etag: fetched.etag.take().or_else(|| etag.clone()),
         };
         if !self
             .repository
@@ -598,7 +606,7 @@ impl CodexCredentialCatalogService {
         {
             return Err(CodexCredentialCatalogError::ConcurrentUpdate);
         }
-        let content = Arc::new(CatalogContent::new(fetched.models, &fetched.document));
+        let content = Arc::new(CatalogContent::new(fetched));
         // Redis 仅为管理端短期缓存，失败不能撤销已持久化的目录
         let catalog = CodexAccountCatalog::new(
             scope.cache_scope()?,
@@ -693,7 +701,7 @@ impl CodexCredentialCatalogService {
         &self,
         client: &CodexBackendClient,
         account: &ProviderAccount,
-    ) -> Result<FetchedAccountModels, CodexCredentialCatalogError> {
+    ) -> Result<CodexModelCatalogSnapshot, CodexCredentialCatalogError> {
         tokio::time::timeout(MODEL_CATALOG_TIMEOUT, async {
             let credential = self.repository.load_runtime_credential(account).await?;
             let request_id = format!("catalog_{}", Uuid::now_v7().simple());
@@ -723,14 +731,8 @@ impl CodexCredentialCatalogService {
                     None,
                 )
                 .await;
-            let snapshot = result.map_err(|error| CodexCredentialCatalogError::Upstream {
+            result.map_err(|error| CodexCredentialCatalogError::Upstream {
                 detail: error.to_string(),
-            })?;
-            let (models, document, etag) = snapshot.into_parts();
-            Ok(FetchedAccountModels {
-                models,
-                document,
-                etag,
             })
         })
         .await

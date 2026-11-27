@@ -108,7 +108,12 @@ impl PluginModels {
                     .models(
                         client,
                         call.cancellation.clone(),
-                        request.protocol,
+                        // 插件合同中的 codex 目录使用 Responses 执行协议
+                        if request.protocol == "codex" {
+                            gateway_protocol::openai::OPENAI_PROTOCOL.to_owned()
+                        } else {
+                            request.protocol
+                        },
                         request.client_version,
                     )
                     .await

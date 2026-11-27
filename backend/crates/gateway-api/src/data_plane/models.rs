@@ -6,7 +6,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use gateway_core::{engine::execution::AuthenticatedClient, routing::PublicModelId};
+use gateway_core::{
+    engine::execution::AuthenticatedClient,
+    routing::{ProviderCatalogUnavailable, PublicModelDescriptor, PublicModelId},
+};
 use gateway_protocol::anthropic::ANTHROPIC_PROTOCOL;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -18,7 +21,7 @@ use crate::{
 
 use super::{
     auth::{ClientKeyHeaders, authenticate_client, client_access_error_response},
-    error::{model_not_found_response, openai_error_response},
+    error::{catalog_unavailable_response, model_not_found_response, openai_error_response},
 };
 
 const MODEL_CREATED_TIMESTAMP: i64 = 1_700_000_000;
@@ -67,7 +70,10 @@ async fn models_response(
     let service = state.data_plane();
 
     if anthropic {
-        return anthropic_models_response(service.public_models(&client), &query);
+        return match messages_models(service, &client).await {
+            Ok(models) => anthropic_models_response(&models, &query),
+            Err(_) => catalog_unavailable_response(),
+        };
     }
     if let Some(version) = query
         .client_version
@@ -114,17 +120,20 @@ pub(crate) async fn model_detail(
     if anthropic {
         input.protocol = ANTHROPIC_PROTOCOL.to_owned();
     }
-    let response = middleware::query_response(
-        service.execution(),
-        client,
-        input,
-        move |client| async move { model_detail_response(&state, &client, model_id, anthropic) },
-    )
-    .await;
+    let response =
+        middleware::query_response(
+            service.execution(),
+            client,
+            input,
+            move |client| async move {
+                model_detail_response(&state, &client, model_id, anthropic).await
+            },
+        )
+        .await;
     model_protocol_response(response, anthropic).await
 }
 
-fn model_detail_response(
+async fn model_detail_response(
     state: &ApiState,
     client: &AuthenticatedClient,
     model_id: String,
@@ -134,7 +143,15 @@ fn model_detail_response(
     let Ok(public_model) = PublicModelId::new(model_id) else {
         return model_not_found_response().into_response();
     };
-    if !service.contains_public_model(client, &public_model) {
+    let visible = if anthropic {
+        match messages_models(service, client).await {
+            Ok(models) => models.binary_search(&public_model).is_ok(),
+            Err(_) => return catalog_unavailable_response(),
+        }
+    } else {
+        service.contains_public_model(client, &public_model)
+    };
+    if !visible {
         return model_not_found_response().into_response();
     }
 
@@ -149,6 +166,28 @@ fn model_detail_response(
         .into_response()
 }
 
+async fn messages_models(
+    service: &super::service::DataPlaneService,
+    client: &AuthenticatedClient,
+) -> Result<Vec<PublicModelId>, ProviderCatalogUnavailable> {
+    let context = crate::middleware::current();
+    let entries = service
+        .execution()
+        .client_model_catalog(
+            client,
+            ANTHROPIC_PROTOCOL,
+            "",
+            context.as_ref().and_then(|ctx| ctx.extensions.peer_route()),
+        )
+        .await?;
+    let mut models: Vec<_> = entries
+        .into_iter()
+        .map(PublicModelDescriptor::into_model)
+        .collect();
+    models.sort_unstable();
+    Ok(models)
+}
+
 async fn model_protocol_response(response: Response, anthropic: bool) -> Response {
     if anthropic {
         super::messages::project_error_response(response).await
@@ -157,7 +196,7 @@ async fn model_protocol_response(response: Response, anthropic: bool) -> Respons
     }
 }
 
-fn anthropic_models_response(models: Vec<String>, query: &ModelsQuery) -> Response {
+fn anthropic_models_response(models: &[PublicModelId], query: &ModelsQuery) -> Response {
     let limit = match query.limit.as_deref().unwrap_or("20").parse::<usize>() {
         Ok(limit @ 1..=1000) => limit,
         _ => {
@@ -173,7 +212,12 @@ fn anthropic_models_response(models: Vec<String>, query: &ModelsQuery) -> Respon
     let cursor = |value: &Option<String>| -> Result<Option<usize>, ()> {
         value
             .as_ref()
-            .map(|id| models.iter().position(|model| model == id).ok_or(()))
+            .map(|id| {
+                models
+                    .iter()
+                    .position(|model| model.as_str() == id)
+                    .ok_or(())
+            })
             .transpose()
     };
     let (Ok(after), Ok(before)) = (cursor(&query.after_id), cursor(&query.before_id)) else {
@@ -196,7 +240,7 @@ fn anthropic_models_response(models: Vec<String>, query: &ModelsQuery) -> Respon
         .get(range.clone())
         .unwrap_or_default()
         .iter()
-        .map(|model| anthropic_model_json(model))
+        .map(|model| anthropic_model_json(model.as_str()))
         .collect::<Vec<_>>();
     let has_more = if before.is_some() {
         range.start > start

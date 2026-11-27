@@ -19,45 +19,55 @@ pub struct ReasoningModelVariant {
     pub accounts: BTreeSet<ProviderAccountId>,
 }
 
-/// 具体型号在单个账号目录中声明的能力与说明
+/// 上游账号的聊天菜单声明，未声明时仍可按模型 ID 发现
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum AgentModelListing {
+    #[default]
+    Unspecified,
+    Hidden,
+    Listed {
+        order: usize,
+        display_name: String,
+    },
+}
+
+/// 具体型号在单个账号目录中声明的展示和输出限制
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AccountModelMetadata {
-    pub description: Option<String>,
-    pub context_window_tokens: Option<u64>,
-    pub max_context_window_tokens: Option<u64>,
-    pub image_input: bool,
+    pub agent_listing: AgentModelListing,
     pub max_output_tokens: Option<u64>,
 }
 
-impl ModelPresentation {
-    /// 分组向客户端承诺的能力必须覆盖每个可选档位和账号
-    pub(super) fn apply_member_metadata<'a>(
-        &mut self,
-        mut members: impl Iterator<Item = Option<&'a AccountModelMetadata>>,
-    ) {
-        let Some(first) = members.next() else {
-            return;
-        };
-        let mut has_metadata = first.is_some();
-        let mut description = first.and_then(|m| m.description.as_deref());
-        let mut window = first.and_then(|m| m.context_window_tokens);
-        let mut max_window = first.and_then(|m| m.max_context_window_tokens);
-        let mut images = first.is_some_and(|m| m.image_input);
-        for member in members {
-            has_metadata |= member.is_some();
-            if description != member.and_then(|m| m.description.as_deref()) {
-                description = None;
-            }
-            window = window.min(member.and_then(|m| m.context_window_tokens));
-            max_window = max_window.min(member.and_then(|m| m.max_context_window_tokens));
-            images &= member.is_some_and(|m| m.image_input);
+impl ModelCapabilities {
+    pub(super) fn agent_menu_entry<'a>(
+        &'a self,
+        scope: &super::FrozenAccountScope,
+        target: &UpstreamModelId,
+        model: &'a PublicModelId,
+    ) -> Option<(usize, &'a str)> {
+        let fallback = (usize::MAX, model.as_str());
+        if self.account_metadata.is_empty() {
+            return Some(fallback);
         }
-        if has_metadata {
-            self.description = description.map(str::to_owned);
-            self.context_window_tokens = window;
-            self.max_context_window_tokens = max_window;
-            self.image_input = images;
-        }
+        self.account_metadata
+            .iter()
+            .filter(|(account, _)| scope.allows_model(account, target.as_str()))
+            .filter_map(|(_, metadata)| match &metadata.agent_listing {
+                AgentModelListing::Unspecified => Some(fallback),
+                AgentModelListing::Hidden => None,
+                AgentModelListing::Listed {
+                    order,
+                    display_name,
+                } => {
+                    let name = if model.as_str() == target.as_str() {
+                        display_name.as_str()
+                    } else {
+                        model.as_str()
+                    };
+                    Some((*order, name))
+                }
+            })
+            .min_by_key(|(order, _)| *order)
     }
 }
 
@@ -74,6 +84,7 @@ pub struct ContributedModelAlias {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContributedModel {
     pub owner: String,
+    pub protocol: String,
     pub id: PublicModelId,
     pub provider: ProviderKind,
     pub accounts: BTreeSet<ProviderAccountId>,
@@ -108,6 +119,16 @@ pub enum PublicModelDescriptor {
         payload: RawJsonPayload,
     },
     Adapted(PublicModelProfile),
+}
+
+impl PublicModelDescriptor {
+    #[must_use]
+    pub fn into_model(self) -> PublicModelId {
+        match self {
+            Self::Native { model, .. } => model,
+            Self::Adapted(profile) => profile.model,
+        }
+    }
 }
 
 impl ProviderModelContent {

@@ -1670,7 +1670,11 @@ impl ExecutionService for DefaultExecutionService {
                     )
                     .await?
                 else {
-                    for profile in client.snapshot.profiles_for_provider_scope(kind, scope) {
+                    for profile in
+                        client
+                            .snapshot
+                            .profiles_for_provider_scope(kind, scope, Some(protocol))
+                    {
                         if seen.insert(profile.model().clone()) {
                             result.push(PublicModelDescriptor::Adapted(profile));
                         }
@@ -1679,7 +1683,7 @@ impl ExecutionService for DefaultExecutionService {
                 };
                 let contributions: Vec<_> = client
                     .snapshot
-                    .contributed_models_for_scope(kind, scope)
+                    .contributed_models_for_scope(kind, scope, Some(protocol))
                     .collect();
                 let mut contributed_by_model = BTreeMap::new();
                 if !contributions.is_empty()
@@ -1903,10 +1907,7 @@ impl NestedModelExecutionPort for DefaultExecutionService {
             };
             Ok(models
                 .into_iter()
-                .map(|model| match model {
-                    PublicModelDescriptor::Native { model, .. } => model,
-                    PublicModelDescriptor::Adapted(profile) => profile.model().clone(),
-                })
+                .map(PublicModelDescriptor::into_model)
                 .collect())
         })
     }

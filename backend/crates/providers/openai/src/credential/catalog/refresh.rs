@@ -24,8 +24,7 @@ impl CodexCredentialCatalogService {
                         continue;
                     }
                 };
-            let (models, _, _) = decoded.into_parts();
-            let content = Arc::new(CatalogContent::new(models, &group.document));
+            let content = Arc::new(CatalogContent::new(decoded));
             for a in group.accounts {
                 let scope = CodexCatalogScope {
                     account_id: a.account_id,

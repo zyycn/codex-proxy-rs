@@ -606,7 +606,7 @@ let plugin = PluginBuilder::from_json(include_bytes!("../plugin.json"))?
 `models` 的每条 `AdaptedModel { id, adapter_id, features, max_output_tokens, presentation }`
 声明一个受管适配器提供的公开模型，不要求内置 Provider 的原生目录存在同名条目
 
-- `adapter_id` 必须指向同实例已绑定的 `upstream_adapter`，Provider 与非空账号集合取自该适配器声明
+- `adapter_id` 必须指向同实例已绑定的 `upstream_adapter`，Provider、生成协议与非空账号集合取自该适配器声明
 - 适配器及 binding 的模型范围必须覆盖 `id`；带 Key／账号组条件的适配器不能贡献静态目录，不能丢弃这些条件扩大可见范围
 - `features` 使用 `RequestFeature`，仅为生成操作声明工具、图片输入、推理或 JSON Schema 支持；没有声明的能力不能借用同名原生模型的支持事实
 - `presentation` 是独立通用画像，字段见 `call::catalog::ModelPresentation`；省略的布尔能力为 false，未声明推理档位不补猜

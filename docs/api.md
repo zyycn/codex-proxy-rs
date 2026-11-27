@@ -653,7 +653,7 @@ Responses WebSocket 接受文本消息，`response.create` 在同一连接串行
 | --- | --- |
 | SSE → SSE | 结束本次响应流，底层 HTTP 连接由 HTTP 连接池管理 |
 | SSE → WS | 结束 SSE，上游 WS 归池，按无客户端绑定的空闲期限回收 |
-| WS → SSE | 通常保留下游 WS。Antigravity 生成和需要完整重放的 OpenAI 大包回退按下述规则重连 |
+| WS → SSE | 通常保留下游 WS。需要完整重放的 OpenAI 大包回退按下述规则重连 |
 | WS → WS | 保留当前绑定的上游 WS，支持下一轮续接 |
 
 活跃客户端 WS 的绑定不受普通空闲回收期限约束；上游 Close（不限关闭码）、EOF、传输读写失败、总寿命到期或连接被回收仍可能使连接内续接失效，
@@ -691,11 +691,7 @@ OpenAI 的协议预热、依赖 WS 的非持久化新链和连接内续接要求
 客户端配置的 `supports_websockets` 只控制第一段连接，不是服务端传输策略开关。
 上游在响应终态前发送 Close 1000 仍属于失败，不能按“正常关闭”计为成功
 
-Antigravity 在 Responses WS 上收到新链的 `generate=false` 后，本地依次返回
-`response.created` 和 `response.completed`，输出为空，Token 为零。即使带有历史和工具定义，也不选号或调用 Google。
-预热 ID 仅标识这次应答。后续生成按下文的完整输入重放规则处理。
-Antigravity 的 HTTP 新链预热和内建 xAI 的预热返回 `400 unsupported_prewarm`。
-`generate=true` 或省略该字段时正常生成，外部插件按各自的协议能力处理
+内建 xAI 对非生成预热返回 `400 unsupported_prewarm`
 
 OpenAI Responses 上游 WS 按握手响应头 `x-codex-websocket-max-message-bytes` 声明的上限，
 检查最终 `response.create` 文本的 UTF-8 字节数。允许发送的文本超过 1 MiB 时，每 1 MiB 分一帧，接收方仍收到一条消息。
@@ -715,7 +711,7 @@ OpenAI Responses 上游 WS 按握手响应头 `x-codex-websocket-max-message-byt
 切到 HTTP；其他客户端需要自行实现此合同。代理不缓存 transcript，不把增量输入当作独立新链，
 连接内续接失去原连接时仍需客户端恢复
 
-Antigravity 的 Responses 请求，以及 OpenAI 因大小走 HTTP/SSE 且需要完整重放的请求，在
+OpenAI 因大小走 HTTP/SSE 且需要完整重放的请求，在
 `response.completed` 成功写出并完成结算后，以关闭码 1000 正常关闭空闲的下游 WS。
 客户端在新连接上发送完整输入（含工具调用和结果），省略 `previous_response_id`。
 已接收的后续请求按序处理，若增量先到，仍按 `400 previous_response_not_found` 恢复。启用 WS 帧中间件时保留连接
@@ -733,13 +729,13 @@ WebSocket 在交付业务事件前合成的错误保留已确认的失败状态�
 
 携带 `anthropic-version` 或 `x-api-key` 请求头时，`GET /v1/models` 返回 Messages 模型目录：
 `{ data, first_id, last_id, has_more }`，单条模型使用 `type: "model"`、`id`、`display_name` 和 `created_at`
-模型范围仍由 Client Key 权限、分组与别名决定，未知发布日期使用 Unix epoch，未知能力和 Token 上限为 null
+列表与详情只展示当前 Key 的账号能通过 Messages 调用的模型及其别名。未知发布日期使用 Unix epoch，未知能力和 Token 上限为 null
 
 该格式支持 `after_id`、`before_id` 游标和 `limit`，默认每页 20 条，范围 1–1000；未知游标或无效限制返回 400
 `GET /v1/models/{model_id}` 使用同一显式协议头选择格式和错误合同，不根据 User-Agent 猜测协议
 
-未携带上述协议头时，`GET /v1/models` 默认返回 OpenAI 兼容列表 `{"object": "list", "data": [...]}`；请求携带非空
-`client_version` query 参数（Codex 客户端）时改为返回 Codex 专用目录合同 `{"models": [...]}`
+使用 Bearer Key 并省略上述协议头时，`GET /v1/models` 返回 OpenAI 兼容列表 `{"object": "list", "data": [...]}`。混合分组得到当前 Key 可见的各平台模型并集，同名 ID 只出现一次。
+携带非空 `client_version` 查询参数时，返回 Codex 专用目录 `{"models": [...]}`
 
 OpenAI Provider 使用后台按账号发现的目录，客户端版本只选择输出格式。目录完整保留每个原生模型 JSON 对象，包括
 `base_instructions`、`model_messages`、`service_tiers`、工具与能力字段，以及未知嵌套字段、显式 `null`
@@ -752,13 +748,7 @@ API Key 上游返回完整 Codex `models` 目录时沿用该合同；仅返回�
 xAI 没有 Codex 原生目录，使用官方 CLI proxy 当前目录生成通用画像。推理菜单读取
 `reasoning_efforts` 对象列表，默认值只取菜单中的显式标记；缺失时保持未知
 
-Antigravity 在 Codex 目录中按上游声明的分组展示基础模型。思考菜单只列出当前 Key 可调用的成员档位，
-默认选中 `medium`，不可用时选首个可用档位。例如对 `gemini-4-hydrogen` 发送 `reasoning.effort: "high"`，
-会路由到 `gemini-4-hydrogen-high`。普通模型列表仍提供可直接调用的完整型号
-
-分组中的可用档位和账号都支持图片时，Codex 可发送图片。网关取可用成员中最小的 `maxTokens` 作为该组的默认上下文窗口和可覆盖上限，
-有成员未声明时保持未知。成员说明一致时，选模列表显示上游用途说明或下线提示。
-显式请求的输出 Token 数按实际型号和账号的 `maxOutputTokens` 选路，未声明上限的账号交由上游校验
+Codex 目录按 Responses 执行能力筛选。仅具有内置 Antigravity 或 Messages 账号的 Key 会收到空目录。插件适配模型沿用适配器声明的协议与账号范围
 
 已知模型只路由到明确提供该模型的 Provider，账号不可用时不转发给其他平台的未知模型通道。
 未知模型只在当前范围与路由约束下存在唯一 Provider 透传候选时发送；无法确定归属时返回不可用错误，
@@ -779,7 +769,9 @@ OpenAI 聚合当前 Key 范围内合格 OAuth 和 API Key 账号的目录。每�
 
 Gemini 客户端使用 `GET /v1beta/models` 和 `GET /v1beta/models/{model}`。目录只包含当前 Key 可通过原生 GenAI 入口路由的已知模型，沿用账号范围、模型限制和别名；不会将其他协议的同名模型作为原生候选。条目提供 `name: "models/{id}"`、`displayName` 与 `supportedGenerationMethods`，未知的版本、上下文和输出上限不补默认值
 
-Gemini 列表按模型 ID 排序，支持 `pageSize`（默认 50，上限 1000，0 使用默认值）和 `pageToken`；后续页保持相同的 `pageSize`，末页省略 `nextPageToken`。详情查不到模型返回 Google RPC 格式的 404；分页及详情均重新检查当前 Key 的可见范围，不发起上游模型请求
+普通 Gemini 列表按模型 ID 排序，支持 `pageSize`（默认 50，上限 1000，0 使用默认值）和 `pageToken`；后续页保持相同的 `pageSize`，末页省略 `nextPageToken`。详情查不到模型返回 Google RPC 格式的 404；分页及详情均重新检查当前 Key 的可见范围，不发起上游模型请求
+
+Antigravity 桌面端和 CLI 的 GenAI 模型列表按上游 `agentModelSorts` 顺序返回当前 Key 可用的具体聊天型号和展示名。客户端用这些型号合并基础模型并选择思考强度。旧账号目录缺少聊天菜单声明时，刷新前仍可按具体型号发现。完整型号的详情与直接调用沿用账号模型权限。对基础模型显式指定分组档位时，网关按上游声明选择具体型号，并按该型号和账号的 `maxOutputTokens` 检查请求的输出上限
 
 `service_tiers` 中的 `name` 用于生成 `/fast` 等命令，`id` 用作请求的 `service_tier` 值。
 上游未声明档位或返回空数组时，网关不补充档位。档位更新后，客户端需重新加载模型目录
@@ -822,11 +814,7 @@ Images 与 Search 保留通过现有过滤规则的普通业务请求头及多�
 xAI Provider 使用上游原生 Responses wire，只有 Chat 请求装配直接转换。上游结构化错误的 message/code/type 可透出，内嵌的账号指纹 UUID 脱敏。
 模型名完整保留，不剥离前缀；别名使用显式模型映射。目录读取失败返回错误，不用硬编码型号补全能力
 
-xAI 的 `reasoning.effort` 接受 `none / minimal / low / medium / high / xhigh / max`，去除两端
-空白并转为小写后保留档位，不按模型名称降档或删除；模型是否支持该选择由上游判断。
-未知值或错误类型返回字段错误，其他 reasoning 字段保留。`web_search.filters` 支持
-`allowed_domains` 与 `excluded_domains`，两者不能同时为非空；客户端函数与托管搜索工具
-同名时使用内部别名，并在返回工具调用时还原客户端名称。搜索工具顶层的 `allowed_domains` 不受支持，返回请求错误
+原生 Responses 请求的 `reasoning.effort`、工具声明和搜索过滤条件随正文交给 xAI 校验
 
 #### 容量拒绝与重试
 

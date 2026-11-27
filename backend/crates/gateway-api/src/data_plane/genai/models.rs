@@ -82,6 +82,7 @@ async fn query_response(
     } else {
         MODELS_PATH
     };
+    let agent_menu = model.is_none() && crate::data_plane::antigravity::uses_agent_menu(&headers);
     let mut input = RequestInput::query(endpoint.to_owned(), model.clone(), &headers);
     input.protocol = GENAI_PROTOCOL.to_owned();
     middleware::query_response(
@@ -89,7 +90,7 @@ async fn query_response(
         client,
         input,
         move |client| async move {
-            match catalog(&client) {
+            match catalog(&client, agent_menu) {
                 Ok(models) => match model {
                     Some(model) => models
                         .into_iter()
@@ -110,7 +111,7 @@ async fn query_response(
     .await
 }
 
-fn catalog(client: &AuthenticatedClient) -> Result<Vec<Value>, ()> {
+fn catalog(client: &AuthenticatedClient, agent_menu: bool) -> Result<Vec<Value>, ()> {
     let generate = Operation::Generate(
         GenerateRequest::from_protocol_payload(
             ProtocolPayload::json_object(GENAI_PROTOCOL, Map::new()).map_err(|_| ())?,
@@ -127,11 +128,22 @@ fn catalog(client: &AuthenticatedClient) -> Result<Vec<Value>, ()> {
     let snapshot = client.snapshot();
     let scope = client.policy().account_scope();
     let counted = snapshot.public_models_for_operation(scope, &count);
-    Ok(snapshot
-        .public_models_for_operation(scope, &generate)
+    let models = if agent_menu {
+        snapshot.agent_models_for_operation(scope, &generate)
+    } else {
+        snapshot
+            .public_models_for_operation(scope, &generate)
+            .into_iter()
+            .map(|model| {
+                let name = model.as_str().to_owned();
+                (model, name)
+            })
+            .collect()
+    };
+    Ok(models
         .into_iter()
-        .filter(|model| super::valid_segment(model.as_str()))
-        .map(|model| {
+        .filter(|(model, _)| super::valid_segment(model.as_str()))
+        .map(|(model, name)| {
             let mut methods = vec!["generateContent", "streamGenerateContent"];
             if counted.binary_search(&model).is_ok() {
                 methods.push("countTokens");
@@ -139,7 +151,7 @@ fn catalog(client: &AuthenticatedClient) -> Result<Vec<Value>, ()> {
             // 上游尚未提供完整 Gemini 元数据，未知版本与 Token 上限保持缺失
             json!({
                 "name": format!("models/{}", model.as_str()),
-                "displayName": model.as_str(),
+                "displayName": name,
                 "supportedGenerationMethods": methods,
             })
         })

@@ -1,43 +1,14 @@
-//! 从上游分组声明提取展示名、档位顺序及实际存在的成员
+//! 从上游分组声明解析思考档位及其来源账号
 
 use crate::transport::Catalog;
 use gateway_core::{
     account::AccountCatalogObservation,
-    routing::{
-        ModelCapabilities, ModelPresentation, ProviderModelCapabilities, ReasoningModelVariant,
-        UpstreamModelId,
-    },
+    routing::{ReasoningModelVariant, UpstreamModelId},
 };
 use std::collections::BTreeMap;
 
-#[derive(Default)]
-pub(super) struct ModelGroup {
-    display_name: Option<String>,
-    efforts: Vec<String>,
-    pub(super) variants: BTreeMap<String, ReasoningModelVariant>,
-}
-
-impl ModelGroup {
-    pub(super) fn into_model(
-        self,
-        model: UpstreamModelId,
-        capabilities: ModelCapabilities,
-    ) -> ProviderModelCapabilities {
-        let default = self
-            .efforts
-            .iter()
-            .find(|level| *level == "medium")
-            .or_else(|| self.efforts.first())
-            .cloned();
-        let presentation =
-            ModelPresentation::new(self.display_name, None).with_reasoning(default, self.efforts);
-        ProviderModelCapabilities::new(model, capabilities.with_reasoning_variants(self.variants))
-            .with_presentation(presentation)
-    }
-}
-
 pub(super) fn collect(
-    groups: &mut BTreeMap<UpstreamModelId, ModelGroup>,
+    groups: &mut BTreeMap<UpstreamModelId, BTreeMap<String, ReasoningModelVariant>>,
     catalog: &Catalog,
     accounts: &[AccountCatalogObservation],
 ) {
@@ -66,23 +37,13 @@ pub(super) fn collect(
             if catalog.models.contains_key(&target)
                 && let Ok(target) = UpstreamModelId::new(target)
             {
-                let entry = groups.entry(group_id.clone()).or_default();
-                if entry.display_name.is_none() {
-                    entry.display_name = description["displayName"]
-                        .as_str()
-                        .map(str::trim)
-                        .filter(|name| !name.is_empty())
-                        .map(str::to_owned);
-                }
-                entry
-                    .variants
-                    .entry(level.clone())
-                    .or_insert_with(|| {
-                        entry.efforts.push(level);
-                        ReasoningModelVariant {
-                            model: target,
-                            accounts: Default::default(),
-                        }
+                groups
+                    .entry(group_id.clone())
+                    .or_default()
+                    .entry(level)
+                    .or_insert_with(|| ReasoningModelVariant {
+                        model: target,
+                        accounts: Default::default(),
                     })
                     .accounts
                     .extend(accounts.iter().map(|account| account.account_id.clone()));

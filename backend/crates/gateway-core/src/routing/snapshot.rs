@@ -735,9 +735,11 @@ impl RuntimeSnapshot {
         &self,
         provider: &ProviderKind,
         scope: &FrozenAccountScope,
+        protocol: Option<&str>,
     ) -> impl Iterator<Item = &super::ContributedModel> {
         self.contributed_models().iter().filter(move |model| {
             &model.provider == provider
+                && protocol.is_none_or(|protocol| model.protocol == protocol)
                 && model.accounts.iter().any(|account| {
                     scope.account_provider(account) == Some(provider)
                         && scope.allows_model(account, &self.mapped_model(model.id.as_str()))
@@ -1114,6 +1116,47 @@ impl RuntimeSnapshot {
             .collect()
     }
 
+    /// 聊天客户端用可直接路由的具体型号重建档位菜单，来源必须在当前 Key 的账号范围内
+    #[must_use]
+    pub fn agent_models_for_operation(
+        &self,
+        scope: &Arc<FrozenAccountScope>,
+        operation: &Operation,
+    ) -> Vec<(PublicModelId, String)> {
+        let mut entries = Vec::new();
+        for model in self.public_models_for_scope(scope) {
+            let Ok(plan) = self.plan(
+                &model,
+                operation,
+                Arc::clone(scope),
+                &RoutingContext::default(),
+            ) else {
+                continue;
+            };
+            let entry = plan
+                .candidates()
+                .iter()
+                .filter_map(|candidate| {
+                    let target = candidate.upstream_model()?;
+                    let capabilities = self
+                        .provider_models
+                        .get(candidate.provider())?
+                        .get(target)?;
+                    capabilities.agent_menu_entry(candidate.account_scope(), target, &model)
+                })
+                .min_by_key(|(order, _)| *order);
+            if let Some((order, name)) = entry {
+                let name = name.to_owned();
+                entries.push((order, model, name));
+            }
+        }
+        entries.sort_unstable();
+        entries
+            .into_iter()
+            .map(|(_, id, name)| (id, name))
+            .collect()
+    }
+
     /// 合并冻结账号范围内实际存在 Provider 的公开模型画像
     #[must_use]
     pub fn public_model_profiles_for_scope(
@@ -1122,7 +1165,7 @@ impl RuntimeSnapshot {
     ) -> Vec<super::PublicModelProfile> {
         let mut profiles = BTreeMap::new();
         for provider in scope.provider_kinds() {
-            for profile in self.profiles_for_provider_scope(provider, scope) {
+            for profile in self.profiles_for_provider_scope(provider, scope, None) {
                 profiles
                     .entry(profile.model().clone())
                     .or_insert_with(|| profile.presentation().clone());
@@ -1138,36 +1181,23 @@ impl RuntimeSnapshot {
         &self,
         provider: &ProviderKind,
         scope: &FrozenAccountScope,
+        protocol: Option<&str>,
     ) -> Vec<super::PublicModelProfile> {
         let mut profiles = self.public_model_profiles_for_provider(provider);
-        profiles.retain_mut(|profile| {
-            let target = self.mapped_model(profile.model.as_str());
-            let Some(group) = self.model_group(provider, &target) else {
-                return self.native_catalog_model_allowed_for_scope(
-                    provider,
-                    profile.model(),
-                    scope,
-                );
-            };
-            let models = &self.provider_models[provider];
-            let mut members = group
-                .reasoning_variants
-                .values()
-                .flat_map(|variant| {
-                    let model = models.get(&variant.model);
-                    Self::variant_accounts(provider, variant, scope)
-                        .map(move |id| model.and_then(|m| m.account_metadata.get(id)))
+        profiles.retain(|profile| {
+            self.native_catalog_model_allowed_for_scope(provider, profile.model(), scope)
+                && protocol.is_none_or(|protocol| {
+                    self.provider_models
+                        .get(provider)
+                        .and_then(|models| {
+                            models.get(self.mapped_model(profile.model().as_str()).as_str())
+                        })
+                        .is_some_and(|model| model.supports_generation_protocol(protocol))
                 })
-                .peekable();
-            if members.peek().is_none() {
-                return false;
-            }
-            profile.presentation.apply_member_metadata(members);
-            true
         });
         // Provider 画像按公开 ID 排序，追加的插件画像保留注册顺序，不参与二分查找
         let provider_count = profiles.len();
-        for model in self.contributed_models_for_scope(provider, scope) {
+        for model in self.contributed_models_for_scope(provider, scope, protocol) {
             match profiles[..provider_count]
                 .binary_search_by(|profile| profile.model().cmp(&model.id))
             {
@@ -1713,10 +1743,11 @@ impl RuntimeSnapshot {
                 let capable_accounts: BTreeSet<_> = contributions
                     .iter()
                     .filter(|model| {
-                        model
-                            .capabilities
-                            .match_operation(operation, &requirements)
-                            .is_some()
+                        model.protocol == operation.protocol()
+                            && model
+                                .capabilities
+                                .match_operation(operation, &requirements)
+                                .is_some()
                     })
                     .flat_map(|model| model.accounts.iter())
                     .filter(|account| {

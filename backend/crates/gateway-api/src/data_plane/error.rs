@@ -89,6 +89,16 @@ pub fn client_version_rejection_response(
     )
 }
 
+pub(super) fn catalog_unavailable_response() -> Response {
+    openai_error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Model catalog is temporarily unavailable.",
+        "server_error",
+        "model_catalog_unavailable",
+    )
+    .into_response()
+}
+
 /// 对外模型不存在
 pub fn model_not_found_response() -> (StatusCode, Json<Value>) {
     openai_error_response(

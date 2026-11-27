@@ -34,9 +34,9 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
             GenerateRequest, Operation, ProtocolPayload, RawJsonPayload, TokenCountRequest,
         },
         routing::{
-            AccountModelMetadata, ClientRoutingScope, FrozenAccountScope, ProviderModel,
-            ReasoningModelVariant, RoutingContext, RoutingGroupSnapshot, RuntimeAccount,
-            RuntimeAccountDirectory, RuntimeSnapshot,
+            AccountModelMetadata, AgentModelListing, ClientRoutingScope, FrozenAccountScope,
+            ProviderModel, ReasoningModelVariant, RoutingContext, RoutingGroupSnapshot,
+            RuntimeAccount, RuntimeAccountDirectory, RuntimeSnapshot,
         },
         validation::RoutingError,
     };
@@ -131,35 +131,32 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
                         (
                             declared.clone(),
                             AccountModelMetadata {
-                                context_window_tokens: Some(1000),
-                                max_context_window_tokens: Some(1500),
-                                image_input: true,
-                                description: Some("Medium".into()),
                                 max_output_tokens: Some(25),
+                                agent_listing: AgentModelListing::Listed {
+                                    order: 0,
+                                    display_name: "Family Medium".into(),
+                                },
                             },
                         ),
-                        (other.clone(), AccountModelMetadata::default()),
+                        (
+                            other.clone(),
+                            AccountModelMetadata {
+                                agent_listing: AgentModelListing::Hidden,
+                                ..Default::default()
+                            },
+                        ),
                     ])),
             ),
             ProviderModel::new(
                 provider.clone(),
                 UpstreamModelId::new("family-high").unwrap(),
                 caps().with_account_metadata(BTreeMap::from([
-                    (
-                        declared.clone(),
-                        AccountModelMetadata {
-                            max_context_window_tokens: Some(2000),
-                            ..Default::default()
-                        },
-                    ),
+                    (declared.clone(), AccountModelMetadata::default()),
                     (
                         high_only.clone(),
                         AccountModelMetadata {
-                            context_window_tokens: Some(800),
-                            max_context_window_tokens: Some(1800),
-                            image_input: true,
-                            description: Some("High".into()),
                             max_output_tokens: Some(100),
+                            ..Default::default()
                         },
                     ),
                 ])),
@@ -232,13 +229,6 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
         ["alias", "family"]
     );
     for profile in &profiles {
-        assert_eq!(profile.presentation().context_window_tokens(), Some(1000));
-        assert_eq!(
-            profile.presentation().max_context_window_tokens(),
-            Some(1500)
-        );
-        assert!(profile.presentation().image_input());
-        assert_eq!(profile.presentation().description(), Some("Medium"));
         assert_eq!(
             profile.presentation().supported_reasoning_efforts(),
             ["medium"]
@@ -252,11 +242,6 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
         Arc::clone(scope.directory()),
         ClientRoutingScope::all_accounts(),
     );
-    let mixed = snapshot.public_model_profiles_for_scope(&all);
-    assert!(mixed.iter().all(|p| !p.presentation().image_input()
-        && p.presentation().context_window_tokens().is_none()
-        && p.presentation().max_context_window_tokens() == Some(1500)
-        && p.presentation().description().is_none()));
     let only_high_scope = all.restricted_to(&BTreeSet::new(), &BTreeSet::from([high_only]));
     let only_high = snapshot.public_model_profiles_for_scope(&only_high_scope);
     assert_eq!(only_high.len(), 2);
@@ -265,13 +250,6 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
             profile.presentation().supported_reasoning_efforts(),
             ["high"]
         );
-        assert_eq!(profile.presentation().context_window_tokens(), Some(800));
-        assert_eq!(
-            profile.presentation().max_context_window_tokens(),
-            Some(1800)
-        );
-        assert!(profile.presentation().image_input());
-        assert_eq!(profile.presentation().description(), Some("High"));
     }
     // 显式输出只约束返回已知上限的账号，旧目录仍能由上游校验
     let output_request = |tokens| {
@@ -355,6 +333,11 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
         assert!(listed.contains(&base));
         let other_only =
             Arc::new(scope.restricted_to(&BTreeSet::new(), &BTreeSet::from([other.clone()])));
+        let menu = snapshot.agent_models_for_operation(&other_only, &operation("", count));
+        assert!(
+            menu.iter()
+                .all(|(model, _)| !matches!(model.as_str(), "family-medium" | "pinned"))
+        );
         assert!(
             !snapshot
                 .public_models_for_operation(&other_only, &operation("", count))
@@ -443,6 +426,7 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
         ExtensionSetId::new("group-collision".into()).unwrap(),
         Arc::new(ModelLease(vec![gateway_core::routing::ContributedModel {
             owner: "fixture".into(),
+            protocol: "genai".into(),
             id: base.clone(),
             provider,
             accounts: BTreeSet::from([other.clone()]),
@@ -574,6 +558,7 @@ fn same_name_native_and_adapted_sources_keep_account_capabilities_separate() {
     let b = ProviderAccountId::new("acct_b").unwrap();
     let mut contribution = ContributedModel {
         owner: "fixture".into(),
+        protocol: "openai".into(),
         id: id.clone(),
         provider: ProviderKind::new("alpha").unwrap(),
         accounts: [b.clone()].into(),
@@ -710,6 +695,7 @@ fn native_model_without_presentation_cannot_borrow_an_unauthorized_plugin_profil
         ExtensionSetId::new("private-profile".into()).unwrap(),
         Arc::new(ModelLease(vec![gateway_core::routing::ContributedModel {
             owner: "fixture".into(),
+            protocol: "openai".into(),
             id: PublicModelId::new("gpt-5.5").unwrap(),
             provider: ProviderKind::new("openai").unwrap(),
             accounts: [gateway_core::account::ProviderAccountId::new("acct_private").unwrap()]
@@ -740,6 +726,7 @@ fn adapted_models_limit_visibility_and_routing_to_capable_authorized_accounts() 
     let id = PublicModelId::new("adapted-model").unwrap();
     let contribution = ContributedModel {
         owner: "fixture".into(),
+        protocol: "openai".into(),
         id: id.clone(),
         provider,
         accounts: [account.clone()].into(),
@@ -1293,6 +1280,7 @@ fn group_model_access_requires_a_common_group_for_account_and_mapped_model() {
         ExtensionSetId::new("group-adapter".into()).unwrap(),
         Arc::new(ModelLease(vec![gateway_core::routing::ContributedModel {
             owner: "fixture".into(),
+            protocol: "openai".into(),
             id: adapted.clone(),
             provider: ProviderKind::new("alpha").unwrap(),
             accounts: [a].into(),
@@ -2722,6 +2710,7 @@ fn direct_reviewer_model_freezes_only_authorized_native_catalog_accounts() {
         ExtensionSetId::new("review-catalog".into()).unwrap(),
         Arc::new(ModelLease(vec![gateway_core::routing::ContributedModel {
             owner: "review-plugin".into(),
+            protocol: "openai".into(),
             id: PublicModelId::new(TARGET).unwrap(),
             provider: ProviderKind::new("openai").unwrap(),
             accounts: ["acct_oauth", "acct_unpublished"]

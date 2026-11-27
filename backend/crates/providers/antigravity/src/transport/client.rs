@@ -25,11 +25,40 @@ const MAX_CONTROL_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Catalog {
     pub(crate) project: String,
+    #[serde(
+        rename = "agentModelOrder",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) agent_model_order: Option<BTreeMap<String, usize>>,
     #[serde(rename = "webSearchModelIds", default)]
     pub(crate) web_search_models: Vec<String>,
     pub(crate) models: BTreeMap<String, Model>,
     #[serde(rename = "groupedModels", default)]
     pub(crate) grouped_models: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct AgentModelSort {
+    #[serde(default)]
+    groups: Vec<AgentModelSortGroup>,
+}
+
+#[derive(Deserialize)]
+struct AgentModelSortGroup {
+    #[serde(rename = "modelIds", default)]
+    model_ids: Vec<String>,
+}
+
+fn agent_model_order(sorts: Vec<AgentModelSort>) -> BTreeMap<String, usize> {
+    let mut order = BTreeMap::new();
+    for group in sorts.into_iter().flat_map(|sort| sort.groups) {
+        for id in group.model_ids {
+            let index = order.len();
+            order.entry(id).or_insert(index);
+        }
+    }
+    order
 }
 
 #[derive(Serialize, Deserialize)]
@@ -38,16 +67,8 @@ pub(crate) struct Model {
     pub(crate) name: String,
     #[serde(rename = "quotaInfo", default)]
     pub(crate) quota: Option<super::account::ModelQuota>,
-    #[serde(default)]
-    pub(crate) description: Option<String>,
-    #[serde(rename = "tagDescription", default)]
-    pub(crate) tag_description: Option<String>,
-    #[serde(rename = "maxTokens", default)]
-    pub(crate) context_window: Option<u64>,
     #[serde(rename = "maxOutputTokens", default)]
     pub(crate) max_output_tokens: Option<u64>,
-    #[serde(rename = "supportsImages", default)]
-    pub(crate) supports_images: Option<bool>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -138,6 +159,8 @@ impl CloudCodeClient {
     ) -> Result<Catalog, ProviderError> {
         #[derive(Deserialize)]
         struct Models {
+            #[serde(rename = "agentModelSorts", default)]
+            agent_model_sorts: Option<Vec<AgentModelSort>>,
             #[serde(rename = "webSearchModelIds", default)]
             web_search_models: Vec<String>,
             models: BTreeMap<String, Model>,
@@ -160,6 +183,7 @@ impl CloudCodeClient {
         }
         Ok(Catalog {
             project,
+            agent_model_order: models.agent_model_sorts.map(agent_model_order),
             models: models.models,
             grouped_models: models.grouped_models,
             web_search_models: models.web_search_models,
