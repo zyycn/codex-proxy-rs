@@ -273,18 +273,56 @@ async fn linked_accounts_share_plan_resolution_and_only_read_cached_quota() {
     use gateway_admin::model::{PageSize, provider_credentials::ProviderQuota};
     use std::sync::Arc;
 
-    for (stored, cached, expected) in [
-        (None, Some("free"), Some("free")),
-        (Some("unknown"), Some("free"), Some("free")),
-        (Some("plus"), Some("free"), Some("plus")),
-        (None, None, None),
+    for (kind, stored, cached, description, expected, display) in [
+        (
+            "openai",
+            None,
+            Some("free"),
+            None,
+            Some("free"),
+            Some("openai display: free"),
+        ),
+        (
+            "openai",
+            Some("unknown"),
+            Some("free"),
+            None,
+            Some("free"),
+            Some("openai display: free"),
+        ),
+        (
+            "openai",
+            Some("plus"),
+            Some("free"),
+            None,
+            Some("plus"),
+            Some("openai display: plus"),
+        ),
+        ("openai", None, None, None, None, None),
+        (
+            "antigravity",
+            Some("g1-ultra-tier"),
+            Some("g1-ultra-tier"),
+            Some("Ultra subscription"),
+            Some("g1-ultra-tier"),
+            Some("Ultra subscription"),
+        ),
+        (
+            "antigravity",
+            None,
+            None,
+            Some("Subscription without an ID"),
+            None,
+            Some("Subscription without an ID"),
+        ),
     ] {
-        let provider = FakeProviderAdmin::new("openai", events());
+        let provider = FakeProviderAdmin::new(kind, events());
         provider.set_quota(ProviderQuota {
             paused_windows: Vec::new(),
             upstream: None,
             credits: None,
             plan_type: cached.map(str::to_owned),
+            plan_type_display: description.map(str::to_owned),
             observed_at: None,
             refresh_token_expires_at: None,
             windows: vec![],
@@ -299,7 +337,7 @@ async fn linked_accounts_share_plan_resolution_and_only_read_cached_quota() {
                     id: "acct_plan".to_owned(),
                     name: "套餐测试".to_owned(),
                     email: None,
-                    provider_kind: "openai".to_owned(),
+                    provider_kind: kind.to_owned(),
                     authentication_kind: "oauth".to_owned(),
                     plan_type: stored.map(str::to_owned),
                     plan_type_display: None,
@@ -321,14 +359,7 @@ async fn linked_accounts_share_plan_resolution_and_only_read_cached_quota() {
             .await
             .unwrap();
         assert_eq!(result.items[0].plan_type.as_deref(), expected);
-        assert_eq!(
-            result.items[0].plan_type_display.as_deref(),
-            match expected {
-                Some("free") => Some("openai display: free"),
-                Some("plus") => Some("openai display: plus"),
-                _ => None,
-            }
-        );
+        assert_eq!(result.items[0].plan_type_display.as_deref(), display);
         let requests = provider.quota_requests();
         assert_eq!(requests.len(), usize::from(stored != Some("plus")));
         assert!(requests.iter().all(|request| !request.refresh));

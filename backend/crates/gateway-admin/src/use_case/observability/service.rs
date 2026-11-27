@@ -128,11 +128,6 @@ impl DefaultObservabilityService {
             .await;
         self.enrich_dashboard_quotas(&mut observation.account_usage)
             .await;
-        for account in &mut observation.account_usage {
-            account.plan_type_display = self
-                .providers
-                .plan_type_display(&account.provider_kind, account.plan_type.as_deref());
-        }
         let today = dashboard_period_metrics(
             observation
                 .trend
@@ -513,8 +508,12 @@ impl DefaultObservabilityService {
         });
         let quotas = futures::future::join_all(quota_reads).await;
         for (account, quota) in accounts.iter_mut().zip(quotas) {
+            account.plan_type_display = self.providers.resolve_account_plan(
+                &account.provider_kind,
+                &mut account.plan_type,
+                quota.as_ref(),
+            );
             if let Some(mut quota) = quota {
-                quota.fill_missing_plan_type(&mut account.plan_type);
                 quota.apply_limit_reached_display();
                 account.quota_used_percent = quota.representative_used_percent();
                 account.quota_window = quota.representative_window().cloned();

@@ -81,7 +81,7 @@ const { t } = useI18n({ useScope: 'global' })
 
     <template #accountPlanType="{ row }">
       <div
-        v-if="row.accountUpstreamPeer || row.authenticationKind === 'api_key' || row.accountPlanType"
+        v-if="row.accountUpstreamPeer || row.authenticationKind === 'api_key' || row.accountPlanTypeDisplay"
         class="-mx-3 flex min-w-0 justify-center"
       >
         <AccountPlanBadge
@@ -89,7 +89,7 @@ const { t } = useI18n({ useScope: 'global' })
           :authentication-kind="row.authenticationKind ?? undefined"
           :upstream-peer="row.accountUpstreamPeer"
           :plan-type="row.accountPlanType"
-          :plan-type-display="row.accountPlanTypeDisplay || row.accountPlanType || ''"
+          :plan-type-display="row.accountPlanTypeDisplay || ''"
           size="sm"
         />
       </div>

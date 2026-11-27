@@ -86,6 +86,7 @@ pub(super) fn project_quota(
         plan_type: billing
             .and_then(|billing| billing.plan_type())
             .map(str::to_owned),
+        plan_type_display: None,
         observed_at: snapshot.as_ref().map(GrokQuotaSnapshot::observed_at),
         refresh_token_expires_at,
         windows: vec![window],

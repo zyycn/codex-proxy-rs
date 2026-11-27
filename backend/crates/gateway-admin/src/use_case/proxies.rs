@@ -18,8 +18,7 @@ use super::{map_store_error, publish_committed};
 use crate::{
     model::{
         AdminError, AdminErrorKind, MutationContext, Revision,
-        provider_credentials::{ProviderQuotaRequest, explicit_plan_type},
-        proxies::*,
+        provider_credentials::ProviderQuotaRequest, proxies::*,
     },
     ports::{
         provider::ProviderAdminRegistry,
@@ -267,8 +266,9 @@ impl ProxiesService for DefaultProxiesService {
             .map_err(|error| map_store_error(error, "proxy"))?;
         page.items = stream::iter(page.items)
             .map(|mut account| async {
-                // 与账号目录一致，缺失套餐时读取已有额度快照；限制并发且不触发上游刷新
-                let mut cached_quota = None;
+                account.plan_type_display = self
+                    .providers
+                    .plan_type_display(&account.provider_kind, account.plan_type.as_deref());
                 if let Ok(kind) = ProviderKind::new(account.provider_kind.clone())
                     && let Ok(provider) = self.providers.require(&kind)
                     && let Ok(account_id) = ProviderAccountId::new(account.id.clone())
@@ -283,8 +283,8 @@ impl ProxiesService for DefaultProxiesService {
                             .flatten()
                             .and_then(|quota| quota.upstream);
                     }
-                    if explicit_plan_type(account.plan_type.as_deref()).is_none() {
-                        cached_quota = provider
+                    if account.plan_type_display.is_none() {
+                        let cached_quota = provider
                             .quota(ProviderQuotaRequest {
                                 account_id,
                                 refresh: false,
@@ -292,13 +292,13 @@ impl ProxiesService for DefaultProxiesService {
                             })
                             .await
                             .ok();
+                        account.plan_type_display = self.providers.resolve_account_plan(
+                            &account.provider_kind,
+                            &mut account.plan_type,
+                            cached_quota.as_ref(),
+                        );
                     }
                 }
-                account.plan_type_display = self.providers.resolve_account_plan(
-                    &account.provider_kind,
-                    &mut account.plan_type,
-                    cached_quota.as_ref(),
-                );
                 account
             })
             .buffered(8)

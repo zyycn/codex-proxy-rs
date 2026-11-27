@@ -166,6 +166,7 @@ impl PluginAccountAccess for Facts {
                 balance: Some("123456789.123456789".into()),
             }),
             plan_type: Some("private plan".into()),
+            plan_type_display: None,
             observed_at: None,
             refresh_token_expires_at: None,
             windows: vec![ProviderQuotaWindow {

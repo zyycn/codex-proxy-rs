@@ -10,12 +10,21 @@ use serde_json::json;
 pub(crate) struct AccountInfo {
     #[serde(rename = "cloudaicompanionProject")]
     pub(crate) project: String,
-    pub(crate) paid_tier: Option<Tier>,
+    pub(crate) paid_tier: Option<PaidTier>,
     pub(crate) current_tier: Option<Tier>,
+}
+
+// Desktop 将 paidTier 投影为 userStatus.userTier，显示其中的 description
+#[derive(Deserialize)]
+pub(crate) struct PaidTier {
+    #[serde(flatten)]
+    pub(crate) tier: Tier,
+    pub(crate) description: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Tier {
+    #[serde(default)]
     pub(crate) id: String,
     #[serde(default)]
     pub(crate) name: String,

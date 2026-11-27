@@ -330,13 +330,16 @@ impl ProviderAdmin for FakeProviderAdmin {
             .map_err(ProviderAdminError::new)
     }
 
-    fn plan_type_display(&self, plan_type: &str) -> String {
-        match plan_type {
+    fn plan_type_display(&self, plan_type: &str) -> Option<String> {
+        if self.kind.as_str() == "antigravity" {
+            return None;
+        }
+        Some(match plan_type {
             "prolite" => "ProLite".to_owned(),
             "pro" => "Pro".to_owned(),
             "promax" => "ProMax".to_owned(),
             _ => format!("{} display: {plan_type}", self.kind),
-        }
+        })
     }
 
     async fn account_unavailable(&self, _: &ProviderAccountId) {
@@ -2067,23 +2070,18 @@ async fn accounts_list_should_return_complete_directory_semantics() {
 #[tokio::test]
 async fn accounts_should_fill_missing_plan_from_quota_without_overriding_known_subtypes() {
     for (stored_plan, quota_plan, expected, expected_display) in [
-        (
-            None,
-            Some("free"),
-            Some("free"),
-            Some("openai display: free"),
-        ),
+        (None, Some("free"), Some("free"), Some("Plan from quota")),
         (
             Some("  "),
             Some("free"),
             Some("free"),
-            Some("openai display: free"),
+            Some("Plan from quota"),
         ),
         (
             Some("unknown"),
             Some("free"),
             Some("free"),
-            Some("openai display: free"),
+            Some("Plan from quota"),
         ),
         (
             Some("self_serve_business_prolite"),
@@ -2100,6 +2098,7 @@ async fn accounts_should_fill_missing_plan_from_quota_without_overriding_known_s
         provider.set_quota(ProviderQuota {
             upstream: None,
             plan_type: quota_plan.map(str::to_owned),
+            plan_type_display: quota_plan.map(|_| "Plan from quota".to_owned()),
             ..empty_quota()
         });
         let mut stored = account_record("openai");
@@ -2146,6 +2145,7 @@ async fn accounts_list_should_degrade_quota_failure_to_empty_window_without_drop
         upstream: None,
         credits: None,
         plan_type: None,
+        plan_type_display: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
         windows: vec![ProviderQuotaWindow {
@@ -2307,6 +2307,7 @@ async fn accounts_list_should_not_derive_rate_limited_from_provider_quota_view()
         upstream: None,
         credits: None,
         plan_type: None,
+        plan_type_display: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
         windows: vec![ProviderQuotaWindow {
@@ -2359,6 +2360,7 @@ async fn accounts_list_should_not_derive_exhaustion_from_provider_quota_view() {
         upstream: None,
         credits: None,
         plan_type: None,
+        plan_type_display: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
         windows: vec![ProviderQuotaWindow {
@@ -3124,6 +3126,7 @@ async fn accounts_list_should_attach_local_usage_to_quota_windows() {
         upstream: None,
         credits: None,
         plan_type: None,
+        plan_type_display: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
         windows: vec![ProviderQuotaWindow {
@@ -3289,6 +3292,7 @@ async fn account_windows_attach_only_the_usage_allowed_by_the_provider() {
         upstream: None,
         credits: None,
         plan_type: None,
+        plan_type_display: None,
         observed_at: Some(Utc::now()),
         refresh_token_expires_at: None,
         windows: vec![
@@ -3611,6 +3615,7 @@ fn empty_quota() -> ProviderQuota {
         upstream: None,
         credits: None,
         plan_type: None,
+        plan_type_display: None,
         observed_at: None,
         refresh_token_expires_at: None,
         windows: Vec::new(),

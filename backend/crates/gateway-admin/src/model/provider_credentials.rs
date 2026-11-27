@@ -894,6 +894,8 @@ pub struct ProviderQuota {
     pub upstream: Option<super::upstream_info::ProviderUpstreamInfo>,
     /// 上游额度响应明确提供的套餐，可用于补全账号展示
     pub plan_type: Option<String>,
+    /// 与同一观测中的套餐配套的展示文本
+    pub plan_type_display: Option<String>,
     pub observed_at: Option<DateTime<Utc>>,
     pub refresh_token_expires_at: Option<DateTime<Utc>>,
     pub windows: Vec<ProviderQuotaWindow>,

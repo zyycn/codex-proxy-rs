@@ -18,6 +18,8 @@ use std::{
 #[derive(Serialize, Deserialize)]
 pub(super) struct Document {
     pub(super) tier: Option<Tier>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) plan_description: Option<String>,
     pub(super) summary: QuotaSummary,
     pub(super) models: BTreeMap<String, ModelQuota>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -252,6 +254,11 @@ impl Document {
             }),
             limit_reached: self.access(observed).is_exhausted(),
             plan_type: self.plan_type(),
+            plan_type_display: self
+                .plan_description
+                .as_ref()
+                .filter(|s| !s.trim().is_empty())
+                .cloned(),
             observed_at: Some(DateTime::<Utc>::from(observed)),
             windows,
             ..Default::default()
