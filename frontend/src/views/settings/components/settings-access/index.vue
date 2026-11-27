@@ -3,22 +3,11 @@ import { ZConfirmDialog } from '@codex-proxy/ui'
 
 import { onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import ClientVersionSettings from '../client-version/index.vue'
 import AdminApiKeyCard from './AdminApiKeyCard.vue'
 import AdminPasswordCard from './AdminPasswordCard.vue'
-import ResponseBodyLimitCard from './ResponseBodyLimitCard.vue'
 import { useAdminApiKey } from './useAdminApiKey'
 
-defineProps<{
-  disabled: boolean
-  loading: boolean
-}>()
-
 const { t } = useI18n({ useScope: 'global' })
-
-const minCodexDesktopVersion = defineModel<string>('minCodexDesktopVersion', { required: true })
-const minCodexCliVersion = defineModel<string>('minCodexCliVersion', { required: true })
-const responsesMaxDecompressedBodyMiB = defineModel<string>('responsesMaxDecompressedBodyMiB', { required: true })
 
 const {
   loading: adminKeyLoading,
@@ -50,15 +39,6 @@ onMounted(loadStatus)
       @request-delete="showDeleteModal = true"
       @copy="copyGeneratedKey"
     />
-
-    <fieldset :disabled="disabled" class="col-span-full m-0 grid min-w-0 gap-5 border-0 p-0 @6xl/settings:grid-cols-2" :aria-label="t('settings.access.accessRestrictions')">
-      <ClientVersionSettings
-        v-model:min-codex-desktop-version="minCodexDesktopVersion"
-        v-model:min-codex-cli-version="minCodexCliVersion"
-        :loading="loading"
-      />
-      <ResponseBodyLimitCard v-model="responsesMaxDecompressedBodyMiB" />
-    </fieldset>
 
     <ZConfirmDialog
       v-model="showDeleteModal"

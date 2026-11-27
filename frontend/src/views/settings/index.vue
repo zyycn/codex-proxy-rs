@@ -14,6 +14,7 @@ import { isBuiltinProvider, PROVIDER_IDS } from '@/providers/catalog'
 import AccountAffinityCard from './components/AccountAffinityCard.vue'
 import AccountWarmupCard from './components/AccountWarmupCard.vue'
 import SettingsBackupSection from './components/backup/index.vue'
+import ClientVersionSettings from './components/client-version/index.vue'
 import ConcurrencyPolicyCard from './components/ConcurrencyPolicyCard.vue'
 import AccountErrorProtectionCard from './components/error-protection/index.vue'
 import GuardianReviewCard from './components/GuardianReviewCard.vue'
@@ -25,6 +26,7 @@ import RequestHistoryCard from './components/RequestHistoryCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
 import RequestProfileCard from './components/RequestProfileCard.vue'
 import ResetCreditCard from './components/ResetCreditCard.vue'
+import ResponseBodyLimitCard from './components/ResponseBodyLimitCard.vue'
 import RetryPolicyCard from './components/RetryPolicyCard.vue'
 import RotationStrategyCard from './components/RotationStrategyCard.vue'
 import SettingsAccessSection from './components/settings-access/index.vue'
@@ -253,11 +255,13 @@ watch(() => !loading.value && route.hash === '#reset-credits', async (ready) => 
             <ModelAliasesCard
               :mappings="mappings"
               :loading="loading"
+              class="col-span-full"
               @add-mapping="addMapping"
               @update-mapping="updateMapping"
               @remove-mapping="removeMapping"
             />
             <RequestHistoryCard v-model="usageRetentionDaysValue" />
+            <ResponseBodyLimitCard v-model="responsesMaxDecompressedBodyMiBValue" />
           </div>
         </div>
 
@@ -309,7 +313,11 @@ watch(() => !loading.value && route.hash === '#reset-credits', async (ready) => 
                   v-model:enabled="form.accountWarmupEnabled"
                   v-model:cron="form.accountWarmupCron"
                   v-model:model="form.accountWarmupModel"
-                  class="col-span-full"
+                />
+                <ClientVersionSettings
+                  v-model:min-codex-desktop-version="form.minCodexDesktopVersion"
+                  v-model:min-codex-cli-version="form.minCodexCliVersion"
+                  :loading="loading"
                 />
                 <div class="col-span-full min-w-0">
                   <PrivacyPolicyCard v-model="form.codexPrivacyPolicy" :disabled="disabled" />
@@ -322,12 +330,7 @@ watch(() => !loading.value && route.hash === '#reset-credits', async (ready) => 
       <SettingsAccessSection
         v-if="visited.has('runtime')"
         v-show="section === 'runtime'"
-        v-model:min-codex-desktop-version="form.minCodexDesktopVersion"
-        v-model:min-codex-cli-version="form.minCodexCliVersion"
-        v-model:responses-max-decompressed-body-mi-b="responsesMaxDecompressedBodyMiBValue"
         data-settings-section="runtime"
-        :disabled="disabled"
-        :loading="loading"
       />
     </ZForm>
 

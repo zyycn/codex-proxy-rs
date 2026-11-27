@@ -389,7 +389,6 @@
       "quotaResetPrioritySettings": "額度調度設置"
     },
     "access": {
-      "accessRestrictions": "訪問限制",
       "deleteAdminApiKey": "刪除管理員 API密鑰",
       "deleteKeyDescription": "刪除後外部系統將無法繼續使用該 API密鑰調用管理接口",
       "areYouSureYouWantToDelete": "確定要刪除當前管理員 API密鑰嗎？此操作會立即生效"

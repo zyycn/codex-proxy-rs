@@ -389,7 +389,6 @@
       "quotaResetPrioritySettings": "Quota scheduling settings"
     },
     "access": {
-      "accessRestrictions": "Access restrictions",
       "deleteAdminApiKey": "Delete Admin API key",
       "deleteKeyDescription": "External systems will lose admin API access through this key",
       "areYouSureYouWantToDelete": "Are you sure you want to delete the current administrator API key? This operation will take effect immediately"
