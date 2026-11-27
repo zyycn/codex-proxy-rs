@@ -25,6 +25,7 @@ mod search_model_access;
 mod selection_retry;
 mod session_binding;
 mod timing;
+mod transport;
 mod turn_state;
 mod upstream_adapter;
 

@@ -652,11 +652,13 @@ pub(super) fn selected_transport(
     request: &CodexResponsesRequest,
     guardian_role: Option<CodexGuardianRole>,
 ) -> CodexProviderTransport {
-    // 专用 sampler 的 HTTP 请求可能没有传输标记。显式 WS 和物理入站连接仍沿用原合同
-    let dedicated_http = guardian_role.is_some_and(CodexGuardianRole::uses_sampler_transport)
-        && !request.use_websocket
+    // Codex 后台压缩和专用 sampler 使用独立 HTTP 请求，可能没有显式传输标记
+    // 保留客户端的 HTTP 选择，显式 WS 和物理入站连接仍沿用原合同
+    let dedicated_http = !request.use_websocket
         && !request.websocket_frame
-        && request.downstream_websocket_connection_id.is_none();
+        && request.downstream_websocket_connection_id.is_none()
+        && (guardian_role.is_some_and(CodexGuardianRole::uses_sampler_transport)
+            || request.semantics(None).compact);
     if request.force_http_sse || dedicated_http {
         CodexProviderTransport::HttpOnly
     } else {

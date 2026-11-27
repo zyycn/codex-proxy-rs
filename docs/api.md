@@ -688,6 +688,9 @@ OAuth 账号默认 `prefer_websocket`，客户端使用 HTTP/SSE 时仍可能选
 可将账号上游传输方式设为 `http`，固定使用 HTTP/SSE。Responses API Key 账号默认使用 HTTP/SSE，
 也可配置 `prefer_websocket`；Messages API Key 账号只支持 `http`。
 OpenAI 的协议预热、依赖 WS 的非持久化新链和连接内续接要求账号支持上游 WS。
+HTTP 入站的 Codex 压缩请求未显式指定 `use_websocket: true` 且不依赖 WS 时，保留上游 HTTP/SSE；
+压缩根据 turn metadata 中的 `request_kind: compaction` 或输入中的 `compaction_trigger` 识别。
+WS 入站的压缩沿用常规传输策略。
 客户端配置的 `supports_websockets` 只控制第一段连接，不是服务端传输策略开关。
 上游在响应终态前发送 Close 1000 仍属于失败，不能按“正常关闭”计为成功
 
