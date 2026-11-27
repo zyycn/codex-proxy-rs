@@ -510,6 +510,7 @@ async fn connect_websocket_connection(
             metadata: websocket_connection_metadata(&response, connection),
             continuation: WebSocketContinuationState::default(),
             created_at: tokio::time::Instant::now(),
+            lifetime: pool::CodexWebSocketPoolConfig::default().into(),
             initial_search_declared: None,
         },
         started_at.elapsed(),
@@ -588,7 +589,7 @@ fn bypass_unavailable_error(reason: WebSocketPoolBypassReason) -> CodexWebSocket
         WebSocketPoolBypassReason::Busy => {
             continuation_unavailable(PreviousResponseUnavailableReason::ConnectionBusy)
         }
-        WebSocketPoolBypassReason::Disabled | WebSocketPoolBypassReason::Cap => {
+        WebSocketPoolBypassReason::Closed | WebSocketPoolBypassReason::Cap => {
             continuation_unavailable(PreviousResponseUnavailableReason::PoolUnavailable)
         }
         WebSocketPoolBypassReason::ContinuationNotFound => {
@@ -624,6 +625,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
         metadata,
         continuation,
         created_at,
+        lifetime,
         initial_search_declared,
     } = connection;
     trace.record("upstream.connection", serde_json::json!({
@@ -682,6 +684,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
     let pool_return = lease.map(|lease| WebSocketStreamPoolReturn {
         lease,
         created_at,
+        lifetime,
         continuation,
         initial_search_declared: initial_search_declared
             .unwrap_or(request.opening.codex_search_declared.unwrap_or(false)),

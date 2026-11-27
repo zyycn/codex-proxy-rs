@@ -1200,6 +1200,7 @@ impl SettingsStore for StaticSettingsStore {
             rotation_strategy: RotationStrategy::Smart,
             updated_at: Utc::now(),
             values: gateway_admin::model::settings::RuntimeSettingsValues {
+                openai_websocket_pool: Default::default(),
                 openai_request_settings: gateway_core::settings::OpenAiRequestSettings {
                     oauth_guardian_review_model: false,
                     ..Default::default()

@@ -44,7 +44,16 @@ export type OpenAiRequestCountry
   = | { mode: 'default' | 'passthrough' | 'follow_location' }
     | { mode: 'custom', country: string }
 
+export interface OpenAiWebSocketPoolSettings {
+  maxAgeMs: number
+  maxConnecting: number
+  fastPathBudgetMs: number
+  idleTimeoutMs: number
+  streamIdleTimeoutMs: number
+}
+
 export interface RuntimeSettings {
+  openaiWebsocketPool: OpenAiWebSocketPoolSettings
   configRevision: number
   smartScheduling: SmartSchedulingConfig
   smartSchedulingDefaults: SmartSchedulingConfig

@@ -444,7 +444,10 @@ impl CodexBackendClient {
                 .unwrap_or(&self.websocket_origin_key),
             fast_path_budget,
             requirement.requires_websocket(),
-            Some(DEFAULT_STREAM_IDLE_TIMEOUT),
+            self.websocket_pool.as_deref().map_or(
+                Some(DEFAULT_STREAM_IDLE_TIMEOUT),
+                CodexWebSocketPool::stream_idle_timeout,
+            ),
         )
         .await;
         let prepared = match prepared {

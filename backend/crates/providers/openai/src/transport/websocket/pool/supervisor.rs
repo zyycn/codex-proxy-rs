@@ -103,7 +103,7 @@ impl CodexWebSocketPool {
         let config = self.config;
         let tasks = self.tasks.clone();
         let shutdown = self.shutdown.clone();
-        let connect_semaphore = Arc::clone(&self.connect_semaphore);
+        let connecting = Arc::clone(&self.connecting);
         let maintenance_started = Arc::clone(&self.maintenance_started);
         let proxy_capacities = Arc::clone(&self.proxy_capacities);
         let capacity_changed = Arc::clone(&self.capacity_changed);
@@ -122,7 +122,7 @@ impl CodexWebSocketPool {
                     config,
                     tasks: tasks.clone(),
                     shutdown: shutdown.clone(),
-                    connect_semaphore: Arc::clone(&connect_semaphore),
+                    connecting: Arc::clone(&connecting),
                     maintenance_started: Arc::clone(&maintenance_started),
                     proxy_capacities: Arc::clone(&proxy_capacities),
                     capacity_changed: Arc::clone(&capacity_changed),
@@ -144,7 +144,7 @@ impl CodexWebSocketPool {
         let mut close = Vec::new();
         let now = Instant::now();
         let mut state = self.lock_state();
-        if state.shutting_down || !self.config.enabled {
+        if state.shutting_down {
             return close;
         }
         let keys = state
@@ -159,16 +159,15 @@ impl CodexWebSocketPool {
                     connection,
                     *idle_since,
                     now,
-                    &self.config,
                 )
                 .map(|observation| (key.clone(), Some(observation))),
                 WebSocketPoolSlot::Busy(reservation)
-                    if now.duration_since(reservation.reserved_at) >= self.config.max_age =>
+                    if now.duration_since(reservation.reserved_at) >= reservation.max_age =>
                 {
                     Some((key.clone(), None))
                 }
                 WebSocketPoolSlot::Connecting(connecting)
-                    if now.duration_since(connecting.started_at) >= self.config.max_age =>
+                    if now.duration_since(connecting.started_at) >= connecting.max_age =>
                 {
                     Some((key.clone(), None))
                 }

@@ -109,6 +109,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "max_retry_after_seconds".to_owned(),
                     "openai_guardian_reserved_concurrency".to_owned(),
                     "openai_request_settings_json".to_owned(),
+                    "openai_websocket_pool_json".to_owned(),
                     "account_affinity".to_owned(),
                     "max_account_rotations".to_owned(),
                     "session_affinity_ttl_hours".to_owned(),

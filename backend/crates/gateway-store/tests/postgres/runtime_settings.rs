@@ -22,6 +22,7 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
             ("grok-latest".to_owned(), "grok-4.5".to_owned()),
         ]),
         values: gateway_admin::model::settings::RuntimeSettingsValues {
+            openai_websocket_pool: Default::default(),
             openai_request_settings: Default::default(),
             codex_privacy_policy: Default::default(),
             request_location_enabled: false,
@@ -582,6 +583,14 @@ async fn openai_request_settings_round_trip_into_snapshot() {
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     let snapshots = PgRuntimeSnapshotRepository::new(database.pool.clone());
     let initial = snapshots.load_runtime_snapshot().await.unwrap();
+    assert_eq!(
+        initial
+            .settings
+            .openai_request_settings()
+            .residency
+            .as_deref(),
+        Some("us")
+    );
     assert!(
         initial
             .settings
@@ -1422,5 +1431,39 @@ async fn protection_revision_tracks_only_policy_changes_and_survives_return_to_p
     assert!(
         final_settings.account_error_protection_revision > same.account_error_protection_revision
     );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn websocket_pool_settings_round_trip_into_runtime_snapshot() {
+    use gateway_core::settings::OpenAiWebSocketPoolSettings;
+    use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
+    let Some(database) = TestDatabase::create("websocket_pool").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let before = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(
+        before.values.openai_websocket_pool,
+        OpenAiWebSocketPoolSettings::default()
+    );
+    let expected = OpenAiWebSocketPoolSettings {
+        max_age_ms: 60_000,
+        max_connecting: 3,
+        fast_path_budget_ms: 1_500,
+        idle_timeout_ms: 1_000,
+        stream_idle_timeout_ms: 0,
+    };
+    let mut update = settings_with_margin(300);
+    update.values.openai_websocket_pool = expected;
+    repository.update_runtime_settings(update).await.unwrap();
+    let after = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(after.values.openai_websocket_pool, expected);
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert_eq!(*snapshot.settings.openai_websocket_pool(), expected);
+    assert!(after.config_revision > before.config_revision);
     database.close().await;
 }

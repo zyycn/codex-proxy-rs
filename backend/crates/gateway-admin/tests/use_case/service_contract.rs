@@ -226,6 +226,10 @@ fn sdk_settings_contract_matches_host_declarations() {
             ][..],
         ),
         (
+            "../gateway-core/src/settings/websocket.rs",
+            &["OpenAiWebSocketPoolSettings"][..],
+        ),
+        (
             "../gateway-core/src/settings/openai.rs",
             &["OpenAiRequestSettings", "OpenAiRequestCountry"][..],
         ),

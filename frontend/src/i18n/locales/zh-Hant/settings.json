@@ -261,7 +261,11 @@
     },
     "units": {
       "seconds": "秒",
-      "inSeconds": "{label}（秒）"
+      "inSeconds": "{label}（秒）",
+      "milliseconds": "毫秒",
+      "withUnit": "{label}（{unit}）",
+      "minutes": "分鐘",
+      "backups": "份"
     },
     "concurrency": {
       "title": "並發與排隊",
@@ -324,7 +328,7 @@
       "retentionConstraints": "至少 1 天，刪除後不可恢復",
       "retentionDaysLabel": "歷史保留天數"
     },
-    "retentionDays": "保留天數",
+    "retentionDays": "保留時間",
     "enterDays": "請輸入保留天數",
     "day": "天",
     "location": {
@@ -359,9 +363,9 @@
       "thresholdHelp": "高於此值時暫不自動使用，留空表示不限制",
       "weeklyQuotaLimit": "重置卡剩餘周額度上限"
     },
-    "advanceUsageTimeMinutes": "提前使用時間（分鐘）",
+    "advanceUsageTimeMinutes": "提前使用時間",
     "resetCardAdvanceTime": "重置卡提前使用時間",
-    "remainingWeeklyQuotaLimit": "剩餘周額度上限（%）",
+    "remainingWeeklyQuotaLimit": "剩餘周額度上限",
     "responseLimit": {
       "requestBodyLimit": "請求體限制",
       "description": "模型請求解壓和插件出站共用此上限",
@@ -427,7 +431,7 @@
         "cronExpression": "Cron 表達式",
         "cronHelp": "5 段格式，例如 0 2 * * * 表示每天凌晨 2 點",
         "retentionDaysHelp": "超期刪除，0 不限天數，仍受份數限制",
-        "retentionDaysLabel": "保留天數",
+        "retentionDaysLabel": "保留時間",
         "maxBackupsLabel": "最多保留",
         "retentionCountHelp": "超額刪除，0 不限份數，仍受天數限制"
       },
@@ -785,10 +789,26 @@
       "residencyPlaceholder": "us",
       "accountRoutingOverride": "帳號路由",
       "accountRoutingPlaceholder": "us / us_cr",
-      "residencyHelp": "數據駐留說明",
-      "accountRoutingOverrideHelp": "賬號路由說明",
-      "headerHelp": "按填寫值發送請求頭，留空則不發送",
+      "residencyHelp": "預設 us，依填寫值傳送資料駐留請求標頭，留空則刪除此標頭",
+      "accountRoutingOverrideHelp": "預設留空，可填寫 us 或 us_cr，依填寫值傳送帳號路由請求標頭，留空則刪除此標頭",
       "description": "配置發往上游的請求參數"
+    },
+    "websocketPool": {
+      "title": "連線池",
+      "description": "管理上游連線的建立、逾時與回收",
+      "maxAgeMs": "連線最大壽命",
+      "maxConnecting": "最大並行建連數",
+      "fastPathBudgetMs": "建連等待時間",
+      "idleTimeoutMs": "閒置回收時間",
+      "streamIdleTimeoutMs": "串流閒置逾時",
+      "maxAgeMsHelp": "單條上游 WebSocket 連線的最長使用時間，預設 3300000 毫秒（55 分鐘），必須大於零\n\n到期後停止重用，正在產生的回應仍可完成\n\n修改僅對新建連線生效，現有連線保留建立時的壽命",
+      "maxConnectingHelp": "單個服務程序內所有帳號共用的並行建連上限，預設 8，必須為正整數\n\n只計算正在建立的連線，不限制已建立連線的總數，也不是請求並行上限\n\n新請求使用新上限，調低不會取消已開始的建連",
+      "fastPathBudgetMsHelp": "允許退回 HTTP 的請求等待 WebSocket 建連的時間，預設 800 毫秒，範圍 1–15000 毫秒\n\n逾時後本次請求改走 HTTP/SSE，已開始的建連繼續在背景完成\n\n調大可給高延遲線路更多建連時間，也會延長退回前的等待，新請求使用新值",
+      "idleTimeoutMsHelp": "連線歸還連線池後允許連續閒置的時間，預設 300000 毫秒（5 分鐘），必須大於零\n\n僅回收未綁定活躍用戶端 WebSocket 的閒置連線，Ping/Pong 不會重設計時\n\n修改僅對新建連線生效，現有連線保留原期限",
+      "streamIdleTimeoutMsHelp": "等待下一條上游業務訊息的最長時間，預設 300000 毫秒（5 分鐘），填 0 仍使用此預設值\n\n收到業務訊息後重新計時，Ping/Pong 不會重設計時，逾時會中止目前上游回應並關閉連線\n\n新請求及 WebSocket 下一輪使用新值，正在執行的輪次保持原值",
+      "invalidPositive": "請輸入大於零的整數",
+      "invalidBudget": "請輸入 1–15000 之間的整數",
+      "invalidTimeout": "請輸入大於或等於零的整數"
     }
   }
 }

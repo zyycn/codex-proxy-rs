@@ -320,6 +320,7 @@ pub struct RequestAttemptContext {
     pricing: Arc<crate::metering::PricingOverrides>,
     request_profile: Option<crate::account::OpaqueProviderData>,
     fast_mode: FastMode,
+    openai_websocket_pool: crate::settings::OpenAiWebSocketPoolSettings,
     openai_request_settings: crate::settings::OpenAiRequestSettings,
     request_location: Option<crate::account::RequestLocation>,
     privacy: Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>>,
@@ -419,6 +420,15 @@ impl RequestAttemptContext {
     }
 
     #[must_use]
+    pub fn with_openai_websocket_pool(
+        mut self,
+        settings: crate::settings::OpenAiWebSocketPoolSettings,
+    ) -> Self {
+        self.openai_websocket_pool = settings;
+        self
+    }
+
+    #[must_use]
     pub fn with_openai_request_settings(
         mut self,
         settings: crate::settings::OpenAiRequestSettings,
@@ -448,6 +458,7 @@ impl RequestAttemptContext {
             request_profile: None,
             pricing: Arc::default(),
             fast_mode: FastMode::Default,
+            openai_websocket_pool: Default::default(),
             openai_request_settings: Default::default(),
             request_location: None,
             privacy: None,
@@ -723,6 +734,11 @@ impl AttemptContext {
     #[must_use]
     pub const fn request_location(&self) -> Option<&crate::account::RequestLocation> {
         self.request.request_location.as_ref()
+    }
+
+    #[must_use]
+    pub const fn openai_websocket_pool(&self) -> &crate::settings::OpenAiWebSocketPoolSettings {
+        &self.request.openai_websocket_pool
     }
 
     #[must_use]

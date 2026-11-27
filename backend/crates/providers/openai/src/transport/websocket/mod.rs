@@ -44,7 +44,6 @@ pub(crate) use self::{
         post_send_ambiguous, prepare_response_create_request_with_pool,
     },
     error::WEBSOCKET_CLOSE_MESSAGE_TOO_BIG,
-    handshake::WEBSOCKET_CONNECT_TIMEOUT,
     live::{connect_live_sideband, into_live_relay},
     pool::{DEFAULT_FAST_PATH_BUDGET_MS, DEFAULT_STREAM_IDLE_TIMEOUT},
 };

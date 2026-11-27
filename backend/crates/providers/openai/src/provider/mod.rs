@@ -321,6 +321,7 @@ impl CodexProvider {
                     .with_diagnostic(diagnostic)
             })?,
         };
+        client = client.with_websocket_settings(*context.openai_websocket_pool());
         Ok(client
             .with_request_profile(profile.with_request_settings(context.openai_request_settings())))
     }

@@ -131,9 +131,7 @@ pub async fn initialize(
     );
     platform_releases.restore().await;
     let repository = CodexCredentialRepository::new(Arc::clone(&accounts));
-    let websocket_pool = Arc::new(CodexWebSocketPool::with_config(
-        config.websocket_pool_config(),
-    ));
+    let websocket_pool = Arc::new(CodexWebSocketPool::default());
     let catalog = Arc::new(CodexCredentialCatalogService::new(
         repository.clone(),
         profile.clone(),

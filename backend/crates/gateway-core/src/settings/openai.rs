@@ -40,7 +40,7 @@ impl Default for OpenAiRequestSettings {
         Self {
             request_country: Default::default(),
             oauth_guardian_review_model: true,
-            residency: None,
+            residency: Some("us".to_owned()),
             account_routing_override: None,
         }
     }

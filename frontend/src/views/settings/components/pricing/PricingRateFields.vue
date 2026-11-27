@@ -30,13 +30,17 @@ function preview(field: keyof TokenPrices) {
       <ZFormItem v-if="custom" :label="field.label">
         <ZInput
           :model-value="custom[field.key]"
-          :aria-label="t('settings.pricing.unitPrice', { label: field.label })"
+          :aria-label="t('settings.units.withUnit', { label: t('settings.pricing.unitPrice', { label: field.label }), unit: t('settings.pricing.unitLabel') })"
           class="font-mono"
           inputmode="decimal"
           placeholder="0.00"
           :disabled="disabled"
           @update:model-value="$emit('change', field.key, $event)"
-        />
+        >
+          <template #suffix>
+            <span class="text-z-xs">USD / 1M</span>
+          </template>
+        </ZInput>
       </ZFormItem>
       <div v-else>
         <div class="mb-2 text-z leading-none font-medium text-z-text-secondary">

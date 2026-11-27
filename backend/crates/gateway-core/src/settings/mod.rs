@@ -5,10 +5,12 @@ mod openai;
 pub mod privacy;
 pub mod request_profiles;
 mod values;
+mod websocket;
 pub use openai::{OpenAiRequestCountry, OpenAiRequestSettings};
 pub use values::{
     SettingsValues, client_min_versions, response_body_limit, validate_request_limits,
 };
+pub use websocket::OpenAiWebSocketPoolSettings;
 
 #[derive(Debug, thiserror::Error)]
 #[error("request settings are invalid")]

@@ -2388,7 +2388,7 @@ Antigravity 不应用这组国家、区域、城市和时区覆盖，原生请�
 {
   "requestCountry": { "mode": "follow_location" },
   "oauthGuardianReviewModel": true,
-  "residency": null,
+  "residency": "us",
   "accountRoutingOverride": null
 }
 ```
@@ -2406,11 +2406,26 @@ Antigravity 不应用这组国家、区域、城市和时区覆盖，原生请�
 
 #### 数据驻留与路由
 
-`openaiRequestSettings` 中的 `residency` 和 `accountRoutingOverride` 独立于客户端身份与请求位置，均为可选字符串，默认 `null`，分别设置 `x-openai-internal-codex-residency` 和
+`openaiRequestSettings` 中的 `residency` 和 `accountRoutingOverride` 独立于客户端身份与请求位置，均为可选字符串，默认值分别为 `"us"` 和 `null`，分别设置 `x-openai-internal-codex-residency` 和
 `x-openai-account-routing-override`。值必须能作为 HTTP／WebSocket 请求头发送（ASCII 文本），原样保留，不限制为固定选项。
 参考值分别为 `us` 和 `us`、`us_cr`。字段省略或为 `null` 时删除对应请求头，空字符串发送空头值；管理端留空保存为 `null`
 
 保存后对新请求及后续后台操作生效，无需重启。正在执行的请求及其重试保留原值，WebSocket 连接按最终握手头隔离。
+
+### OpenAI WebSocket 连接池
+
+`openaiWebsocketPool` 为必填完整对象，连接池始终启用。五项配置如下：
+
+| 字段 | 默认值 | 约束与用途 |
+| --- | --- | --- |
+| `maxAgeMs` | `3300000` | 大于零，单条连接的最大寿命，单位毫秒 |
+| `maxConnecting` | `8` | 1–4294967295，所有账号共用的并发建连上限 |
+| `fastPathBudgetMs` | `800` | 1–15000，允许回退 HTTP 的请求等待 WS 建连的毫秒数 |
+| `idleTimeoutMs` | `300000` | 大于零，未绑定活跃下游 WS 的连接归池后的空闲回收时间，单位毫秒 |
+| `streamIdleTimeoutMs` | `300000` | 非负整数，等待上游业务消息的毫秒数，0 使用默认 300000 毫秒 |
+
+保存后无需重启，新请求及 WS 下一轮读取新配置，正在执行的请求及其重试保留原快照。
+新请求的建连准入使用新上限，在途建连继续计数且不会被取消。最大寿命与空闲回收期限随新连接固定，旧连接沿用创建时的期限；保存设置不重建连接池或断开存量连接。
 
 ### 隐私策略
 

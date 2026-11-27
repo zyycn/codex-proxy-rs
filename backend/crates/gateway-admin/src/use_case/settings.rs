@@ -117,6 +117,14 @@ fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError>
     )
     .map_err(|_| AdminError::invalid("运行时设置不满足约束"))?;
     command.values.validate().map_err(|field| match field {
+        "openai_websocket_pool.fast_path_budget_ms" => {
+            AdminError::invalid("WS 建连等待时间须为 1–15000 毫秒")
+        }
+        "openai_websocket_pool.max_age_ms"
+        | "openai_websocket_pool.idle_timeout_ms"
+        | "openai_websocket_pool.max_connecting" => {
+            AdminError::invalid("WS 连接寿命、空闲回收时间和最大并发建连数必须大于零")
+        }
         "openai_request_settings.residency"
         | "openai_request_settings.account_routing_override" => {
             AdminError::invalid("数据驻留和账号路由必须是有效的单行请求头值")

@@ -6336,10 +6336,17 @@ async fn runtime_routing_headers_override_request_identity_and_clear_when_unset(
         .into_iter()
         .enumerate()
     {
-        let settings = gateway_core::settings::OpenAiRequestSettings {
-            residency: (index == 0).then(|| "us".to_owned()),
-            account_routing_override: (index == 0).then(|| "us_cr".to_owned()),
-            ..Default::default()
+        let settings = if index == 0 {
+            gateway_core::settings::OpenAiRequestSettings {
+                account_routing_override: Some("us_cr".to_owned()),
+                ..Default::default()
+            }
+        } else {
+            gateway_core::settings::OpenAiRequestSettings {
+                residency: None,
+                account_routing_override: None,
+                ..Default::default()
+            }
         };
         let context = AttemptContext::new(
             RequestAttemptContext::new(

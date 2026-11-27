@@ -261,7 +261,11 @@
     },
     "units": {
       "seconds": "seconds",
-      "inSeconds": "{label} (seconds)"
+      "inSeconds": "{label} (seconds)",
+      "milliseconds": "ms",
+      "withUnit": "{label} ({unit})",
+      "minutes": "min",
+      "backups": "backups"
     },
     "concurrency": {
       "title": "Concurrency and queues",
@@ -324,7 +328,7 @@
       "retentionConstraints": "Minimum 1 day, deletion is permanent",
       "retentionDaysLabel": "History retention (d)"
     },
-    "retentionDays": "Retention (d)",
+    "retentionDays": "Retention period",
     "enterDays": "Enter retention days",
     "day": "d",
     "location": {
@@ -359,9 +363,9 @@
       "thresholdHelp": "Skip automatic use when the remaining quota exceeds this threshold, leave blank for no limit",
       "weeklyQuotaLimit": "Reset credit remaining weekly quota threshold"
     },
-    "advanceUsageTimeMinutes": "Advance usage time (min)",
+    "advanceUsageTimeMinutes": "Advance usage time",
     "resetCardAdvanceTime": "Reset card advance time",
-    "remainingWeeklyQuotaLimit": "Remaining weekly quota limit (%)",
+    "remainingWeeklyQuotaLimit": "Remaining weekly quota limit",
     "responseLimit": {
       "requestBodyLimit": "Request body limit",
       "description": "Shared by model request decompression and outbound plugin requests",
@@ -427,7 +431,7 @@
         "cronExpression": "Cron expression",
         "cronHelp": "Five-field cron expression, for example 0 2 * * * runs daily at 02:00",
         "retentionDaysHelp": "Delete older backups, 0 disables age limits, count limits still apply",
-        "retentionDaysLabel": "Retention (d)",
+        "retentionDaysLabel": "Retention period",
         "maxBackupsLabel": "Max backups",
         "retentionCountHelp": "Delete excess backups, 0 disables count limits, age limits still apply"
       },
@@ -785,10 +789,26 @@
       "residencyPlaceholder": "us",
       "accountRoutingOverride": "Account routing",
       "accountRoutingPlaceholder": "us / us_cr",
-      "residencyHelp": "About residency",
-      "accountRoutingOverrideHelp": "About account routing",
-      "headerHelp": "Sends the header value as entered, or omits the header when left blank",
+      "residencyHelp": "Defaults to us, sends the residency header as entered, clearing the field removes the header",
+      "accountRoutingOverrideHelp": "Defaults to blank, reference values are us and us_cr, sends the routing header as entered, clearing the field removes the header",
       "description": "Configure parameters sent to the upstream provider"
+    },
+    "websocketPool": {
+      "title": "Connection pool",
+      "description": "Manage upstream connection timing and reuse",
+      "maxAgeMs": "Maximum lifetime",
+      "maxConnecting": "Concurrent connections opening",
+      "fastPathBudgetMs": "Connection wait budget",
+      "idleTimeoutMs": "Idle recycle timeout",
+      "streamIdleTimeoutMs": "Stream idle timeout",
+      "maxAgeMsHelp": "Maximum lifetime of an upstream WebSocket connection, default 3300000 ms (55 minutes), must be positive\n\nExpired connections stop being reused after active responses finish\n\nChanges apply to new connections, existing connections keep their original lifetime",
+      "maxConnectingHelp": "Shared limit on connections being opened across all accounts in one server process, default 8, must be a positive integer\n\nCounts connections being established, not established connections or concurrent requests\n\nNew requests use the new limit, lowering it does not cancel openings in progress",
+      "fastPathBudgetMsHelp": "How long requests that allow HTTP fallback wait for a WebSocket connection, default 800 ms, range 1–15000 ms\n\nWhen the budget expires, the request uses HTTP/SSE while the opening continues in the background\n\nA larger budget allows more time on slow networks but delays fallback, new requests use the new value",
+      "idleTimeoutMsHelp": "Allowed idle time after a connection returns to the pool, default 300000 ms (5 minutes), must be positive\n\nOnly idle connections without an active client WebSocket binding are recycled, Ping/Pong does not reset the timer\n\nChanges apply to new connections, existing connections keep their original timeout",
+      "streamIdleTimeoutMsHelp": "Maximum wait for the next upstream business message, default 300000 ms (5 minutes), 0 also uses this default\n\nBusiness messages reset the timer, Ping/Pong does not, a timeout aborts the upstream response and closes the connection\n\nNew requests and the next WebSocket turn use the new value, active turns keep the previous value",
+      "invalidPositive": "Enter a positive integer",
+      "invalidBudget": "Enter an integer from 1 to 15000",
+      "invalidTimeout": "Enter a non-negative integer"
     }
   }
 }

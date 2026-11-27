@@ -25,6 +25,11 @@ export function useSettingsFormRules(form: () => SettingsForm) {
   })
 
   return computed<FormRules<SettingsForm>>(() => ({
+    'openaiWebsocketPool.maxAgeMs': integer(1, Number.MAX_SAFE_INTEGER, t('settings.websocketPool.invalidPositive')),
+    'openaiWebsocketPool.maxConnecting': integer(1, 4294967295, t('settings.websocketPool.invalidPositive')),
+    'openaiWebsocketPool.fastPathBudgetMs': integer(1, 15000, t('settings.websocketPool.invalidBudget')),
+    'openaiWebsocketPool.idleTimeoutMs': integer(1, Number.MAX_SAFE_INTEGER, t('settings.websocketPool.invalidPositive')),
+    'openaiWebsocketPool.streamIdleTimeoutMs': integer(0, Number.MAX_SAFE_INTEGER, t('settings.websocketPool.invalidTimeout')),
     'refreshMarginSeconds': integer(0, Number.MAX_SAFE_INTEGER, t('settings.form.invalidRefreshSettings')),
     'refreshConcurrency': integer(0, 4_294_967_295, t('settings.form.invalidRefreshSettings')),
     'maxConcurrentPerAccount': integer(0, 4_294_967_295, t('settings.form.invalidConcurrency')),

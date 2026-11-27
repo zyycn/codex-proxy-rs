@@ -36,6 +36,7 @@ pub type ProviderRequestProfileUpdates =
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsFields {
+    pub openai_websocket_pool: gateway_core::settings::OpenAiWebSocketPoolSettings,
     pub openai_request_settings: gateway_core::settings::OpenAiRequestSettings,
     pub codex_privacy_policy: gateway_core::settings::privacy::CodexPrivacyPolicy,
     pub request_location_enabled: bool,
@@ -709,6 +710,7 @@ impl RuntimeSettingsFields {
         self,
     ) -> Result<gateway_admin::model::settings::RuntimeSettingsValues, WireValidationError> {
         let values = gateway_admin::model::settings::RuntimeSettingsValues {
+            openai_websocket_pool: self.openai_websocket_pool,
             openai_request_settings: self.openai_request_settings,
             codex_privacy_policy: self.codex_privacy_policy,
             request_location_enabled: self.request_location_enabled,
@@ -759,6 +761,7 @@ impl RuntimeSettingsFields {
 impl From<gateway_admin::model::settings::RuntimeSettingsValues> for RuntimeSettingsFields {
     fn from(settings: gateway_admin::model::settings::RuntimeSettingsValues) -> Self {
         crate::admin::settings::RuntimeSettingsFields {
+            openai_websocket_pool: settings.openai_websocket_pool,
             openai_request_settings: settings.openai_request_settings,
             codex_privacy_policy: settings.codex_privacy_policy,
             request_location_enabled: settings.request_location_enabled,
@@ -813,6 +816,10 @@ fn settings_validation_error(field: &'static str) -> WireValidationError {
         "max_waiting_per_key" => "maxWaitingPerKey",
         "min_codex_cli_version" => "minCodexCliVersion",
         "min_codex_desktop_version" => "minCodexDesktopVersion",
+        "openai_websocket_pool.max_age_ms" => "openaiWebsocketPool.maxAgeMs",
+        "openai_websocket_pool.max_connecting" => "openaiWebsocketPool.maxConnecting",
+        "openai_websocket_pool.fast_path_budget_ms" => "openaiWebsocketPool.fastPathBudgetMs",
+        "openai_websocket_pool.idle_timeout_ms" => "openaiWebsocketPool.idleTimeoutMs",
         "openai_request_settings.request_country" => "openaiRequestSettings.requestCountry",
         "openai_request_settings.residency" => "openaiRequestSettings.residency",
         "openai_request_settings.account_routing_override" => {

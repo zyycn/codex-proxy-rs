@@ -59,6 +59,15 @@ pub enum AccountErrorOperator {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenAiWebSocketPoolSettings {
+    pub max_age_ms: u64,
+    pub max_connecting: u32,
+    pub fast_path_budget_ms: u64,
+    pub idle_timeout_ms: u64,
+    pub stream_idle_timeout_ms: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpenAiRequestSettings {
     pub request_country: OpenAiRequestCountry,
     pub oauth_guardian_review_model: bool,
@@ -153,6 +162,7 @@ pub struct PrivacyPreviewResult {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeSettings {
+    pub openai_websocket_pool: OpenAiWebSocketPoolSettings,
     pub openai_request_settings: OpenAiRequestSettings,
     pub codex_privacy_policy: CodexPrivacyPolicy,
     pub request_location_enabled: bool,
@@ -194,6 +204,7 @@ pub struct RuntimeSettings {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplaceRuntimeSettings {
+    pub openai_websocket_pool: OpenAiWebSocketPoolSettings,
     pub openai_request_settings: OpenAiRequestSettings,
     pub codex_privacy_policy: CodexPrivacyPolicy,
     pub request_location_enabled: bool,
@@ -407,6 +418,7 @@ impl Operation for PreviewClientProfile {
 impl From<RuntimeSettings> for ReplaceRuntimeSettings {
     fn from(settings: RuntimeSettings) -> Self {
         Self {
+            openai_websocket_pool: settings.openai_websocket_pool,
             openai_request_settings: settings.openai_request_settings,
             codex_privacy_policy: settings.codex_privacy_policy,
             request_location_enabled: settings.request_location_enabled,

@@ -72,14 +72,22 @@ function updateSchedule<Key extends keyof ScheduleForm>(key: Key, value: Schedul
         </ZFormItem>
 
         <ZFormItem :label="t('settings.backup.schedule.retentionDaysLabel')" :description="t('settings.backup.schedule.retentionDaysHelp')">
-          <ZInput :model-value="schedule.retentionDays" :disabled="disabled" :aria-label="t('settings.backup.schedule.retentionDaysLabel')" type="number" min="0" @update:model-value="updateSchedule('retentionDays', $event)" />
+          <ZInput :model-value="schedule.retentionDays" :disabled="disabled" :aria-label="t('settings.units.withUnit', { label: t('settings.backup.schedule.retentionDaysLabel'), unit: t('settings.day') })" type="number" min="0" @update:model-value="updateSchedule('retentionDays', $event)">
+            <template #suffix>
+              {{ t('settings.day') }}
+            </template>
+          </ZInput>
         </ZFormItem>
 
         <ZFormItem
           :label="t('settings.backup.schedule.maxBackupsLabel')"
           :description="t('settings.backup.schedule.retentionCountHelp')"
         >
-          <ZInput :model-value="schedule.retentionCount" :disabled="disabled" :aria-label="t('settings.backup.schedule.maxBackupsLabel')" type="number" min="0" @update:model-value="updateSchedule('retentionCount', $event)" />
+          <ZInput :model-value="schedule.retentionCount" :disabled="disabled" :aria-label="t('settings.units.withUnit', { label: t('settings.backup.schedule.maxBackupsLabel'), unit: t('settings.units.backups') })" type="number" min="0" @update:model-value="updateSchedule('retentionCount', $event)">
+            <template #suffix>
+              {{ t('settings.units.backups') }}
+            </template>
+          </ZInput>
         </ZFormItem>
       </ZForm>
     </div>

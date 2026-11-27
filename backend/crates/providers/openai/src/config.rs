@@ -8,9 +8,6 @@ use url::Url;
 
 use crate::credential::CodexQuotaRefreshPolicy;
 use crate::transport::session::{CodexSessionIdentity, CodexSessionIdentityError};
-use crate::transport::websocket::{
-    CodexWebSocketPoolConfig, DEFAULT_FAST_PATH_BUDGET_MS, WEBSOCKET_CONNECT_TIMEOUT,
-};
 use crate::{
     OFFICIAL_CODEX_BASE_URL,
     credential::token_client::{
@@ -35,8 +32,6 @@ pub struct OpenAiConfig {
     #[serde(default)]
     pub api: CodexApiConfig,
     #[serde(default)]
-    pub ws_pool: CodexWebSocketPoolSettings,
-    #[serde(default)]
     pub quota: CodexQuotaSettings,
     #[serde(default)]
     pub auth: CodexAuthSettings,
@@ -59,7 +54,6 @@ impl OpenAiConfig {
         runtime_data_dir: &Path,
     ) -> Result<(), OpenAiConfigError> {
         self.api.validate()?;
-        self.ws_pool.validate()?;
         self.quota.validate()?;
         self.auth.validate()?;
         self.identity_secret_path = runtime_data_dir.join("identity_hmac_secret");
@@ -69,11 +63,6 @@ impl OpenAiConfig {
     #[must_use]
     pub fn base_url(&self) -> &str {
         &self.api.base_url
-    }
-
-    #[must_use]
-    pub fn websocket_pool_config(&self) -> CodexWebSocketPoolConfig {
-        self.ws_pool.pool_config()
     }
 
     #[must_use]
@@ -118,7 +107,6 @@ impl Default for OpenAiConfig {
         Self {
             timezone: Default::default(),
             api: CodexApiConfig::default(),
-            ws_pool: CodexWebSocketPoolSettings::default(),
             quota: CodexQuotaSettings::default(),
             auth: CodexAuthSettings::default(),
             stream_max_retries: DEFAULT_STREAM_MAX_RETRIES,
@@ -156,60 +144,6 @@ impl CodexApiConfig {
             return Err(OpenAiConfigError::InvalidField("openai.api.base_url"));
         }
         Ok(())
-    }
-}
-
-/// Codex Responses WebSocket pool 的 Provider-owned 启动设置
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(default)]
-pub struct CodexWebSocketPoolSettings {
-    pub enabled: bool,
-    pub max_age_ms: u64,
-    pub max_connecting: usize,
-    pub fast_path_budget_ms: u64,
-    pub idle_timeout_ms: u64,
-    pub stream_idle_timeout_ms: u64,
-}
-
-impl Default for CodexWebSocketPoolSettings {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            max_age_ms: 55 * 60 * 1000,
-            max_connecting: 8,
-            fast_path_budget_ms: DEFAULT_FAST_PATH_BUDGET_MS,
-            idle_timeout_ms: 300_000,
-            stream_idle_timeout_ms: 300_000,
-        }
-    }
-}
-
-impl CodexWebSocketPoolSettings {
-    fn validate(&self) -> Result<(), OpenAiConfigError> {
-        if self.fast_path_budget_ms == 0
-            || Duration::from_millis(self.fast_path_budget_ms) > WEBSOCKET_CONNECT_TIMEOUT
-        {
-            return Err(OpenAiConfigError::InvalidField(
-                "openai.ws_pool.fast_path_budget_ms",
-            ));
-        }
-        if self.max_age_ms == 0 || self.max_connecting == 0 || self.idle_timeout_ms == 0 {
-            return Err(OpenAiConfigError::InvalidField("openai.ws_pool"));
-        }
-        Ok(())
-    }
-
-    fn pool_config(&self) -> CodexWebSocketPoolConfig {
-        CodexWebSocketPoolConfig {
-            enabled: self.enabled,
-            max_age: Duration::from_millis(self.max_age_ms),
-            max_connecting: self.max_connecting,
-            fast_path_budget: Duration::from_millis(self.fast_path_budget_ms),
-            idle_timeout: Duration::from_millis(self.idle_timeout_ms),
-            stream_idle_timeout: (self.stream_idle_timeout_ms != 0)
-                .then(|| Duration::from_millis(self.stream_idle_timeout_ms)),
-            ..CodexWebSocketPoolConfig::default()
-        }
     }
 }
 

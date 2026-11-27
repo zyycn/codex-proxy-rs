@@ -78,17 +78,13 @@ function setMode(mode: OpenAiRequestCountry['mode'] | undefined) {
       </div>
       <ZFormItem :label="t('settings.requestOptions.residency')">
         <template #label-extra>
-          <HelpPopover :label="t('settings.requestOptions.residencyHelp')">
-            {{ t('settings.requestOptions.headerHelp') }}
-          </HelpPopover>
+          <HelpPopover :label="t('common.form.fieldHelp', { label: t('settings.requestOptions.residency') })" :content="t('settings.requestOptions.residencyHelp')" />
         </template>
         <ZInput v-model="residency" :aria-label="t('settings.requestOptions.residency')" :placeholder="t('settings.requestOptions.residencyPlaceholder')" :disabled="disabled" clearable />
       </ZFormItem>
       <ZFormItem :label="t('settings.requestOptions.accountRoutingOverride')">
         <template #label-extra>
-          <HelpPopover :label="t('settings.requestOptions.accountRoutingOverrideHelp')">
-            {{ t('settings.requestOptions.headerHelp') }}
-          </HelpPopover>
+          <HelpPopover :label="t('common.form.fieldHelp', { label: t('settings.requestOptions.accountRoutingOverride') })" :content="t('settings.requestOptions.accountRoutingOverrideHelp')" />
         </template>
         <ZInput v-model="accountRoutingOverride" :aria-label="t('settings.requestOptions.accountRoutingOverride')" :placeholder="t('settings.requestOptions.accountRoutingPlaceholder')" :disabled="disabled" clearable />
       </ZFormItem>

@@ -29,6 +29,7 @@ import RetryPolicyCard from './components/RetryPolicyCard.vue'
 import RotationStrategyCard from './components/RotationStrategyCard.vue'
 import SettingsAccessSection from './components/settings-access/index.vue'
 import TokenRefreshCard from './components/TokenRefreshCard.vue'
+import WebSocketPoolCard from './components/WebSocketPoolCard.vue'
 import { useSettingsForm } from './composables/useSettingsForm'
 import { useSettingsFormRules } from './composables/useSettingsFormRules'
 import { useSettingsLeaveGuard } from './composables/useSettingsLeaveGuard'
@@ -293,6 +294,7 @@ watch(() => !loading.value && route.hash === '#reset-credits', async (ready) => 
                   v-model:account-routing-override="form.openaiRequestSettings.accountRoutingOverride"
                   :disabled="disabled"
                 />
+                <WebSocketPoolCard v-model="form.openaiWebsocketPool" :disabled="disabled" class="col-span-full" />
                 <GuardianReviewCard
                   v-model="form.openaiRequestSettings.oauthGuardianReviewModel"
                   v-model:reserved-concurrency="openaiGuardianReservedConcurrencyValue"

@@ -1206,6 +1206,7 @@ where
                 .with_fast_mode(self.plan.fast_mode())
                 .with_pricing(self.plan.pricing())
                 .with_request_location(self.plan.request_location().cloned())
+                .with_openai_websocket_pool(*self.plan.openai_websocket_pool())
                 .with_openai_request_settings(self.plan.openai_request_settings().clone())
                 .with_privacy(self.plan.privacy())
                 .with_request_body_limit(self.plan.request_body_limit())

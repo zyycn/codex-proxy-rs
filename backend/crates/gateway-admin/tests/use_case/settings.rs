@@ -349,6 +349,7 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
                 model_mappings: Default::default(),
                 rotation_strategy: RotationStrategy::Smart,
                 values: gateway_admin::model::settings::RuntimeSettingsValues {
+                    openai_websocket_pool: Default::default(),
                     openai_request_settings: Default::default(),
                     codex_privacy_policy: Default::default(),
                     request_location_enabled: false,

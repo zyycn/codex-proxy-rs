@@ -699,6 +699,7 @@ pub struct RoutingPlan {
     request_body_limit: usize,
     max_retry_after: std::time::Duration,
     pricing: Arc<crate::metering::PricingOverrides>,
+    openai_websocket_pool: crate::settings::OpenAiWebSocketPoolSettings,
     openai_request_settings: crate::settings::OpenAiRequestSettings,
     request_location: Option<crate::account::RequestLocation>,
     privacy: Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>>,
@@ -752,6 +753,11 @@ impl RoutingPlan {
     #[must_use]
     pub const fn request_location(&self) -> Option<&crate::account::RequestLocation> {
         self.request_location.as_ref()
+    }
+
+    #[must_use]
+    pub const fn openai_websocket_pool(&self) -> &crate::settings::OpenAiWebSocketPoolSettings {
+        &self.openai_websocket_pool
     }
 
     #[must_use]

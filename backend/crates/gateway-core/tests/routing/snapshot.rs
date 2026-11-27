@@ -2279,6 +2279,10 @@ fn global_request_location_should_be_frozen_when_snapshot_is_published() {
             revision(version),
             SettingsValues::new(3, "smart", BTreeMap::new(), None, None)
                 .with_request_location(location, enabled)
+                .with_openai_websocket_pool(gateway_core::settings::OpenAiWebSocketPoolSettings {
+                    fast_path_budget_ms: version * 100,
+                    ..Default::default()
+                })
                 .with_openai_request_settings(gateway_core::settings::OpenAiRequestSettings {
                     request_country: country,
                     residency: (version == 1).then(|| "us".to_owned()),
@@ -2326,6 +2330,13 @@ fn global_request_location_should_be_frozen_when_snapshot_is_published() {
         true,
         OpenAiRequestCountry::FollowLocation {},
     ));
+    assert_eq!(old_plan.openai_websocket_pool().fast_path_budget_ms, 100);
+    assert_eq!(
+        plan(&handle.acquire().unwrap())
+            .openai_websocket_pool()
+            .fast_path_budget_ms,
+        200
+    );
     assert_eq!(
         old_plan.openai_request_settings().residency.as_deref(),
         Some("us")
@@ -2339,7 +2350,10 @@ fn global_request_location_should_be_frozen_when_snapshot_is_published() {
     );
     assert_eq!(
         plan(&handle.acquire().unwrap()).openai_request_settings(),
-        &Default::default()
+        &gateway_core::settings::OpenAiRequestSettings {
+            residency: None,
+            ..Default::default()
+        }
     );
     assert_eq!(
         old_plan.openai_request_settings().request_country,

@@ -1,4 +1,4 @@
-//! 同一出站代理配置共享物理 WebSocket 预算，仅在容量不足时回收普通空闲连接
+//! WebSocket 共享建连计数与出站代理的物理连接预算
 
 use std::sync::{
     Arc,
@@ -138,5 +138,25 @@ impl CodexWebSocketPool {
                 _ = self.shutdown.cancelled() => return Err(CodexWebSocketExchangeError::SharedConnectFailed),
             }
         }
+    }
+}
+
+/// 共享建连计数；新请求按自身快照准入，降低上限不撤销在途建连
+pub(super) struct ConnectPermit(Arc<AtomicUsize>);
+
+impl ConnectPermit {
+    pub(super) fn try_acquire(counter: &Arc<AtomicUsize>, limit: usize) -> Option<Self> {
+        counter
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < limit).then(|| active + 1)
+            })
+            .ok()?;
+        Some(Self(Arc::clone(counter)))
+    }
+}
+
+impl Drop for ConnectPermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }

@@ -25,6 +25,7 @@ pub struct SettingsValues {
     pub(crate) switch_account_on_queue_failure: bool,
     pub(crate) max_retry_after_seconds: u32,
     pub(crate) openai_guardian_reserved_concurrency: u32,
+    pub(crate) openai_websocket_pool: crate::settings::OpenAiWebSocketPoolSettings,
     pub(crate) openai_request_settings: crate::settings::OpenAiRequestSettings,
     pub(crate) account_affinity: crate::account::AccountAffinity,
     pub(crate) max_account_rotations: u32,
@@ -110,12 +111,26 @@ impl SettingsValues {
     }
 
     #[must_use]
+    pub fn with_openai_websocket_pool(
+        mut self,
+        settings: crate::settings::OpenAiWebSocketPoolSettings,
+    ) -> Self {
+        self.openai_websocket_pool = settings;
+        self
+    }
+
+    #[must_use]
     pub fn with_openai_request_settings(
         mut self,
         settings: crate::settings::OpenAiRequestSettings,
     ) -> Self {
         self.openai_request_settings = settings;
         self
+    }
+
+    #[must_use]
+    pub const fn openai_websocket_pool(&self) -> &crate::settings::OpenAiWebSocketPoolSettings {
+        &self.openai_websocket_pool
     }
 
     #[must_use]
@@ -222,6 +237,7 @@ impl SettingsValues {
             switch_account_on_queue_failure: false,
             max_retry_after_seconds: 240,
             openai_guardian_reserved_concurrency: 0,
+            openai_websocket_pool: Default::default(),
             openai_request_settings: Default::default(),
             account_affinity: crate::account::AccountAffinity::default(),
             max_account_rotations: 3,

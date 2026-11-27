@@ -115,6 +115,10 @@ impl CompiledSettings {
             .openai_request_settings
             .validate()
             .map_err(|_| InvalidSettings)?;
+        settings
+            .openai_websocket_pool
+            .validate()
+            .map_err(|_| InvalidSettings)?;
         let request_location = settings
             .request_location_enabled
             .then(|| settings.request_location.clone().normalized())

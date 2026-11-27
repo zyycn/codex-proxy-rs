@@ -9,11 +9,14 @@ mod supervisor;
 use std::{
     collections::HashMap,
     future::Future,
-    sync::{Arc, Mutex, MutexGuard, Weak, atomic::AtomicBool},
+    sync::{
+        Arc, Mutex, MutexGuard, Weak,
+        atomic::{AtomicBool, AtomicUsize},
+    },
     time::Duration,
 };
 
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::Notify;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use uuid::Uuid;
 
@@ -32,15 +35,13 @@ pub(crate) use self::{
         WebSocketPoolConnectWaiter, WebSocketPoolLease,
     },
     state::{
-        CodexWebSocketConnectionMetadata, PooledWebSocketConnection, WebSocketContinuationState,
+        CodexWebSocketConnectionMetadata, PooledWebSocketConnection, WebSocketConnectionLifetime,
+        WebSocketContinuationState,
     },
 };
 
-const DEFAULT_MAX_CONNECTING: usize = 16;
 pub(crate) const DEFAULT_FAST_PATH_BUDGET_MS: u64 = 800;
-const DEFAULT_MAX_AGE: Duration = Duration::from_mins(55);
 const DEFAULT_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(5);
-const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// WebSocket 连接池
@@ -50,7 +51,7 @@ pub struct CodexWebSocketPool {
     config: CodexWebSocketPoolConfig,
     tasks: TaskTracker,
     shutdown: CancellationToken,
-    connect_semaphore: Arc<Semaphore>,
+    connecting: Arc<AtomicUsize>,
     maintenance_started: Arc<AtomicBool>,
     proxy_capacities: Arc<Mutex<HashMap<String, Weak<ProxyCapacity>>>>,
     capacity_changed: Arc<Notify>,
@@ -65,8 +66,6 @@ impl Default for CodexWebSocketPool {
 /// WebSocket 连接池配置
 #[derive(Debug, Clone, Copy)]
 pub struct CodexWebSocketPoolConfig {
-    /// 是否启用连接池
-    pub enabled: bool,
     /// 单个 socket 的最大生命周期
     pub max_age: Duration,
     /// 所有账号合计允许并发执行的 opening 数
@@ -83,14 +82,20 @@ pub struct CodexWebSocketPoolConfig {
 
 impl Default for CodexWebSocketPoolConfig {
     fn default() -> Self {
+        gateway_core::settings::OpenAiWebSocketPoolSettings::default().into()
+    }
+}
+
+impl From<gateway_core::settings::OpenAiWebSocketPoolSettings> for CodexWebSocketPoolConfig {
+    fn from(settings: gateway_core::settings::OpenAiWebSocketPoolSettings) -> Self {
         Self {
-            enabled: true,
-            max_age: DEFAULT_MAX_AGE,
-            max_connecting: DEFAULT_MAX_CONNECTING,
-            fast_path_budget: Duration::from_millis(DEFAULT_FAST_PATH_BUDGET_MS),
+            max_age: Duration::from_millis(settings.max_age_ms),
+            max_connecting: settings.max_connecting as usize,
+            fast_path_budget: Duration::from_millis(settings.fast_path_budget_ms),
+            idle_timeout: Duration::from_millis(settings.idle_timeout_ms),
+            stream_idle_timeout: (settings.stream_idle_timeout_ms != 0)
+                .then(|| Duration::from_millis(settings.stream_idle_timeout_ms)),
             maintenance_interval: Some(DEFAULT_MAINTENANCE_INTERVAL),
-            idle_timeout: DEFAULT_IDLE_TIMEOUT,
-            stream_idle_timeout: Some(DEFAULT_STREAM_IDLE_TIMEOUT),
         }
     }
 }
@@ -112,13 +117,27 @@ impl CodexWebSocketPool {
             config,
             tasks: TaskTracker::new(),
             shutdown: CancellationToken::new(),
-            connect_semaphore: Arc::new(Semaphore::new(config.max_connecting)),
+            connecting: Arc::default(),
             maintenance_started: Arc::new(AtomicBool::new(false)),
             proxy_capacities: Arc::default(),
             capacity_changed: Arc::default(),
         };
         pool.spawn_maintenance_task();
         pool
+    }
+
+    /// 每轮请求冻结配置，连接、建连计数与维护任务仍由同一个池持有
+    pub fn with_settings(
+        &self,
+        settings: gateway_core::settings::OpenAiWebSocketPoolSettings,
+    ) -> Self {
+        Self {
+            config: CodexWebSocketPoolConfig {
+                maintenance_interval: self.config.maintenance_interval,
+                ..settings.into()
+            },
+            ..self.clone()
+        }
     }
 
     pub(crate) fn fast_path_budget(&self) -> Duration {
@@ -153,12 +172,11 @@ impl CodexWebSocketPool {
             let acquire = {
                 let mut state = self.lock_state();
                 let mut continuation_loss = None;
-                if !self.config.enabled
-                    || state.shutting_down
+                if state.shutting_down
                     || downstream_cancellation
                         .is_some_and(gateway_core::lifecycle::CancellationToken::is_cancelled)
                 {
-                    return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled);
+                    return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Closed);
                 }
                 let requested_key = key;
                 let key = if let Some(response_id) = required_response_id {
@@ -204,7 +222,6 @@ impl CodexWebSocketPool {
                             &connection,
                             idle_since,
                             tokio::time::Instant::now(),
-                            &self.config,
                         )
                         .or_else(|| {
                             state.downstream_closed(&key).then(|| {
@@ -241,6 +258,7 @@ impl CodexWebSocketPool {
                                 self.clone(),
                                 key.clone(),
                                 connection.continuation.latest_response_id(),
+                                connection.lifetime.max_age,
                             );
                             state
                                 .slots
@@ -282,7 +300,10 @@ impl CodexWebSocketPool {
                 } else if proxy.is_some() && proxy_permit.is_none() {
                     None
                 } else {
-                    let connect_permit = self.connect_semaphore.clone().try_acquire_owned().ok();
+                    let connect_permit = capacity::ConnectPermit::try_acquire(
+                        &self.connecting,
+                        self.config.max_connecting,
+                    );
                     Some(match connect_permit {
                         Some(connect_permit) => {
                             let lease = WebSocketPoolConnectLease::reserve(
@@ -296,6 +317,7 @@ impl CodexWebSocketPool {
                                 WebSocketPoolSlot::Connecting(WebSocketPoolConnecting {
                                     id: lease.id,
                                     started_at: lease.started_at,
+                                    max_age: self.config.max_age,
                                     outcome: lease.outcome.clone(),
                                     cancellation: lease.cancellation.clone(),
                                 }),
@@ -321,12 +343,12 @@ impl CodexWebSocketPool {
                         Some(cancellation) => cancellation.cancelled().await,
                         None => std::future::pending().await,
                     }
-                } => return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled),
+                } => return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Closed),
                 capacity = self.acquire_proxy_capacity(proxy, Some(key)) => capacity,
             };
             match capacity {
                 Ok(permit) => proxy_permit = permit,
-                Err(_) => return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Disabled),
+                Err(_) => return WebSocketPoolAcquire::Bypass(WebSocketPoolBypassReason::Closed),
             }
         }
     }
@@ -340,15 +362,15 @@ impl CodexWebSocketPool {
         let mut connection = Some(connection);
         {
             let mut state = self.lock_state();
-            let expired = connection
-                .as_ref()
-                .is_some_and(|connection| connection.created_at.elapsed() >= self.config.max_age);
+            let expired = connection.as_ref().is_some_and(|connection| {
+                connection.created_at.elapsed() >= connection.lifetime.max_age
+            });
             let owns_reservation = matches!(
                 state.slots.get(key),
                 Some(WebSocketPoolSlot::Busy(reservation))
                     if reservation.id == reservation_id
             );
-            if owns_reservation && (expired || state.shutting_down || !self.config.enabled) {
+            if owns_reservation && (expired || state.shutting_down) {
                 if expired && let Some(connection) = connection.as_ref() {
                     state.remember_continuation_loss(
                         key,
@@ -421,8 +443,13 @@ impl CodexWebSocketPool {
             state.slots.get(key),
             Some(WebSocketPoolSlot::Connecting(connecting)) if connecting.id == connect_id
         );
-        if owns_connect && !state.shutting_down && self.config.enabled {
-            let lease = WebSocketPoolLease::reserve(self.clone(), key.clone(), None);
+        if owns_connect && !state.shutting_down {
+            let lease = WebSocketPoolLease::reserve(
+                self.clone(),
+                key.clone(),
+                None,
+                connection.lifetime.max_age,
+            );
             state.slots.insert(
                 key.clone(),
                 WebSocketPoolSlot::Busy(lease.reservation.clone()),
@@ -457,7 +484,7 @@ impl CodexWebSocketPool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WebSocketPoolBypassReason {
-    Disabled,
+    Closed,
     Busy,
     Cap,
     ContinuationNotFound,

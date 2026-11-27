@@ -75,6 +75,7 @@ fn backup_settings_report_secret_presence_without_serializing_the_secret() {
 fn update_body() -> Value {
     json!({
         "configRevision": 7,
+        "openaiWebsocketPool": {"maxAgeMs":3300000,"maxConnecting":8,"fastPathBudgetMs":800,"idleTimeoutMs":300000,"streamIdleTimeoutMs":300000},
         "openaiRequestSettings": {"requestCountry": {"mode":"follow_location"}, "oauthGuardianReviewModel":true,"residency": null, "accountRoutingOverride": null},
         "codexPrivacyPolicy": {"enabled":false,"onError":"skip_rule","rules":[]},
         "requestLocationEnabled": false,
@@ -1778,5 +1779,36 @@ fn openai_request_settings_validate_without_normalizing_values() {
             let request: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
             assert!(request.validate().is_err());
         }
+    }
+}
+
+#[test]
+fn websocket_pool_settings_validate_numeric_boundaries() {
+    for (field, values) in [
+        (
+            "maxAgeMs",
+            vec![json!(0), json!(-1), json!(1.5), Value::Null],
+        ),
+        ("maxConnecting", vec![json!(0), json!(4294967296_u64)]),
+        ("fastPathBudgetMs", vec![json!(0), json!(15001)]),
+        ("idleTimeoutMs", vec![json!(0)]),
+        ("streamIdleTimeoutMs", vec![json!(-1), json!("300000")]),
+    ] {
+        for value in values {
+            let mut body = update_body();
+            body["openaiWebsocketPool"][field] = value;
+            let rejected = match serde_json::from_value::<UpdateRuntimeSettingsRequest>(body) {
+                Ok(request) => request.validate().is_err(),
+                Err(_) => true,
+            };
+            assert!(rejected, "invalid {field}");
+        }
+    }
+    for budget in [1, 15000] {
+        let mut body = update_body();
+        body["openaiWebsocketPool"]["fastPathBudgetMs"] = json!(budget);
+        body["openaiWebsocketPool"]["streamIdleTimeoutMs"] = json!(0);
+        let request: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
+        request.validate().unwrap();
     }
 }

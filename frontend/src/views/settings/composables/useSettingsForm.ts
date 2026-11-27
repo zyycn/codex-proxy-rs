@@ -34,6 +34,13 @@ export function useSettingsForm() {
     quotaResetWindowWeights: undefined as ResetWindowWeights | undefined,
     providerRequestProfiles: {} as ProviderRequestProfiles,
     codexPrivacyPolicy: { enabled: false, onError: 'skip_rule', rules: [] } as CodexPrivacyPolicy,
+    openaiWebsocketPool: {
+      maxAgeMs: null as number | null,
+      maxConnecting: null as number | null,
+      fastPathBudgetMs: null as number | null,
+      idleTimeoutMs: null as number | null,
+      streamIdleTimeoutMs: null as number | null,
+    },
     openaiRequestSettings: {
       requestCountry: { mode: 'follow_location' } as OpenAiRequestCountry,
       oauthGuardianReviewModel: true,
@@ -139,6 +146,7 @@ export function useSettingsForm() {
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
     form.codexPrivacyPolicy = cloneDeep(data.codexPrivacyPolicy)
     form.configRevision = data.configRevision
+    form.openaiWebsocketPool = { ...data.openaiWebsocketPool }
     form.openaiRequestSettings = {
       ...cloneDeep(data.openaiRequestSettings),
       residency: data.openaiRequestSettings.residency ?? '',
@@ -277,6 +285,13 @@ export function useSettingsForm() {
           form.providerRequestProfiles,
         ),
         codexPrivacyPolicy: cloneDeep(form.codexPrivacyPolicy),
+        openaiWebsocketPool: {
+          maxAgeMs: form.openaiWebsocketPool.maxAgeMs ?? 0,
+          maxConnecting: form.openaiWebsocketPool.maxConnecting ?? 0,
+          fastPathBudgetMs: form.openaiWebsocketPool.fastPathBudgetMs ?? 0,
+          idleTimeoutMs: form.openaiWebsocketPool.idleTimeoutMs ?? 0,
+          streamIdleTimeoutMs: form.openaiWebsocketPool.streamIdleTimeoutMs ?? 0,
+        },
         openaiRequestSettings: {
           oauthGuardianReviewModel: form.openaiRequestSettings.oauthGuardianReviewModel,
           requestCountry: form.openaiRequestSettings.requestCountry.mode === 'custom'

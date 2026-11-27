@@ -151,7 +151,7 @@ async fn model_transports_apply_routing_settings_with_or_without_client_headers(
         "x-openai-account-routing-override",
     ];
     for (document, expected) in [
-        (r#"{}"#, [None, None]),
+        (r#"{}"#, [Some("us"), None]),
         (
             r#"{"residency":null,"accountRoutingOverride":null}"#,
             [None, None],
@@ -162,7 +162,7 @@ async fn model_transports_apply_routing_settings_with_or_without_client_headers(
         ),
         (
             r#"{"accountRoutingOverride":"us_cr"}"#,
-            [None, Some("us_cr")],
+            [Some("us"), Some("us_cr")],
         ),
         (
             r#"{"residency":"custom-region"}"#,
@@ -174,7 +174,7 @@ async fn model_transports_apply_routing_settings_with_or_without_client_headers(
         ),
         (
             r#"{"accountRoutingOverride":"NO_CONSTRAINT"}"#,
-            [None, Some("NO_CONSTRAINT")],
+            [Some("us"), Some("NO_CONSTRAINT")],
         ),
     ] {
         for (websocket, has_downstream_headers) in

@@ -231,11 +231,27 @@ pub(crate) struct CodexWebSocketConnectionMetadata {
     pub(crate) diagnostics: CodexUpstreamDiagnostics,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct WebSocketConnectionLifetime {
+    pub(crate) max_age: Duration,
+    pub(crate) idle_timeout: Duration,
+}
+
+impl From<super::CodexWebSocketPoolConfig> for WebSocketConnectionLifetime {
+    fn from(config: super::CodexWebSocketPoolConfig) -> Self {
+        Self {
+            max_age: config.max_age,
+            idle_timeout: config.idle_timeout,
+        }
+    }
+}
+
 pub(crate) struct PooledWebSocketConnection {
     pub(crate) websocket: PumpedWebSocket,
     pub(crate) metadata: CodexWebSocketConnectionMetadata,
     pub(crate) continuation: WebSocketContinuationState,
     pub(crate) created_at: Instant,
+    pub(crate) lifetime: WebSocketConnectionLifetime,
     // 首个已写入请求决定搜索能力，None 表示仅完成握手，后续工具变化不能覆盖此事实
     pub(crate) initial_search_declared: Option<bool>,
 }
@@ -278,6 +294,7 @@ impl WebSocketPoolSlot {
 pub(super) struct WebSocketPoolConnecting {
     pub(super) id: Uuid,
     pub(super) started_at: Instant,
+    pub(super) max_age: Duration,
     pub(super) outcome: watch::Sender<WebSocketPoolConnectOutcome>,
     pub(super) cancellation: CancellationToken,
 }
@@ -286,6 +303,7 @@ pub(super) struct WebSocketPoolConnecting {
 pub(super) struct WebSocketPoolReservation {
     pub(super) id: Uuid,
     pub(super) reserved_at: Instant,
+    pub(super) max_age: Duration,
     pub(super) latest_response_id: Option<String>,
 }
 
@@ -308,14 +326,15 @@ pub(super) fn idle_connection_loss(
     connection: &PooledWebSocketConnection,
     idle_since: Instant,
     now: Instant,
-    config: &super::CodexWebSocketPoolConfig,
 ) -> Option<WebSocketConnectionObservation> {
     if connection.websocket.is_closed() {
         return Some(connection.websocket.observation());
     }
-    let reason = if now.duration_since(connection.created_at) >= config.max_age {
+    let reason = if now.duration_since(connection.created_at) >= connection.lifetime.max_age {
         "max_age_expired"
-    } else if !has_downstream_binding && now.duration_since(idle_since) >= config.idle_timeout {
+    } else if !has_downstream_binding
+        && now.duration_since(idle_since) >= connection.lifetime.idle_timeout
+    {
         "idle_timeout_expired"
     } else {
         return None;

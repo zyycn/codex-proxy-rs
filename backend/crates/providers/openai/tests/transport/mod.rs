@@ -69,6 +69,7 @@ mod tls;
 mod usage;
 mod websocket;
 mod websocket_pool;
+mod websocket_settings;
 
 pub(crate) fn websocket_accept_config() -> WebSocketConfig {
     let mut extensions = ExtensionsConfig::default();

@@ -1,9 +1,6 @@
 //! WebSocket 连接池 reservation、handoff 与 lease 生命周期
 
-use tokio::{
-    sync::{OwnedSemaphorePermit, watch},
-    time::Instant,
-};
+use tokio::{sync::watch, time::Instant};
 use tokio_util::{
     sync::CancellationToken,
     task::{TaskTracker, task_tracker::TaskTrackerToken},
@@ -64,7 +61,7 @@ pub(crate) struct WebSocketPoolConnectLease {
     pub(super) cancellation: CancellationToken,
     // slot 分配时即注册，封闭 acquire 与后台 task spawn 之间的 shutdown 竞态
     _task_registration: TaskTrackerToken,
-    _connect_permit: OwnedSemaphorePermit,
+    _connect_permit: super::capacity::ConnectPermit,
     proxy_permit: Option<super::ProxyConnectionPermit>,
     armed: bool,
 }
@@ -73,7 +70,7 @@ impl WebSocketPoolConnectLease {
     pub(super) fn reserve(
         pool: CodexWebSocketPool,
         key: CodexWebSocketPoolKey,
-        connect_permit: OwnedSemaphorePermit,
+        connect_permit: super::capacity::ConnectPermit,
         proxy_permit: Option<super::ProxyConnectionPermit>,
     ) -> Self {
         let (outcome, _) = watch::channel(WebSocketPoolConnectOutcome::Pending);
@@ -111,9 +108,10 @@ impl WebSocketPoolConnectLease {
 
     pub(crate) async fn connected_reserved(
         mut self,
-        connection: PooledWebSocketConnection,
+        mut connection: PooledWebSocketConnection,
     ) -> Result<(Box<PooledWebSocketConnection>, WebSocketPoolLease), Box<PooledWebSocketConnection>>
     {
+        connection.lifetime = self.pool.config.into();
         let result = self
             .pool
             .finish_connect_reserved(&self.key, self.id, connection)
@@ -163,6 +161,7 @@ impl WebSocketPoolLease {
         pool: CodexWebSocketPool,
         key: CodexWebSocketPoolKey,
         latest_response_id: Option<&str>,
+        max_age: std::time::Duration,
     ) -> Self {
         let task_registration = pool.tasks.token();
         Self {
@@ -171,6 +170,7 @@ impl WebSocketPoolLease {
             reservation: WebSocketPoolReservation {
                 id: Uuid::new_v4(),
                 reserved_at: Instant::now(),
+                max_age,
                 latest_response_id: latest_response_id.map(str::to_string),
             },
             _task_registration: task_registration,

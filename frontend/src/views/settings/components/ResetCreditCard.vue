@@ -34,10 +34,18 @@ const modes = computed(() => [
     </template>
     <div class="grid min-w-0 gap-4.5 @md:grid-cols-2 @md:items-end">
       <ZFormItem v-if="!onLowWeeklyQuota" :show-message="Boolean(leadMinutes.trim())" prop="resetCreditLeadMinutes" :label="t('settings.advanceUsageTimeMinutes')" :description="t('settings.quotaReset.description')">
-        <ZInput v-model="leadMinutes" type="number" min="1" max="1440" step="1" :aria-label="t('settings.resetCardAdvanceTime')" />
+        <ZInput v-model="leadMinutes" type="number" min="1" max="1440" step="1" :aria-label="t('settings.units.withUnit', { label: t('settings.resetCardAdvanceTime'), unit: t('settings.units.minutes') })">
+          <template #suffix>
+            {{ t('settings.units.minutes') }}
+          </template>
+        </ZInput>
       </ZFormItem>
       <ZFormItem class="only:col-span-full" prop="resetCreditMaxWeeklyRemainingPercent" :label="t('settings.remainingWeeklyQuotaLimit')" :description="onLowWeeklyQuota ? t('settings.quotaReset.earlyThresholdHelp') : t('settings.quotaReset.thresholdHelp')">
-        <ZInput v-model="maxWeeklyRemainingPercent" type="number" min="0" max="100" step="1" :placeholder="onLowWeeklyQuota ? '0' : t('common.values.unlimited')" :aria-label="t('settings.quotaReset.weeklyQuotaLimit')" />
+        <ZInput v-model="maxWeeklyRemainingPercent" type="number" min="0" max="100" step="1" :placeholder="onLowWeeklyQuota ? '0' : t('common.values.unlimited')" :aria-label="t('settings.units.withUnit', { label: t('settings.quotaReset.weeklyQuotaLimit'), unit: '%' })">
+          <template #suffix>
+            %
+          </template>
+        </ZInput>
       </ZFormItem>
     </div>
   </ZCard>

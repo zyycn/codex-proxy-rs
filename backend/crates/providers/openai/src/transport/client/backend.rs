@@ -759,7 +759,18 @@ impl CodexBackendClient {
         }
     }
 
-    /// 为 Responses WebSocket 请求启用连接池
+    /// 冻结本轮参数，共享原有连接与回收任务
+    pub(crate) fn with_websocket_settings(
+        mut self,
+        settings: gateway_core::settings::OpenAiWebSocketPoolSettings,
+    ) -> Self {
+        self.websocket_pool = self
+            .websocket_pool
+            .map(|pool| Arc::new(pool.with_settings(settings)));
+        self
+    }
+
+    /// 绑定 Responses WebSocket 请求使用的共享连接池
     pub fn with_websocket_pool(mut self, pool: Arc<CodexWebSocketPool>) -> Self {
         self.websocket_pool = Some(pool);
         self
