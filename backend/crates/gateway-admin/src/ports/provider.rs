@@ -20,7 +20,7 @@ use crate::model::provider_credentials::{
     ProviderExport, ProviderExportCredentialInput, ProviderModelCatalogDocument, ProviderModels,
     ProviderProfileAvatar, ProviderProfileStatistics, ProviderQuota, ProviderQuotaReadRequest,
     ProviderQuotaRequest, ProviderResetCreditResult, ProviderResetCredits, ProviderSubscription,
-    explicit_plan_type,
+    explicit_plan_type, resolve_observed_plan,
 };
 use crate::model::{
     provider_credentials::{ProviderDocument, ProviderQuotaWindow},
@@ -558,15 +558,14 @@ impl ProviderAdminRegistry {
         plan_type: &mut Option<String>,
         quota: Option<&ProviderQuota>,
     ) -> Option<String> {
-        if let Some(quota) = quota {
-            quota.fill_missing_plan_type(plan_type);
-            // 保留账号已知的套餐，不能给它配上另一档快照的描述
-            let quota_id = explicit_plan_type(quota.plan_type.as_deref()).map(str::trim);
-            if let Some(display) = &quota.plan_type_display
-                && quota_id.is_none_or(|id| Some(id) == plan_type.as_deref().map(str::trim))
-            {
-                return Some(display.clone());
-            }
+        if let Some(quota) = quota
+            && let Some(display) = resolve_observed_plan(
+                plan_type,
+                quota.plan_type.as_deref(),
+                quota.plan_type_display.as_deref(),
+            )
+        {
+            return Some(display.to_owned());
         }
         self.plan_type_display(provider_kind, plan_type.as_deref())
     }

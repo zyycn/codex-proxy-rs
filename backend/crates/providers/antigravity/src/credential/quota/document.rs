@@ -147,6 +147,12 @@ impl Document {
             valid_until,
         })
     }
+    pub(super) fn plan_display(&self) -> Option<&str> {
+        self.plan_description
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+    }
+
     pub(super) fn plan_type(&self) -> Option<String> {
         self.tier
             .as_ref()
@@ -254,11 +260,7 @@ impl Document {
             }),
             limit_reached: self.access(observed).is_exhausted(),
             plan_type: self.plan_type(),
-            plan_type_display: self
-                .plan_description
-                .as_ref()
-                .filter(|s| !s.trim().is_empty())
-                .cloned(),
+            plan_type_display: self.plan_display().map(str::to_owned),
             observed_at: Some(DateTime::<Utc>::from(observed)),
             windows,
             ..Default::default()

@@ -4,7 +4,6 @@ use super::{AntigravityProvider, candidates::Project};
 use crate::transport::unsent;
 use futures::StreamExt;
 use gateway_core::{
-    account::AccountHistorySnapshot,
     engine::{
         AttemptContext,
         provider::{
@@ -68,9 +67,7 @@ impl AntigravityProvider {
         )
         .with_credential_revision(selected.account.revision())
         .with_selection_observation(selection)
-        .with_account_snapshot(Some(AccountHistorySnapshot::from_account(
-            &selected.account,
-        )));
+        .with_account_snapshot(Some(selected.snapshot));
         let cancellation = ctx.cancellation().clone();
         let deadline = ctx.deadline();
         let started_at = ctx.timing_started_at();

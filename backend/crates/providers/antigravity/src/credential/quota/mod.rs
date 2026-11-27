@@ -3,4 +3,4 @@
 mod document;
 mod service;
 
-pub(crate) use service::{QuotaService, QuotaTask};
+pub(crate) use service::{CandidateQuota, QuotaService, QuotaTask};

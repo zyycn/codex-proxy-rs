@@ -1170,6 +1170,7 @@ pub struct DiagnosticObservation {
     pub account_provider_kind: Option<String>,
     pub account_authentication_kind: Option<String>,
     pub account_plan_type: Option<String>,
+    pub account_plan_type_display: Option<String>,
     pub request_count: u64,
     pub success_count: u64,
     pub failure_count: u64,

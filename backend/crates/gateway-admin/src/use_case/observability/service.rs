@@ -380,11 +380,10 @@ impl ObservabilityService for DefaultObservabilityService {
                     key: item.key,
                     name: item.name,
                     account_authentication_kind: item.account_authentication_kind,
-                    account_plan_type_display: item.account_provider_kind.as_deref().and_then(
-                        |provider| {
-                            self.providers
-                                .plan_type_display(provider, item.account_plan_type.as_deref())
-                        },
+                    account_plan_type_display: self.historical_plan_display(
+                        item.account_plan_type_display,
+                        item.account_provider_kind.as_deref(),
+                        item.account_plan_type.as_deref(),
                     ),
                     account_plan_type: item.account_plan_type,
                     request_count: item.request_count,
@@ -422,17 +421,26 @@ impl ObservabilityService for DefaultObservabilityService {
             .await
             .map_err(|error| map_store_error(error, "operations errors"))?;
         for error in &mut page.items {
-            error.provider_account_plan_type_display =
-                error.provider_kind.as_deref().and_then(|provider| {
-                    self.providers
-                        .plan_type_display(provider, error.provider_account_plan_type.as_deref())
-                });
+            error.provider_account_plan_type_display = self.historical_plan_display(
+                error.provider_account_plan_type_display.take(),
+                error.provider_kind.as_deref(),
+                error.provider_account_plan_type.as_deref(),
+            );
         }
         Ok(page)
     }
 }
 
 impl DefaultObservabilityService {
+    fn historical_plan_display(
+        &self,
+        display: Option<String>,
+        provider: Option<&str>,
+        plan_type: Option<&str>,
+    ) -> Option<String> {
+        display.or_else(|| self.providers.plan_type_display(provider?, plan_type))
+    }
+
     async fn current_upstream_peers<'a>(
         &self,
         ids: impl Iterator<Item = &'a str>,
@@ -540,11 +548,11 @@ impl DefaultObservabilityService {
                 .provider_account_ref
                 .as_ref()
                 .and_then(|id| peers.get(id).copied());
-            record.provider_account_plan_type_display =
-                record.provider_kind.as_deref().and_then(|provider| {
-                    self.providers
-                        .plan_type_display(provider, record.provider_account_plan_type.as_deref())
-                });
+            record.provider_account_plan_type_display = self.historical_plan_display(
+                record.provider_account_plan_type_display.take(),
+                record.provider_kind.as_deref(),
+                record.provider_account_plan_type.as_deref(),
+            );
             let Some(UsageBilling::Total { source, total }) = record.billing.as_ref() else {
                 continue;
             };

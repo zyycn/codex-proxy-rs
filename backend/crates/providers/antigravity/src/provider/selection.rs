@@ -5,10 +5,11 @@ use super::{
     candidates::{CandidatePool, Project},
 };
 use crate::{credential::Material, transport::unsent};
+use gateway_admin::model::provider_credentials::resolve_observed_plan;
 use gateway_core::{
     account::{
-        AccountCapacitySnapshot, AccountSelector, PreferredAccountSelection, ProviderAccount,
-        RotationStrategy,
+        AccountCapacitySnapshot, AccountHistorySnapshot, AccountSelector,
+        PreferredAccountSelection, ProviderAccount, RotationStrategy,
     },
     concurrency::{CapacityWait, ConcurrencyQueuePolicy, QueueRejection},
     engine::{
@@ -29,6 +30,7 @@ pub(super) struct SelectedAccount {
     pub(super) account: ProviderAccount,
     pub(super) capacity: Option<AccountCapacitySnapshot>,
     pub(super) material: Material,
+    pub(super) snapshot: AccountHistorySnapshot,
     pub(super) project: Project,
     pub(super) lease: Box<dyn ProviderLeaseGuard>,
     pub(super) account_switch: bool,
@@ -102,6 +104,7 @@ impl AntigravityProvider {
             let CandidatePool {
                 accounts,
                 mut projects,
+                mut quotas,
                 mut selection,
             } = self.load_candidates(model, ctx, search).await?;
             let affinity = match affinity_key.filter(|_| !ctx.is_diagnostic_required_account()) {
@@ -233,9 +236,16 @@ impl AntigravityProvider {
                             || ctx
                                 .account_state_owner()
                                 .is_some_and(|owner| !owner.matches(&self.kind, account.id()));
-                        let selected = self
-                            .load_selected(account, project, lease, capacity, account_switch, ctx)
-                            .await?;
+                        let (current, material) = self.load_selected(account, ctx).await?;
+                        let mut snapshot = AccountHistorySnapshot::from_account(&current);
+                        if let Some(quota) = quotas.remove(account.id()) {
+                            snapshot.plan_type_display_snapshot = resolve_observed_plan(
+                                &mut snapshot.plan_type_snapshot,
+                                quota.plan_type.as_deref(),
+                                quota.plan_display.as_deref(),
+                            )
+                            .map(str::to_owned);
+                        }
                         let claim = affinity.as_ref().map(|affinity| {
                             affinity.claim(
                                 account.id(),
@@ -265,11 +275,19 @@ impl AntigravityProvider {
                                 .await
                                 .map_err(super::unavailable)?
                         {
-                            selected.lease.release().await.map_err(super::unavailable)?;
+                            lease.release().await.map_err(super::unavailable)?;
                             tokio::task::yield_now().await;
                             continue 'refresh;
                         }
-                        return Ok(selected);
+                        return Ok(SelectedAccount {
+                            account: current,
+                            snapshot,
+                            capacity,
+                            material,
+                            project,
+                            lease,
+                            account_switch,
+                        });
                     }
                     ProviderLeaseAcquisition::Busy { retry_after: delay } => {
                         if let Some(delay) = delay {
@@ -309,12 +327,8 @@ impl AntigravityProvider {
     async fn load_selected(
         &self,
         account: &ProviderAccount,
-        project: Project,
-        lease: Box<dyn ProviderLeaseGuard>,
-        capacity: Option<AccountCapacitySnapshot>,
-        account_switch: bool,
         ctx: &AttemptContext,
-    ) -> Result<SelectedAccount, ProviderError> {
+    ) -> Result<(ProviderAccount, Material), ProviderError> {
         let current = self
             .credentials
             .current(account.id())
@@ -326,13 +340,6 @@ impl AntigravityProvider {
             return Err(unsent(Kind::NoEligibleAccount));
         }
         let material = self.credentials.material(&current)?;
-        Ok(SelectedAccount {
-            account: current.account,
-            capacity,
-            material,
-            project,
-            lease,
-            account_switch,
-        })
+        Ok((current.account, material))
     }
 }

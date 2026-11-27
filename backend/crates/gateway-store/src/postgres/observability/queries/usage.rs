@@ -138,6 +138,7 @@ pub(crate) const USAGE_LIST_RECORD_SELECT: &str =
             mr.provider_account_email_snapshot as provider_account_email,
             mr.provider_account_notes_snapshot as provider_account_notes,
             mr.provider_account_plan_type_snapshot as provider_account_plan_type,
+            mr.provider_account_plan_type_display_snapshot as provider_account_plan_type_display,
             mr.provider_account_authentication_kind_snapshot
               as provider_account_authentication_kind,
             mr.upstream_model_id, mr.upstream_transport, mr.service_tier,

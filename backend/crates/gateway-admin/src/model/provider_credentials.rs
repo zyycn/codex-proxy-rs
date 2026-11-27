@@ -1052,14 +1052,23 @@ pub struct ProviderResetCreditResult {
     pub credit: Option<ProviderResetCredit>,
 }
 
-impl ProviderQuota {
-    /// 保留账号已有的套餐子类型，仅在缺失时使用上游额度快照补全
-    pub(crate) fn fill_missing_plan_type(&self, account_plan_type: &mut Option<String>) {
-        if explicit_plan_type(account_plan_type.as_deref()).is_none() {
-            *account_plan_type = explicit_plan_type(self.plan_type.as_deref()).map(str::to_owned);
-        }
+/// 用额度观测补齐缺失的套餐 ID，只采用与账号套餐相符的描述
+pub fn resolve_observed_plan<'a>(
+    account_plan_type: &mut Option<String>,
+    observed_type: Option<&str>,
+    observed_display: Option<&'a str>,
+) -> Option<&'a str> {
+    let observed_type = explicit_plan_type(observed_type);
+    if explicit_plan_type(account_plan_type.as_deref()).is_none() {
+        *account_plan_type = observed_type.map(str::to_owned);
     }
+    observed_display.filter(|_| {
+        observed_type
+            .is_none_or(|id| Some(id.trim()) == account_plan_type.as_deref().map(str::trim))
+    })
+}
 
+impl ProviderQuota {
     /// 选择账号用量统计窗口，同时返回展示所需的周期事实
     ///
     /// 周/月额度使用边界完整、可归属到整个账号的窗口

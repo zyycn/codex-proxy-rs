@@ -541,6 +541,7 @@ fn diagnostic(name: &str, request_count: u64) -> DiagnosticObservation {
         account_provider_kind: None,
         account_authentication_kind: None,
         account_plan_type: None,
+        account_plan_type_display: None,
         key: name.to_owned(),
         name: name.to_owned(),
         request_count,

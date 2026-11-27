@@ -29,6 +29,13 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+pub(crate) struct CandidateQuota {
+    pub(crate) exhausted: bool,
+    pub(crate) signals: Option<AccountQuotaSignals>,
+    pub(crate) plan_type: Option<String>,
+    pub(crate) plan_display: Option<String>,
+}
+
 pub(crate) struct QuotaService {
     kind: ProviderKind,
     accounts: Arc<dyn ProviderAccountStore>,
@@ -245,8 +252,7 @@ impl QuotaService {
         &self,
         accounts: &[ProviderAccount],
         model: &str,
-    ) -> Result<BTreeMap<ProviderAccountId, (bool, Option<AccountQuotaSignals>)>, ProviderAdminError>
-    {
+    ) -> Result<BTreeMap<ProviderAccountId, CandidateQuota>, ProviderAdminError> {
         let owners: BTreeMap<_, _> = accounts.iter().map(|a| (a.id().clone(), a)).collect();
         let ids: Vec<_> = owners.keys().cloned().collect();
         let observations = self.accounts.get_quotas(&ids).await.map_err(unavailable)?;
@@ -260,13 +266,20 @@ impl QuotaService {
                     .map(|account| (o, account))
             })
             .map(|(o, account)| {
-                let result = parse(&o)?.model_signals(
+                let document = parse(&o)?;
+                let (exhausted, signals) = document.model_signals(
                     model,
                     account.auto_use_quota_credits(),
                     o.observed_at,
                     now,
                 );
-                Ok((o.account_id, result))
+                let quota = CandidateQuota {
+                    exhausted,
+                    signals,
+                    plan_type: document.plan_type(),
+                    plan_display: document.plan_display().map(str::to_owned),
+                };
+                Ok((o.account_id, quota))
             })
             .collect()
     }

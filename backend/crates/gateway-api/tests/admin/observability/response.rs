@@ -751,6 +751,7 @@ async fn diagnostics_should_keep_stable_key_and_display_name_contract() {
                 account_provider_kind: Some("openai".to_owned()),
                 account_authentication_kind: authentication_kind.map(str::to_owned),
                 account_plan_type: plan_type.map(str::to_owned),
+                account_plan_type_display: None,
                 name: "diag@example.invalid".to_owned(),
                 request_count: 2,
                 success_count: 2,
@@ -1093,6 +1094,12 @@ async fn usage_route_projects_request_facts_and_billing() {
         closed.error_message =
             Some("OpenAI WebSocket closed before a terminal response".to_owned());
         records.push(closed);
+        let mut agy = records[0].clone();
+        agy.id = "request_antigravity".to_owned();
+        agy.provider_kind = Some("antigravity".to_owned());
+        agy.provider_account_plan_type = Some("g1-pro-tier".to_owned());
+        agy.provider_account_plan_type_display = Some("Pro subscription".to_owned());
+        records.push(agy);
     }
     let response = observability::router::<AdminTestState>()
         .with_state(fixture.state())
@@ -1112,6 +1119,11 @@ async fn usage_route_projects_request_facts_and_billing() {
         .expect("usage response body");
     let value: serde_json::Value = serde_json::from_slice(&body).expect("usage response JSON");
 
+    assert_eq!(value["data"]["items"][5]["accountPlanType"], "g1-pro-tier");
+    assert_eq!(
+        value["data"]["items"][5]["accountPlanTypeDisplay"],
+        "Pro subscription"
+    );
     assert!(value["data"]["items"][0]["errorCode"].is_null());
     assert!(value["data"]["items"][0]["errorMessage"].is_null());
     assert_eq!(value["data"]["items"][3]["errorCode"], "server_error");
@@ -1248,6 +1260,7 @@ async fn usage_route_projects_request_facts_and_billing() {
         "$0.007"
     );
 
+    let value_before_peer_refresh = value["data"]["items"].as_array().unwrap();
     // 互联标识随当前摘要变化，重复请求共享同一账号，既有请求快照保持原值
     for peer in [
         Some((true, true)),
@@ -1277,7 +1290,15 @@ async fn usage_route_projects_request_facts_and_billing() {
                 json!(peer.map(|(d, o)| d && o))
             );
             assert_eq!(item["accountName"], "Snapshot Alpha");
-            assert_eq!(item["accountPlanType"], "supergrok_plus");
+            let old = value_before_peer_refresh
+                .iter()
+                .find(|old| old["id"] == item["id"])
+                .unwrap();
+            assert_eq!(item["accountPlanType"], old["accountPlanType"]);
+            assert_eq!(
+                item["accountPlanTypeDisplay"],
+                old["accountPlanTypeDisplay"]
+            );
         }
     }
 }

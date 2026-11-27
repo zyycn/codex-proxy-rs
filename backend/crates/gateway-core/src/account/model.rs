@@ -817,6 +817,8 @@ pub struct AccountHistorySnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan_type_snapshot: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_type_display_snapshot: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub notes_snapshot: Option<String>,
 }
 
@@ -828,6 +830,7 @@ impl AccountHistorySnapshot {
             email: account.email().map(str::to_owned),
             authentication_kind: account.authentication_kind().to_owned(),
             plan_type_snapshot: account.plan_type().map(str::to_owned),
+            plan_type_display_snapshot: None,
             notes_snapshot: account.notes().map(str::to_owned),
         }
     }

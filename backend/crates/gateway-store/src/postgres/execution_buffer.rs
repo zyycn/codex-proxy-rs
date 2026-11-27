@@ -947,6 +947,7 @@ fn account_snapshot_bytes(
             snapshot.email.as_deref(),
             Some(snapshot.authentication_kind.as_str()),
             snapshot.plan_type_snapshot.as_deref(),
+            snapshot.plan_type_display_snapshot.as_deref(),
             snapshot.notes_snapshot.as_deref(),
         ])
     })

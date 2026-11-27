@@ -164,10 +164,14 @@ async fn request_snapshots_should_survive_account_deletion() {
     )
     .await;
     let store = PgExecutionStore::new(database.pool.clone());
+    let mut first_attempt = attempt(&database.pool, "req_snap_a", 1, "acct_snap_a").await;
+    let snapshot = first_attempt.account_snapshot.as_mut().unwrap();
+    snapshot.plan_type_snapshot = Some("g1-pro-tier".to_owned());
+    snapshot.plan_type_display_snapshot = Some("Pro subscription".to_owned());
     store
         .insert_model_request_with_first_attempt(
             new_request("req_snap_a", started_at),
-            attempt(&database.pool, "req_snap_a", 1, "acct_snap_a").await,
+            first_attempt,
         )
         .await
         .expect("insert request with first attempt");
@@ -215,6 +219,15 @@ async fn request_snapshots_should_survive_account_deletion() {
             Some("alpha@example.invalid"),
             Some("oauth"),
         )
+    );
+
+    assert_eq!(
+        record.provider_account_plan_type.as_deref(),
+        Some("g1-pro-tier")
+    );
+    assert_eq!(
+        record.provider_account_plan_type_display.as_deref(),
+        Some("Pro subscription")
     );
 
     let detail = repository
@@ -1282,6 +1295,7 @@ async fn account_snapshot(
         email,
         authentication_kind,
         plan_type_snapshot,
+        plan_type_display_snapshot: None,
         notes_snapshot,
     }
 }

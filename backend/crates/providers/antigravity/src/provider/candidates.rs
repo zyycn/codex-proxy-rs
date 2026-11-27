@@ -1,7 +1,7 @@
 //! 从本地目录、凭据版本、额度和租约信号构建本轮候选
 
 use super::AntigravityProvider;
-use crate::transport::unsent;
+use crate::{credential::quota::CandidateQuota, transport::unsent};
 use gateway_core::{
     account::{
         AccountCandidate, AccountSelectionContext, AccountStatus, CredentialRevision,
@@ -22,6 +22,7 @@ pub(super) enum Project {
 pub(super) struct CandidatePool {
     pub(super) accounts: Vec<AccountCandidate>,
     pub(super) projects: BTreeMap<ProviderAccountId, (CredentialRevision, Project)>,
+    pub(super) quotas: BTreeMap<ProviderAccountId, CandidateQuota>,
     pub(super) selection: AccountSelectionContext,
 }
 
@@ -72,13 +73,11 @@ impl AntigravityProvider {
             .iter()
             .map(|account| account.id().clone())
             .collect();
-        let mut quota = if diagnostic {
-            BTreeMap::new()
-        } else {
-            self.quota
-                .scheduling(&accounts, model.as_str())
-                .await
-                .map_err(super::unavailable)?
+        let mut quotas = match self.quota.scheduling(&accounts, model.as_str()).await {
+            Ok(quotas) => quotas,
+            // 固定探测绕过额度门槛，读取不到套餐快照也应能继续
+            Err(_) if diagnostic => BTreeMap::new(),
+            Err(error) => return Err(super::unavailable(error)),
         };
         let scheduling = self
             .leases
@@ -118,7 +117,6 @@ impl AntigravityProvider {
         let mut candidates = Vec::new();
         let mut model_exhausted = false;
         for account in accounts {
-            let (exhausted, quota_signals) = quota.remove(account.id()).unwrap_or_default();
             if projects
                 .get(account.id())
                 .is_none_or(|(revision, _)| *revision != account.revision())
@@ -127,7 +125,8 @@ impl AntigravityProvider {
             {
                 continue;
             }
-            if exhausted {
+            let quota = quotas.get_mut(account.id()).filter(|_| !diagnostic);
+            if quota.as_ref().is_some_and(|q| q.exhausted) {
                 model_exhausted |= !excluded.contains(account.id())
                     && matches!(
                         account.status_projection(now, None).status,
@@ -143,7 +142,7 @@ impl AntigravityProvider {
                 .cloned()
                 .ok_or_else(|| unsent(Kind::ProviderInfrastructureUnavailable))?
                 .with_runtime_health(failure_rate, first_output_latency)
-                .with_provider_quota(quota_signals);
+                .with_provider_quota(quota.and_then(|q| q.signals.take()));
             candidates.push(AccountCandidate {
                 account,
                 signals,
@@ -168,6 +167,7 @@ impl AntigravityProvider {
         Ok(CandidatePool {
             accounts: candidates,
             projects,
+            quotas,
             selection,
         })
     }

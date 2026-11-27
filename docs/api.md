@@ -3058,7 +3058,7 @@ HTTP SSE 请求可能在返回 HTTP 200 后流内失败；WebSocket 已升级时
 `retryCount` 为额外执行尝试次数之和，`retryRate` 为发生过重试的请求数占该组请求数的比例，同一请求多次重试只计一次
 
 使用记录列表和错误排查列表的 `accountPlanType` / `accountPlanTypeDisplay` 来自记录保存的账号订阅快照。
-Antigravity 请求快照只保存套餐 ID，历史记录的展示名为空。
+Antigravity 的展示名取自请求时已观测到的 Google 套餐描述，快照缺少描述时为 `null`
 账号维度诊断使用该账号最近请求的订阅快照，并通过 `authenticationKind` 返回同一请求的认证类型快照；未保存的字段为 `null`，非账号维度的认证类型为 `null`
 
 管理端请求列表及 Dashboard 最近请求中的 `accountNotes` 来自请求保存的账号备注快照，未保存时为 `null`
