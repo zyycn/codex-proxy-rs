@@ -42,11 +42,15 @@ async fn control_plane_replacement_commits_one_writer_per_revision_and_preserves
     customized
         .settings
         .values
-        .openai_oauth_guardian_review_model = false;
-    customized.settings.values.openai_request_country =
-        gateway_core::account::OpenAiRequestCountry::Custom {
-            country: "CA".into(),
-        };
+        .openai_request_settings
+        .oauth_guardian_review_model = false;
+    customized
+        .settings
+        .values
+        .openai_request_settings
+        .request_country = gateway_core::settings::OpenAiRequestCountry::Custom {
+        country: "CA".into(),
+    };
     let (first, second) = tokio::join!(
         repository.replace_control_plane(customized),
         repository.replace_control_plane(replacement("second", 7200)),

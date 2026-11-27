@@ -117,7 +117,13 @@ fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError>
     )
     .map_err(|_| AdminError::invalid("运行时设置不满足约束"))?;
     command.values.validate().map_err(|field| match field {
-        "openai_request_country" => AdminError::invalid("请求国家必须是两位大写 ASCII 字母"),
+        "openai_request_settings.residency"
+        | "openai_request_settings.account_routing_override" => {
+            AdminError::invalid("数据驻留和账号路由必须是有效的单行请求头值")
+        }
+        "openai_request_settings.request_country" => {
+            AdminError::invalid("请求国家必须是两位大写 ASCII 字母")
+        }
         _ => AdminError::invalid("运行时设置不满足约束"),
     })
 }

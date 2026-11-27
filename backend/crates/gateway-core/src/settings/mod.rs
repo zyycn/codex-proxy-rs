@@ -1,9 +1,11 @@
 //! 运行设置的纯值、校验与编译结果
 
 pub(crate) mod compiled;
+mod openai;
 pub mod privacy;
 pub mod request_profiles;
 mod values;
+pub use openai::{OpenAiRequestCountry, OpenAiRequestSettings};
 pub use values::{
     SettingsValues, client_min_versions, response_body_limit, validate_request_limits,
 };

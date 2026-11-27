@@ -36,8 +36,7 @@ pub type ProviderRequestProfileUpdates =
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsFields {
-    pub openai_oauth_guardian_review_model: bool,
-    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
+    pub openai_request_settings: gateway_core::settings::OpenAiRequestSettings,
     pub codex_privacy_policy: gateway_core::settings::privacy::CodexPrivacyPolicy,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -581,7 +580,12 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
         "settingsUsageRetentionOverflow" => "用量记录保留天数不合法".to_owned(),
         "settingsOpsRetentionOverflow" => "运维事件保留天数不合法".to_owned(),
         "settingsAuditRetentionOverflow" => "审计记录保留天数不合法".to_owned(),
-        "openaiRequestCountry" => "自定义请求国家必须是两位大写 ASCII 字母".to_owned(),
+        "openaiRequestSettings.residency" | "openaiRequestSettings.accountRoutingOverride" => {
+            "数据驻留和账号路由必须是有效的单行请求头值".to_owned()
+        }
+        "openaiRequestSettings.requestCountry" => {
+            "自定义请求国家必须是两位大写 ASCII 字母".to_owned()
+        }
         "requestLocation" => "请求位置的国家代码、地区或城市不合法".to_owned(),
         "providerRequestProfiles" => "服务商客户端身份配置无效".to_owned(),
         "minCodexDesktopVersion" => "Codex Desktop 最低版本格式不合法".to_owned(),
@@ -705,8 +709,7 @@ impl RuntimeSettingsFields {
         self,
     ) -> Result<gateway_admin::model::settings::RuntimeSettingsValues, WireValidationError> {
         let values = gateway_admin::model::settings::RuntimeSettingsValues {
-            openai_oauth_guardian_review_model: self.openai_oauth_guardian_review_model,
-            openai_request_country: self.openai_request_country,
+            openai_request_settings: self.openai_request_settings,
             codex_privacy_policy: self.codex_privacy_policy,
             request_location_enabled: self.request_location_enabled,
             request_location: self
@@ -756,8 +759,7 @@ impl RuntimeSettingsFields {
 impl From<gateway_admin::model::settings::RuntimeSettingsValues> for RuntimeSettingsFields {
     fn from(settings: gateway_admin::model::settings::RuntimeSettingsValues) -> Self {
         crate::admin::settings::RuntimeSettingsFields {
-            openai_oauth_guardian_review_model: settings.openai_oauth_guardian_review_model,
-            openai_request_country: settings.openai_request_country,
+            openai_request_settings: settings.openai_request_settings,
             codex_privacy_policy: settings.codex_privacy_policy,
             request_location_enabled: settings.request_location_enabled,
             request_location: settings.request_location,
@@ -811,7 +813,11 @@ fn settings_validation_error(field: &'static str) -> WireValidationError {
         "max_waiting_per_key" => "maxWaitingPerKey",
         "min_codex_cli_version" => "minCodexCliVersion",
         "min_codex_desktop_version" => "minCodexDesktopVersion",
-        "openai_request_country" => "openaiRequestCountry",
+        "openai_request_settings.request_country" => "openaiRequestSettings.requestCountry",
+        "openai_request_settings.residency" => "openaiRequestSettings.residency",
+        "openai_request_settings.account_routing_override" => {
+            "openaiRequestSettings.accountRoutingOverride"
+        }
         "account_affinity" => "accountAffinity",
         "openai_guardian_reserved_concurrency" => "openaiGuardianReservedConcurrency",
         "session_affinity_ttl_hours" => "sessionAffinityTtlHours",

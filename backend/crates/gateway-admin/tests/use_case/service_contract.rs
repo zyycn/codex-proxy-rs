@@ -226,6 +226,10 @@ fn sdk_settings_contract_matches_host_declarations() {
             ][..],
         ),
         (
+            "../gateway-core/src/settings/openai.rs",
+            &["OpenAiRequestSettings", "OpenAiRequestCountry"][..],
+        ),
+        (
             "../gateway-core/src/settings/privacy.rs",
             &[
                 "CodexPrivacyPolicy",
@@ -254,7 +258,7 @@ fn sdk_settings_contract_matches_host_declarations() {
         ),
         (
             "../gateway-core/src/account/location.rs",
-            &["RequestLocation", "OpenAiRequestCountry"][..],
+            &["RequestLocation"][..],
         ),
         (
             "../gateway-core/src/account/scheduling.rs",

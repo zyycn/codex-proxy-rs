@@ -38,7 +38,7 @@ pub struct CodexWireProfile {
     pub installation_seed: Option<String>,
     /// 未配置时不发送 residency 头；不随制品版本更新而改变
     pub residency: Option<String>,
-    /// 部署指定的账号路由头；未配置时不发送，不随客户端身份选择改变
+    /// 请求快照指定的账号路由头；未配置时不发送，不随客户端身份选择改变
     pub account_routing_override: Option<String>,
     /// 版本元组最后一次经制品核验的时间；不表示 TLS 传输已重新核验
     pub verified_at: DateTime<Utc>,

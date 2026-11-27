@@ -320,7 +320,7 @@ pub struct RequestAttemptContext {
     pricing: Arc<crate::metering::PricingOverrides>,
     request_profile: Option<crate::account::OpaqueProviderData>,
     fast_mode: FastMode,
-    openai_request_country: crate::account::OpenAiRequestCountry,
+    openai_request_settings: crate::settings::OpenAiRequestSettings,
     request_location: Option<crate::account::RequestLocation>,
     privacy: Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>>,
     request_id: ModelRequestId,
@@ -419,11 +419,11 @@ impl RequestAttemptContext {
     }
 
     #[must_use]
-    pub fn with_openai_request_country(
+    pub fn with_openai_request_settings(
         mut self,
-        country: crate::account::OpenAiRequestCountry,
+        settings: crate::settings::OpenAiRequestSettings,
     ) -> Self {
-        self.openai_request_country = country;
+        self.openai_request_settings = settings;
         self
     }
 
@@ -448,7 +448,7 @@ impl RequestAttemptContext {
             request_profile: None,
             pricing: Arc::default(),
             fast_mode: FastMode::Default,
-            openai_request_country: Default::default(),
+            openai_request_settings: Default::default(),
             request_location: None,
             privacy: None,
             timing_started_at: Instant::now(),
@@ -726,8 +726,8 @@ impl AttemptContext {
     }
 
     #[must_use]
-    pub const fn openai_request_country(&self) -> &crate::account::OpenAiRequestCountry {
-        &self.request.openai_request_country
+    pub const fn openai_request_settings(&self) -> &crate::settings::OpenAiRequestSettings {
+        &self.request.openai_request_settings
     }
 
     /// 当前 attempt 的诊断关联；克隆后可传给后台 transport 任务

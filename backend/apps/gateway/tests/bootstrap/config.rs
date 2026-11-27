@@ -131,6 +131,7 @@ fn config_loader_should_ignore_unknown_fields_in_configuration_sections() {
     let mut document = valid_config_document();
     document["host"]["system_update"] = serde_json::json!({});
     document["store"]["pool"] = serde_json::json!({});
+    document["openai"] = serde_json::json!({});
     for path in [
         "",
         "/host",
@@ -367,31 +368,6 @@ fn config_loader_should_reject_disabled_all_log_outputs() {
 #[test]
 fn config_loader_should_reject_zero_server_port() {
     assert_rejected(valid_config().replace("port: 8080", "port: 0"));
-}
-
-#[test]
-fn config_loader_should_accept_optional_openai_routing_strings() {
-    for value in [
-        serde_json::Value::Null,
-        serde_json::json!("us"),
-        serde_json::json!("custom-value"),
-        serde_json::json!(""),
-    ] {
-        let mut document = valid_config_document();
-        document["openai"]["residency"] = value.clone();
-        document["openai"]["account_routing_override"] = value;
-        parse_config(&document.to_string()).expect("optional routing strings");
-    }
-    let mut document = valid_config_document();
-    document["openai"]
-        .as_object_mut()
-        .unwrap()
-        .remove("residency");
-    document["openai"]
-        .as_object_mut()
-        .unwrap()
-        .remove("account_routing_override");
-    parse_config(&document.to_string()).expect("omitted routing strings");
 }
 
 fn assert_rejected(config: String) {

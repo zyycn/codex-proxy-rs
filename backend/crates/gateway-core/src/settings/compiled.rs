@@ -112,7 +112,7 @@ impl CompiledSettings {
             timeout: Duration::from_secs(u64::from(settings.key_queue_timeout_seconds)),
         };
         settings
-            .openai_request_country
+            .openai_request_settings
             .validate()
             .map_err(|_| InvalidSettings)?;
         let request_location = settings

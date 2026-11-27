@@ -22,8 +22,7 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
             ("grok-latest".to_owned(), "grok-4.5".to_owned()),
         ]),
         values: gateway_admin::model::settings::RuntimeSettingsValues {
-            openai_oauth_guardian_review_model: true,
-            openai_request_country: Default::default(),
+            openai_request_settings: Default::default(),
             codex_privacy_policy: Default::default(),
             request_location_enabled: false,
             request_location: Default::default(),
@@ -575,7 +574,7 @@ async fn retry_after_limit_defaults_and_updates_reach_the_runtime_snapshot() {
 
 #[tokio::test]
 async fn openai_request_settings_round_trip_into_snapshot() {
-    use gateway_core::account::OpenAiRequestCountry;
+    use gateway_core::settings::OpenAiRequestCountry;
     use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
     let Some(database) = TestDatabase::create("openai_request_settings").await else {
         return;
@@ -583,10 +582,15 @@ async fn openai_request_settings_round_trip_into_snapshot() {
     let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
     let snapshots = PgRuntimeSnapshotRepository::new(database.pool.clone());
     let initial = snapshots.load_runtime_snapshot().await.unwrap();
-    assert!(initial.settings.openai_oauth_guardian_review_model());
+    assert!(
+        initial
+            .settings
+            .openai_request_settings()
+            .oauth_guardian_review_model
+    );
     assert_eq!(
-        initial.settings.openai_request_country(),
-        &OpenAiRequestCountry::FollowLocation {}
+        initial.settings.openai_request_settings().request_country,
+        OpenAiRequestCountry::FollowLocation {}
     );
 
     for (enabled, country) in [
@@ -601,18 +605,48 @@ async fn openai_request_settings_round_trip_into_snapshot() {
         (false, OpenAiRequestCountry::Default {}),
     ] {
         let mut update = settings_with_margin(600);
-        update.values.openai_oauth_guardian_review_model = enabled;
-        update.values.openai_request_country = country.clone();
+        let headers = gateway_core::settings::OpenAiRequestSettings {
+            request_country: country.clone(),
+            oauth_guardian_review_model: enabled,
+            residency: enabled.then(|| "us".to_owned()),
+            account_routing_override: enabled.then(|| "us_cr".to_owned()),
+        };
+        update.values.openai_request_settings = headers.clone();
         repository.update_runtime_settings(update).await.unwrap();
         let saved = repository.load_runtime_settings().await.unwrap();
-        assert_eq!(saved.values.openai_oauth_guardian_review_model, enabled);
-        assert_eq!(saved.values.openai_request_country, country);
-        let snapshot = snapshots.load_runtime_snapshot().await.unwrap();
         assert_eq!(
-            snapshot.settings.openai_oauth_guardian_review_model(),
+            saved
+                .values
+                .openai_request_settings
+                .oauth_guardian_review_model,
             enabled
         );
-        assert_eq!(snapshot.settings.openai_request_country(), &country);
+        assert_eq!(
+            saved.values.openai_request_settings.request_country,
+            country
+        );
+        assert_eq!(saved.values.openai_request_settings, headers);
+        assert_eq!(
+            gateway_core::provider_ports::ProviderRuntimePolicyPort::load_openai_request_settings(
+                &repository
+            )
+            .await
+            .unwrap(),
+            headers
+        );
+        let snapshot = snapshots.load_runtime_snapshot().await.unwrap();
+        assert_eq!(
+            snapshot
+                .settings
+                .openai_request_settings()
+                .oauth_guardian_review_model,
+            enabled
+        );
+        assert_eq!(
+            snapshot.settings.openai_request_settings().request_country,
+            country
+        );
+        assert_eq!(snapshot.settings.openai_request_settings(), &headers);
         assert_eq!(snapshot.config_revision, saved.config_revision);
     }
     for invalid in [
@@ -623,7 +657,7 @@ async fn openai_request_settings_round_trip_into_snapshot() {
     ] {
         assert!(
             sqlx::query(
-                "update runtime_settings set openai_request_country_json = $1 where id = 1"
+                "update runtime_settings set openai_request_settings_json = jsonb_set(openai_request_settings_json, '{requestCountry}', $1) where id = 1"
             )
             .bind(sqlx::types::Json(invalid))
             .execute(&database.pool)

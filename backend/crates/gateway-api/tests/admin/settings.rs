@@ -75,8 +75,7 @@ fn backup_settings_report_secret_presence_without_serializing_the_secret() {
 fn update_body() -> Value {
     json!({
         "configRevision": 7,
-        "openaiOauthGuardianReviewModel": true,
-        "openaiRequestCountry": {"mode": "follow_location"},
+        "openaiRequestSettings": {"requestCountry": {"mode":"follow_location"}, "oauthGuardianReviewModel":true,"residency": null, "accountRoutingOverride": null},
         "codexPrivacyPolicy": {"enabled":false,"onError":"skip_rule","rules":[]},
         "requestLocationEnabled": false,
         "requestLocation": {"country":"US", "region":"Ohio", "city":"Piketon", "timezone":"America/New_York"},
@@ -575,8 +574,7 @@ fn settings_service_contract_flattens_values_and_rejects_unknown_fields() {
         command
     );
     for field in [
-        "openai_oauth_guardian_review_model",
-        "openai_request_country",
+        "openai_request_settings",
         "reset_credit_on_low_weekly_quota",
     ] {
         let mut incomplete = wire.clone();
@@ -1473,28 +1471,39 @@ async fn runtime_settings_reject_incomplete_and_stale_replacements() {
         ))
     };
     let initial = response_json(read().await.unwrap()).await["data"].clone();
-    assert_eq!(initial["openaiOauthGuardianReviewModel"], true);
     assert_eq!(
-        initial["openaiRequestCountry"],
+        initial["openaiRequestSettings"]["oauthGuardianReviewModel"],
+        true
+    );
+    assert_eq!(
+        initial["openaiRequestSettings"]["requestCountry"],
         json!({"mode":"follow_location"})
     );
     let mut body = update_body();
     body["configRevision"] = initial["configRevision"].clone();
-    body["openaiOauthGuardianReviewModel"] = json!(false);
-    body["openaiRequestCountry"] = json!({"mode":"custom","country":"CA"});
+    body["openaiRequestSettings"]["oauthGuardianReviewModel"] = json!(false);
+    body["openaiRequestSettings"]["requestCountry"] = json!({"mode":"custom","country":"CA"});
+    body["openaiRequestSettings"]["residency"] = json!("us");
+    body["openaiRequestSettings"]["accountRoutingOverride"] = json!("us_cr");
     body["resetCreditOnLowWeeklyQuota"] = json!(true);
     let response = save(body.clone()).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let saved = response_json(response).await["data"].clone();
     assert_eq!(saved["resetCreditOnLowWeeklyQuota"], true);
-    assert_eq!(saved["openaiOauthGuardianReviewModel"], false);
-    assert_eq!(saved["openaiRequestCountry"], body["openaiRequestCountry"]);
+    assert_eq!(
+        saved["openaiRequestSettings"]["oauthGuardianReviewModel"],
+        false
+    );
+    assert_eq!(
+        saved["openaiRequestSettings"]["requestCountry"],
+        body["openaiRequestSettings"]["requestCountry"]
+    );
+    assert_eq!(
+        saved["openaiRequestSettings"],
+        body["openaiRequestSettings"]
+    );
 
-    for field in [
-        "openaiOauthGuardianReviewModel",
-        "openaiRequestCountry",
-        "resetCreditOnLowWeeklyQuota",
-    ] {
+    for field in ["openaiRequestSettings", "resetCreditOnLowWeeklyQuota"] {
         let mut incomplete = update_body();
         incomplete["configRevision"] = saved["configRevision"].clone();
         incomplete.as_object_mut().unwrap().remove(field);
@@ -1508,8 +1517,10 @@ async fn runtime_settings_reject_incomplete_and_stale_replacements() {
             StatusCode::UNPROCESSABLE_ENTITY
         );
     }
-    body["openaiOauthGuardianReviewModel"] = json!(true);
-    body["openaiRequestCountry"] = json!({"mode":"passthrough"});
+    body["openaiRequestSettings"]["oauthGuardianReviewModel"] = json!(true);
+    body["openaiRequestSettings"]["requestCountry"] = json!({"mode":"passthrough"});
+    body["openaiRequestSettings"]["residency"] = Value::Null;
+    body["openaiRequestSettings"]["accountRoutingOverride"] = Value::Null;
     assert_eq!(
         save(body.clone()).await.unwrap().status(),
         StatusCode::CONFLICT
@@ -1520,9 +1531,16 @@ async fn runtime_settings_reject_incomplete_and_stale_replacements() {
     let response = save(body).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let changed = response_json(response).await["data"].clone();
-    assert_eq!(changed["openaiOauthGuardianReviewModel"], true);
     assert_eq!(
-        changed["openaiRequestCountry"],
+        changed["openaiRequestSettings"]["oauthGuardianReviewModel"],
+        true
+    );
+    assert_eq!(
+        changed["openaiRequestSettings"],
+        json!({"requestCountry":{"mode":"passthrough"},"oauthGuardianReviewModel":true,"residency":null,"accountRoutingOverride":null})
+    );
+    assert_eq!(
+        changed["openaiRequestSettings"]["requestCountry"],
         json!({"mode":"passthrough"})
     );
 }
@@ -1541,14 +1559,14 @@ fn openai_request_settings_validate_modes_and_country_codes() {
         json!({"mode":"unknown"}),
     ] {
         let mut body = update_body();
-        body["openaiRequestCountry"] = invalid.clone();
+        body["openaiRequestSettings"]["requestCountry"] = invalid.clone();
         if let Ok(request) = serde_json::from_value::<UpdateRuntimeSettingsRequest>(body) {
             assert!(request.validate().is_err(), "{invalid}");
         }
     }
     for invalid in [json!(null), json!("true"), json!(1)] {
         let mut body = update_body();
-        body["openaiOauthGuardianReviewModel"] = invalid;
+        body["openaiRequestSettings"]["oauthGuardianReviewModel"] = invalid;
         assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_err());
     }
 }
@@ -1730,5 +1748,35 @@ fn reset_credit_weekly_threshold_accepts_unset_and_zero_to_one_hundred() {
         let mut body = update_body();
         body["resetCreditMaxWeeklyRemainingPercent"] = value;
         assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_err());
+    }
+}
+
+#[test]
+fn openai_request_settings_validate_without_normalizing_values() {
+    for value in [
+        None,
+        Some(""),
+        Some("us"),
+        Some("us_cr"),
+        Some("custom-value"),
+        Some(" US "),
+    ] {
+        let mut body = update_body();
+        body["openaiRequestSettings"]["residency"] = json!(value);
+        body["openaiRequestSettings"]["accountRoutingOverride"] = json!(value);
+        let request: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
+        request.validate().unwrap();
+        assert_eq!(
+            request.values.openai_request_settings.residency.as_deref(),
+            value
+        );
+    }
+    for field in ["residency", "accountRoutingOverride"] {
+        for value in ["us\r\nx-injected: true", "us\n", "\0", "国"] {
+            let mut body = update_body();
+            body["openaiRequestSettings"][field] = json!(value);
+            let request: UpdateRuntimeSettingsRequest = serde_json::from_value(body).unwrap();
+            assert!(request.validate().is_err());
+        }
     }
 }

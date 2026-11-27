@@ -527,9 +527,8 @@ Responses API Key 与 OAuth 共用模拟客户端画像（`User-Agent`、`origin
 Responses 的安装身份通过正文 `client_metadata` 及 turn metadata 发送，不默认添加独立的
 `x-codex-installation-id` 请求头，也不透传下游同名头。Key 配置种子时，安装身份由种子、Key ID 与选中账号 ID
 稳定派生；未配置时使用账号已持久化的安装 ID。Images、Search 和 Live 保留各自的安装头
-`x-openai-internal-codex-residency` 和 `x-openai-account-routing-override` 分别由部署配置
-`openai.residency`、`openai.account_routing_override` 控制，配置值原样发送并覆盖客户端同名头，
-省略或 `null` 时删除对应请求头。配置说明见 [部署与运维](../deploy/README.md#启动后的运行设置)
+`x-openai-internal-codex-residency` 和 `x-openai-account-routing-override` 由运行设置
+[`openaiRequestSettings`](#数据驻留与路由) 控制，覆盖客户端同名头
 `x-openai-fedramp` 默认按业务头透传并保留原始多值，Responses 明确换号时清理客户端值。
 所选 OpenAI OAuth 令牌声明 FedRAMP 时，网关为模型请求设置唯一的 `x-openai-fedramp: true`。
 同账号轮换令牌导致该声明变化时，新请求使用新的上游 WS 连接，旧连接上的精确续接需要客户端重放。
@@ -2328,8 +2327,8 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | --- | --- |
 | 并发控制版本 | `configRevision` |
 | [客户端身份](#provider-客户端身份) | `providerRequestProfiles` |
-| [请求位置](#请求位置) | `requestLocationEnabled`、`requestLocation`、`openaiRequestCountry` |
-| [OpenAI OAuth 同步审核模型](#正文兼容) | `openaiOauthGuardianReviewModel`，默认 `true` |
+| [请求位置](#请求位置) | `requestLocationEnabled`、`requestLocation` |
+| [OpenAI 请求设置](#openai-请求设置) | `openaiRequestSettings` |
 | [隐私策略](#隐私策略) | `codexPrivacyPolicy` |
 | 模型映射 | `modelMappings` |
 | 凭据刷新 | `refreshMarginSeconds`、`refreshConcurrency` |
@@ -2381,7 +2380,22 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 
 Antigravity 不应用这组国家、区域、城市和时区覆盖，原生请求中的位置相关业务字段继续透传；网络出口仍使用所选账号的代理
 
-`openaiRequestCountry` 仅控制发往 Codex OAuth 上游的 Responses 请求顶层字段 `request_country`。API Key 上游保留客户端原值，包括显式 `null`，客户端省略时也省略。保存后对新请求生效
+### OpenAI 请求设置
+
+`openaiRequestSettings` 统一保存请求国家、OAuth 审核模型、数据驻留和账号路由。更新设置时必须提交完整对象；仅修改其他设置时，从当前设置读取并原样提交。默认值如下：
+
+```json
+{
+  "requestCountry": { "mode": "follow_location" },
+  "oauthGuardianReviewModel": true,
+  "residency": null,
+  "accountRoutingOverride": null
+}
+```
+
+`oauthGuardianReviewModel` 控制 [OAuth 同步审核专用模型](#正文兼容)，必须为布尔值
+
+`openaiRequestSettings.requestCountry` 仅控制发往 Codex OAuth 上游的 Responses 请求顶层字段 `request_country`。API Key 上游保留客户端原值，包括显式 `null`，客户端省略时也省略。保存后对新请求生效
 
 | 管理端选项 | 设置值 | 发往上游的字段 |
 | --- | --- | --- |
@@ -2390,7 +2404,13 @@ Antigravity 不应用这组国家、区域、城市和时区覆盖，原生请�
 | 透传 | `{"mode":"passthrough"}` | 保留客户端原值，包括显式 `null`；客户端省略时也省略 |
 | 自定义 | `{"mode":"custom","country":"CA"}` | 始终发送指定的两位大写 ASCII 国家码，独立于城市、时区和全局位置开关 |
 
-更新设置时必须同时提交 `openaiRequestCountry` 和 `openaiOauthGuardianReviewModel`。仅修改其他设置时，请从当前设置读取并原样提交这两项
+#### 数据驻留与路由
+
+`openaiRequestSettings` 中的 `residency` 和 `accountRoutingOverride` 独立于客户端身份与请求位置，均为可选字符串，默认 `null`，分别设置 `x-openai-internal-codex-residency` 和
+`x-openai-account-routing-override`。值必须能作为 HTTP／WebSocket 请求头发送（ASCII 文本），原样保留，不限制为固定选项。
+参考值分别为 `us` 和 `us`、`us_cr`。字段省略或为 `null` 时删除对应请求头，空字符串发送空头值；管理端留空保存为 `null`
+
+保存后对新请求及后续后台操作生效，无需重启。正在执行的请求及其重试保留原值，WebSocket 连接按最终握手头隔离。
 
 ### 隐私策略
 

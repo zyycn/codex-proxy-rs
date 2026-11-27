@@ -699,7 +699,7 @@ pub struct RoutingPlan {
     request_body_limit: usize,
     max_retry_after: std::time::Duration,
     pricing: Arc<crate::metering::PricingOverrides>,
-    openai_request_country: crate::account::OpenAiRequestCountry,
+    openai_request_settings: crate::settings::OpenAiRequestSettings,
     request_location: Option<crate::account::RequestLocation>,
     privacy: Option<Arc<dyn crate::settings::privacy::CompiledPrivacyPolicy>>,
     config_revision: ConfigRevision,
@@ -755,8 +755,8 @@ impl RoutingPlan {
     }
 
     #[must_use]
-    pub const fn openai_request_country(&self) -> &crate::account::OpenAiRequestCountry {
-        &self.openai_request_country
+    pub const fn openai_request_settings(&self) -> &crate::settings::OpenAiRequestSettings {
+        &self.openai_request_settings
     }
 
     #[must_use]

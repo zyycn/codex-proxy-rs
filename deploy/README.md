@@ -423,11 +423,9 @@ PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`
 | 代理位置 | “代理管理”；优先于全局位置，全局关闭时仍可独立生效 |
 
 位置覆盖只影响 OpenAI 请求中受支持的位置与时区信息，不改变上下文日期、真实出口 IP、epoch 时间戳或系统时区。
-`openai.residency` 和 `openai.account_routing_override` 是独立于客户端身份的启动配置，
-分别指定 `x-openai-internal-codex-residency` 和 `x-openai-account-routing-override` 请求头。
-两项均为可选字符串，配置值原样发送并覆盖客户端同名头，支持自定义地域或路由值。
-省略或设为 `null` 时删除对应请求头。
-修改后重启应用生效。身份与位置字段见 [运行设置 API](../docs/api.md#8-运行设置)
+数据驻留与账号路由在“系统设置 → 平台设置 → OpenAI → 请求设置”中填写，支持自定义值，留空删除对应请求头。
+保存后对新请求生效，无需重启。字段与适用范围见 [运行设置 API](../docs/api.md#数据驻留与路由)
+已有部署若在 `config.yaml` 中设置了 `openai.residency` 或 `openai.account_routing_override`，升级后须在平台设置中重新保存，并删除配置文件中的旧字段
 OAuth 续期和额度刷新等后台操作使用对应平台的全局客户端身份。发布资料刷新不改写用户选择或 `config.yaml`，见 [Provider 客户端身份](../docs/api.md#provider-客户端身份)
 
 ### CPR 互联

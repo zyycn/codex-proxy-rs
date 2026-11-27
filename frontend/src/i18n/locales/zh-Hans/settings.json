@@ -329,10 +329,8 @@
     "day": "天",
     "location": {
       "requestCountry": "请求国家",
-      "requestCountryDescription": "设置请求如何发送国家代码",
       "requestCountryScope": "仅用于 OAuth 账号",
       "countryHelp": "请求国家模式说明",
-      "countryMode": "策略",
       "countryModes": {
         "default": "空值",
         "passthrough": "透传",
@@ -780,6 +778,17 @@
     "resetPriority": {
       "description": "按所选窗口的重置时间和系数排序",
       "windowHelp": "系数决定各窗口的相对占比，0 表示忽略该窗口，全部为 0 时按最近的有效重置时间排序"
+    },
+    "requestOptions": {
+      "title": "请求设置",
+      "residency": "数据驻留",
+      "residencyPlaceholder": "us",
+      "accountRoutingOverride": "账号路由",
+      "accountRoutingPlaceholder": "us / us_cr",
+      "residencyHelp": "数据驻留说明",
+      "accountRoutingOverrideHelp": "账号路由说明",
+      "headerHelp": "按填写值发送请求头，留空则不发送",
+      "description": "配置发往上游的请求参数"
     }
   }
 }

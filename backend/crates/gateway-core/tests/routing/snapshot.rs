@@ -2266,8 +2266,9 @@ fn revision(value: u64) -> ConfigRevision {
 
 #[test]
 fn global_request_location_should_be_frozen_when_snapshot_is_published() {
-    use gateway_core::account::{OpenAiRequestCountry, ProviderAccountId, RequestLocation};
+    use gateway_core::account::{ProviderAccountId, RequestLocation};
     use gateway_core::runtime::RuntimeSnapshotHandle;
+    use gateway_core::settings::OpenAiRequestCountry;
     let make_snapshot = |version, timezone: &str, enabled, country| {
         let location = RequestLocation {
             timezone: timezone.parse().unwrap(),
@@ -2278,7 +2279,12 @@ fn global_request_location_should_be_frozen_when_snapshot_is_published() {
             revision(version),
             SettingsValues::new(3, "smart", BTreeMap::new(), None, None)
                 .with_request_location(location, enabled)
-                .with_openai_request_country(country),
+                .with_openai_request_settings(gateway_core::settings::OpenAiRequestSettings {
+                    request_country: country,
+                    residency: (version == 1).then(|| "us".to_owned()),
+                    account_routing_override: (version == 1).then(|| "us_cr".to_owned()),
+                    ..Default::default()
+                }),
             Vec::new(),
             Vec::new(),
             vec![SnapshotProviderAccountFacts::new(
@@ -2321,12 +2327,29 @@ fn global_request_location_should_be_frozen_when_snapshot_is_published() {
         OpenAiRequestCountry::FollowLocation {},
     ));
     assert_eq!(
-        old_plan.openai_request_country(),
-        &OpenAiRequestCountry::Passthrough {}
+        old_plan.openai_request_settings().residency.as_deref(),
+        Some("us")
     );
     assert_eq!(
-        plan(&handle.acquire().unwrap()).openai_request_country(),
-        &OpenAiRequestCountry::FollowLocation {}
+        old_plan
+            .openai_request_settings()
+            .account_routing_override
+            .as_deref(),
+        Some("us_cr")
+    );
+    assert_eq!(
+        plan(&handle.acquire().unwrap()).openai_request_settings(),
+        &Default::default()
+    );
+    assert_eq!(
+        old_plan.openai_request_settings().request_country,
+        OpenAiRequestCountry::Passthrough {}
+    );
+    assert_eq!(
+        plan(&handle.acquire().unwrap())
+            .openai_request_settings()
+            .request_country,
+        OpenAiRequestCountry::FollowLocation {}
     );
     assert_eq!(
         old_plan.request_location().unwrap().timezone.name(),

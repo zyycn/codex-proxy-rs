@@ -3,7 +3,7 @@
 use std::io;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use gateway_core::{account::OpenAiRequestCountry, operation::GenerateRequest};
+use gateway_core::{operation::GenerateRequest, settings::OpenAiRequestCountry};
 use gateway_protocol::http::is_transport_managed_request_header;
 use gateway_protocol::openai::{
     OPENAI_PROTOCOL, WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY,

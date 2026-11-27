@@ -25,8 +25,7 @@ pub struct SettingsValues {
     pub(crate) switch_account_on_queue_failure: bool,
     pub(crate) max_retry_after_seconds: u32,
     pub(crate) openai_guardian_reserved_concurrency: u32,
-    pub(crate) openai_oauth_guardian_review_model: bool,
-    pub(crate) openai_request_country: crate::account::OpenAiRequestCountry,
+    pub(crate) openai_request_settings: crate::settings::OpenAiRequestSettings,
     pub(crate) account_affinity: crate::account::AccountAffinity,
     pub(crate) max_account_rotations: u32,
     pub(crate) session_affinity_ttl_hours: u32,
@@ -111,28 +110,17 @@ impl SettingsValues {
     }
 
     #[must_use]
-    pub const fn with_openai_oauth_guardian_review_model(mut self, enabled: bool) -> Self {
-        self.openai_oauth_guardian_review_model = enabled;
-        self
-    }
-
-    #[must_use]
-    pub const fn openai_oauth_guardian_review_model(&self) -> bool {
-        self.openai_oauth_guardian_review_model
-    }
-
-    #[must_use]
-    pub fn with_openai_request_country(
+    pub fn with_openai_request_settings(
         mut self,
-        policy: crate::account::OpenAiRequestCountry,
+        settings: crate::settings::OpenAiRequestSettings,
     ) -> Self {
-        self.openai_request_country = policy;
+        self.openai_request_settings = settings;
         self
     }
 
     #[must_use]
-    pub fn openai_request_country(&self) -> &crate::account::OpenAiRequestCountry {
-        &self.openai_request_country
+    pub const fn openai_request_settings(&self) -> &crate::settings::OpenAiRequestSettings {
+        &self.openai_request_settings
     }
 
     #[must_use]
@@ -234,8 +222,7 @@ impl SettingsValues {
             switch_account_on_queue_failure: false,
             max_retry_after_seconds: 240,
             openai_guardian_reserved_concurrency: 0,
-            openai_oauth_guardian_review_model: true,
-            openai_request_country: Default::default(),
+            openai_request_settings: Default::default(),
             account_affinity: crate::account::AccountAffinity::default(),
             max_account_rotations: 3,
             session_affinity_ttl_hours: 24,

@@ -77,11 +77,7 @@ pub async fn initialize(
     profile::identity::RequestProfileSelection::parse(&configured_profile)
         .map_err(|_| OpenAiInitializeError::RuntimePolicy)?;
     let credential_state = ports.credential_state();
-    let profile = profile::CodexWireProfileState::new(profile::CodexWireProfile {
-        residency: config.residency.clone(),
-        account_routing_override: config.account_routing_override.clone(),
-        ..Default::default()
-    });
+    let profile = profile::CodexWireProfileState::new(profile::CodexWireProfile::default());
     let artifact_cache =
         CodexArtifactProfileCache::new(provider_kind.clone(), ports.artifact_profiles());
     let configured_build = profile.snapshot().desktop_build.parse::<u64>().ok();

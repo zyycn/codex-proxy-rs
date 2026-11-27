@@ -41,8 +41,8 @@ use chrono::Utc;
 use futures::{SinkExt, StreamExt, future::BoxFuture};
 use gateway_core::account::{
     AccountFeedbackStats, AccountWeight, CredentialState, FastMode, OpaqueProviderData,
-    OpenAiRequestCountry, ProviderAccountId, ProviderAccountStore as _, QuotaAccessChange,
-    QuotaAccessState, QuotaEvidence, QuotaObservation, QuotaState,
+    ProviderAccountId, ProviderAccountStore as _, QuotaAccessChange, QuotaAccessState,
+    QuotaEvidence, QuotaObservation, QuotaState,
 };
 use gateway_core::engine::continuation::{
     ContinuationBinding, NativeContinuationPin, PreviousResponseId,
@@ -75,6 +75,7 @@ use gateway_core::routing::{
     ProviderKind, ProviderModel, PublicModelId, RoutingContext, RuntimeAccount,
     RuntimeAccountDirectory, RuntimeSnapshot, UpstreamModelId,
 };
+use gateway_core::settings::OpenAiRequestCountry;
 use gateway_core::settings::SettingsValues;
 use gateway_core::upstream::UpstreamSendState;
 use provider_openai::config::DEFAULT_STREAM_MAX_RETRIES;
@@ -1797,7 +1798,10 @@ fn context_with_request_settings(
             ClientApiKeyId::new("key_openai_contract").expect("client key id"),
         )
         .with_request_location(location)
-        .with_openai_request_country(country)
+        .with_openai_request_settings(gateway_core::settings::OpenAiRequestSettings {
+            request_country: country,
+            ..Default::default()
+        })
         .with_request_profile(profile),
         NonZeroU32::new(1).expect("attempt"),
         SystemTime::now() + Duration::from_secs(30),
@@ -6301,6 +6305,103 @@ async fn opaque_provider_options_do_not_change_openai_account_selection() {
 
     assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
     assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+}
+
+#[tokio::test]
+async fn runtime_routing_headers_override_request_identity_and_clear_when_unset() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/responses"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    let provider = provider_with_base_url(&store, server.uri());
+    let selection = OpaqueProviderData::new(
+        json!({
+            "client":"cli", "platform":"linux", "versionMode":"fixed", "codexVersion":"1.0.0"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+    let profile = provider.resolve_request_profile(&selection).unwrap();
+    let mut stale_profile = profile.expose_to_provider().clone();
+    stale_profile.insert("residency".into(), json!("stale-region"));
+    for (index, profile) in [None, Some(OpaqueProviderData::new(stale_profile))]
+        .into_iter()
+        .enumerate()
+    {
+        let settings = gateway_core::settings::OpenAiRequestSettings {
+            residency: (index == 0).then(|| "us".to_owned()),
+            account_routing_override: (index == 0).then(|| "us_cr".to_owned()),
+            ..Default::default()
+        };
+        let context = AttemptContext::new(
+            RequestAttemptContext::new(
+                ModelRequestId::new(format!("req_routing_{index}")).unwrap(),
+                ClientApiKeyId::new("key_routing").unwrap(),
+            )
+            .with_openai_request_settings(settings)
+            .with_request_profile(profile),
+            NonZeroU32::new(1).unwrap(),
+            SystemTime::now() + Duration::from_secs(30),
+            account_policy(),
+            AccountAttemptContext::new(
+                BTreeSet::new(),
+                Some(ProviderAccountId::new("acct_provider_contract").unwrap()),
+                None,
+            )
+            .with_account_scope(contract_account_scope()),
+            None,
+            CancellationToken::new(),
+        );
+        let payload = ProtocolPayload::json_object(
+            "openai",
+            json!({"model":"gpt-5.4","input":"hello"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .unwrap()
+        .with_context(Map::from_iter([("use_websocket".into(), json!(false))]));
+        let mut stream = Arc::clone(&provider)
+            .execute(
+                planned_request(
+                    "openai",
+                    Operation::Generate(GenerateRequest::from_protocol_payload(payload)),
+                ),
+                context,
+            )
+            .await
+            .unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+    }
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests[0].headers["x-openai-internal-codex-residency"],
+        "us"
+    );
+    assert_eq!(
+        requests[0].headers["x-openai-account-routing-override"],
+        "us_cr"
+    );
+    assert!(
+        !requests[1]
+            .headers
+            .contains_key("x-openai-internal-codex-residency")
+    );
+    assert!(
+        !requests[1]
+            .headers
+            .contains_key("x-openai-account-routing-override")
+    );
 }
 
 const KEY_INSTALLATION_SEED: &str = "3b11bc82-c666-417d-b9ff-2a34fd040385";

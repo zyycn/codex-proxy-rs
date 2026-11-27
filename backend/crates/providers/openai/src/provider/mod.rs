@@ -304,22 +304,25 @@ impl CodexProvider {
             .peer_route()
             .filter(|_| self.selector.is_peer(account))
             .cloned();
-        let Some(profile) = context.request_profile() else {
-            return Ok(client);
-        };
-        let profile = serde_json::from_value(Value::Object(profile.expose_to_provider().clone()))
+        let profile = match context.request_profile() {
+            None => self.client.profile_state().snapshot(),
+            Some(profile) => serde_json::from_value::<crate::profile::CodexWireProfile>(
+                Value::Object(profile.expose_to_provider().clone()),
+            )
             .map_err(|error: serde_json::Error| {
-            let diagnostic = ProviderDiagnostic::new(format!(
-                "OpenAI request profile decoding failed: {:?}, line={}, column={}",
-                error.classify(),
-                error.line(),
-                error.column(),
-            ))
-            .with_classification("prepare", "request_profile_decode_failed");
-            provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
-                .with_diagnostic(diagnostic)
-        })?;
-        Ok(client.with_request_profile(profile))
+                let diagnostic = ProviderDiagnostic::new(format!(
+                    "OpenAI request profile decoding failed: {:?}, line={}, column={}",
+                    error.classify(),
+                    error.line(),
+                    error.column(),
+                ))
+                .with_classification("prepare", "request_profile_decode_failed");
+                provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent)
+                    .with_diagnostic(diagnostic)
+            })?,
+        };
+        Ok(client
+            .with_request_profile(profile.with_request_settings(context.openai_request_settings())))
     }
 
     // Provider 构造集中装配独立领域服务和透明传输依赖，拆分参数会模糊所有权
@@ -419,7 +422,9 @@ impl Provider for CodexProvider {
         settings: &gateway_core::settings::SettingsValues,
     ) -> Option<UpstreamModelId> {
         guardian::review_model(
-            settings.openai_oauth_guardian_review_model(),
+            settings
+                .openai_request_settings()
+                .oauth_guardian_review_model,
             model,
             operation,
             previous,
@@ -1142,7 +1147,7 @@ impl CodexProvider {
             apply_codex_request_country(
                 upstream_request.body_mut(),
                 location,
-                context.openai_request_country(),
+                &context.openai_request_settings().request_country,
             );
         }
         align_structured_location_fields(upstream_request.body_mut(), location);

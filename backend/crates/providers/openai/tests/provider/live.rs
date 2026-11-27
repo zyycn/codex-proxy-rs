@@ -754,7 +754,14 @@ async fn verify_live_call_identity() {
                     gateway_core::engine::ModelRequestId::new("req_live_frozen_profile").unwrap(),
                     ClientApiKeyId::new("key_openai_contract").unwrap(),
                 )
-                .with_request_profile(Some(opaque_profile(&profile))),
+                .with_request_profile(Some(opaque_profile(&profile)))
+                .with_openai_request_settings(
+                    gateway_core::settings::OpenAiRequestSettings {
+                        residency: Some("us".to_owned()),
+                        account_routing_override: None,
+                        ..Default::default()
+                    },
+                ),
                 std::num::NonZeroU32::new(1).unwrap(),
                 std::time::SystemTime::now() + std::time::Duration::from_secs(30),
                 crate::support::account_policy(),

@@ -329,10 +329,8 @@
     "day": "天",
     "location": {
       "requestCountry": "請求國家",
-      "requestCountryDescription": "設定請求如何傳送國家代碼",
       "requestCountryScope": "僅用於 OAuth 帳號",
       "countryHelp": "請求國家模式說明",
-      "countryMode": "策略",
       "countryModes": {
         "default": "空值",
         "passthrough": "透傳",
@@ -780,6 +778,17 @@
     "resetPriority": {
       "description": "按所選視窗的重置時間和係數排序",
       "windowHelp": "係數決定各視窗的相對占比，0 表示忽略該視窗，全部為 0 時按最近的有效重置時間排序"
+    },
+    "requestOptions": {
+      "title": "請求設置",
+      "residency": "資料駐留",
+      "residencyPlaceholder": "us",
+      "accountRoutingOverride": "帳號路由",
+      "accountRoutingPlaceholder": "us / us_cr",
+      "residencyHelp": "數據駐留說明",
+      "accountRoutingOverrideHelp": "賬號路由說明",
+      "headerHelp": "按填寫值發送請求頭，留空則不發送",
+      "description": "配置發往上游的請求參數"
     }
   }
 }

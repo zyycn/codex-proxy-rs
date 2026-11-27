@@ -6,7 +6,8 @@ pub use error_protection::*;
 mod fast_mode;
 pub use fast_mode::FastMode;
 mod location;
-pub use location::{InvalidRequestLocation, OpenAiRequestCountry, RequestLocation};
+pub(crate) use location::validate_country;
+pub use location::{InvalidRequestLocation, RequestLocation};
 mod model;
 mod model_access;
 pub use model_access::{

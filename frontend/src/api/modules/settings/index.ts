@@ -53,10 +53,14 @@ export interface RuntimeSettings {
   providerRequestProfiles: ProviderRequestProfiles
 
   codexPrivacyPolicy: CodexPrivacyPolicy
-  openaiRequestCountry: OpenAiRequestCountry
+  openaiRequestSettings: {
+    requestCountry: OpenAiRequestCountry
+    oauthGuardianReviewModel: boolean
+    residency: string | null
+    accountRoutingOverride: string | null
+  }
   requestLocationEnabled: boolean
   requestLocation: RequestLocation
-  openaiOauthGuardianReviewModel: boolean
   modelMappings: Record<string, string>
   refreshMarginSeconds: number
   refreshConcurrency: number

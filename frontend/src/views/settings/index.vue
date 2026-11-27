@@ -18,9 +18,9 @@ import ConcurrencyPolicyCard from './components/ConcurrencyPolicyCard.vue'
 import AccountErrorProtectionCard from './components/error-protection/index.vue'
 import GuardianReviewCard from './components/GuardianReviewCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
+import OpenAiRequestCard from './components/OpenAiRequestCard.vue'
 import PricingSection from './components/pricing/index.vue'
 import PrivacyPolicyCard from './components/privacy/index.vue'
-import RequestCountryCard from './components/RequestCountryCard.vue'
 import RequestHistoryCard from './components/RequestHistoryCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
 import RequestProfileCard from './components/RequestProfileCard.vue'
@@ -287,9 +287,14 @@ watch(() => !loading.value && route.hash === '#reset-credits', async (ready) => 
                   :detecting-location="detectingLocation"
                   @detect-location="detectLocation"
                 />
-                <RequestCountryCard v-model="form.openaiRequestCountry" :disabled="disabled" />
+                <OpenAiRequestCard
+                  v-model:request-country="form.openaiRequestSettings.requestCountry"
+                  v-model:residency="form.openaiRequestSettings.residency"
+                  v-model:account-routing-override="form.openaiRequestSettings.accountRoutingOverride"
+                  :disabled="disabled"
+                />
                 <GuardianReviewCard
-                  v-model="form.openaiOauthGuardianReviewModel"
+                  v-model="form.openaiRequestSettings.oauthGuardianReviewModel"
                   v-model:reserved-concurrency="openaiGuardianReservedConcurrencyValue"
                   :disabled="disabled"
                 />

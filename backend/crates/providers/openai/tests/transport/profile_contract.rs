@@ -142,7 +142,7 @@ fn deployment_routing_survives_artifact_updates_and_profile_selection() {
 }
 
 #[tokio::test]
-async fn model_transports_apply_deployment_routing_with_or_without_client_headers() {
+async fn model_transports_apply_routing_settings_with_or_without_client_headers() {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use gateway_core::operation::{GenerateRequest, ProtocolPayload};
 
@@ -153,15 +153,15 @@ async fn model_transports_apply_deployment_routing_with_or_without_client_header
     for (document, expected) in [
         (r#"{}"#, [None, None]),
         (
-            r#"{"residency":null,"account_routing_override":null}"#,
+            r#"{"residency":null,"accountRoutingOverride":null}"#,
             [None, None],
         ),
         (
-            r#"{"residency":"us","account_routing_override":"us"}"#,
+            r#"{"residency":"us","accountRoutingOverride":"us"}"#,
             [Some("us"), Some("us")],
         ),
         (
-            r#"{"account_routing_override":"us_cr"}"#,
+            r#"{"accountRoutingOverride":"us_cr"}"#,
             [None, Some("us_cr")],
         ),
         (
@@ -169,11 +169,11 @@ async fn model_transports_apply_deployment_routing_with_or_without_client_header
             [Some("custom-region"), None],
         ),
         (
-            r#"{"residency":"","account_routing_override":"custom-route"}"#,
+            r#"{"residency":"","accountRoutingOverride":"custom-route"}"#,
             [Some(""), Some("custom-route")],
         ),
         (
-            r#"{"account_routing_override":"NO_CONSTRAINT"}"#,
+            r#"{"accountRoutingOverride":"NO_CONSTRAINT"}"#,
             [None, Some("NO_CONSTRAINT")],
         ),
     ] {
@@ -224,8 +224,15 @@ async fn model_transports_apply_deployment_routing_with_or_without_client_header
                     }),
                 )
             };
-            let config: provider_openai::config::OpenAiConfig =
-                serde_json::from_str(document).unwrap();
+            let mut settings =
+                serde_json::to_value(gateway_core::settings::OpenAiRequestSettings::default())
+                    .unwrap();
+            settings
+                .as_object_mut()
+                .unwrap()
+                .extend(serde_json::from_str::<serde_json::Map<String, Value>>(document).unwrap());
+            let config: gateway_core::settings::OpenAiRequestSettings =
+                serde_json::from_value(settings).unwrap();
             let profile = CodexWireProfileState::new(CodexWireProfile {
                 residency: config.residency,
                 account_routing_override: config.account_routing_override,

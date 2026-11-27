@@ -34,8 +34,12 @@ export function useSettingsForm() {
     quotaResetWindowWeights: undefined as ResetWindowWeights | undefined,
     providerRequestProfiles: {} as ProviderRequestProfiles,
     codexPrivacyPolicy: { enabled: false, onError: 'skip_rule', rules: [] } as CodexPrivacyPolicy,
-    openaiOauthGuardianReviewModel: true,
-    openaiRequestCountry: { mode: 'follow_location' } as OpenAiRequestCountry,
+    openaiRequestSettings: {
+      requestCountry: { mode: 'follow_location' } as OpenAiRequestCountry,
+      oauthGuardianReviewModel: true,
+      residency: '',
+      accountRoutingOverride: '',
+    },
     requestLocationEnabled: false,
     requestLocation: {
       country: '',
@@ -135,8 +139,11 @@ export function useSettingsForm() {
   function applySettings(data: Awaited<ReturnType<typeof getSettings>>) {
     form.codexPrivacyPolicy = cloneDeep(data.codexPrivacyPolicy)
     form.configRevision = data.configRevision
-    form.openaiOauthGuardianReviewModel = data.openaiOauthGuardianReviewModel
-    form.openaiRequestCountry = data.openaiRequestCountry
+    form.openaiRequestSettings = {
+      ...cloneDeep(data.openaiRequestSettings),
+      residency: data.openaiRequestSettings.residency ?? '',
+      accountRoutingOverride: data.openaiRequestSettings.accountRoutingOverride ?? '',
+    }
     form.requestLocationEnabled = data.requestLocationEnabled
     form.requestLocation = { ...data.requestLocation }
     form.refreshMarginSeconds = data.refreshMarginSeconds
@@ -270,15 +277,20 @@ export function useSettingsForm() {
           form.providerRequestProfiles,
         ),
         codexPrivacyPolicy: cloneDeep(form.codexPrivacyPolicy),
-        openaiRequestCountry: form.openaiRequestCountry.mode === 'custom'
-          ? {
-              mode: 'custom',
-              country: form.openaiRequestCountry.country.trim().toUpperCase(),
-            }
-          : { mode: form.openaiRequestCountry.mode },
+        openaiRequestSettings: {
+          oauthGuardianReviewModel: form.openaiRequestSettings.oauthGuardianReviewModel,
+          requestCountry: form.openaiRequestSettings.requestCountry.mode === 'custom'
+            ? {
+                mode: 'custom',
+                country: form.openaiRequestSettings.requestCountry.country.trim().toUpperCase(),
+              }
+            : { mode: form.openaiRequestSettings.requestCountry.mode },
+
+          residency: form.openaiRequestSettings.residency || null,
+          accountRoutingOverride: form.openaiRequestSettings.accountRoutingOverride || null,
+        },
         requestLocationEnabled: form.requestLocationEnabled,
         requestLocation,
-        openaiOauthGuardianReviewModel: form.openaiOauthGuardianReviewModel,
         modelMappings: Object.fromEntries(mappings.value.map(row => [
           row.requestedModel.trim(),
           row.upstreamModel.trim(),

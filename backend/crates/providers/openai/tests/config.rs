@@ -5,39 +5,6 @@ use std::{path::Path, time::Duration};
 use provider_openai::config::{MAX_STREAM_MAX_RETRIES, OpenAiConfig};
 
 #[test]
-fn openai_config_preserves_optional_routing_header_values() {
-    for (document, expected) in [
-        (r#"{}"#, (None, None)),
-        (
-            r#"{"residency":null,"account_routing_override":null}"#,
-            (None, None),
-        ),
-        (
-            r#"{"residency":"us","account_routing_override":"us"}"#,
-            (Some("us"), Some("us")),
-        ),
-        (
-            r#"{"residency":"custom-region","account_routing_override":"custom-route"}"#,
-            (Some("custom-region"), Some("custom-route")),
-        ),
-        (
-            r#"{"residency":"","account_routing_override":"NO_CONSTRAINT"}"#,
-            (Some(""), Some("NO_CONSTRAINT")),
-        ),
-    ] {
-        let config: OpenAiConfig = serde_json::from_str(document).unwrap();
-        assert_eq!(
-            (
-                config.residency.as_deref(),
-                config.account_routing_override.as_deref()
-            ),
-            expected,
-            "{document}",
-        );
-    }
-}
-
-#[test]
 fn openai_config_derives_identity_secret_from_runtime_data_dir() {
     let mut config = valid_config();
     config

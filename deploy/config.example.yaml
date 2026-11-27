@@ -79,12 +79,7 @@ api:
   request_timeout_seconds: null
   request_id_header: 'x-request-id'
 
-openai:
-  # 以下两项原样发送配置值；省略或设为 null 时删除对应请求头
-  # 数据驻留参考值：us
-  residency: us
-  # 账号路由参考值：us、us_cr
-  account_routing_override: null
+# openai:
   # Responses 上游 WS 池配置，可单独覆盖下列默认值
   # ws_pool:
   #   enabled: true

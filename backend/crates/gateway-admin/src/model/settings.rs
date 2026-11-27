@@ -45,8 +45,7 @@ pub use gateway_core::account::RotationStrategy;
 /// 运行设置的共同值；版本、Provider 画像更新和数据库秘密由外层类型拥有
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeSettingsValues {
-    pub openai_oauth_guardian_review_model: bool,
-    pub openai_request_country: gateway_core::account::OpenAiRequestCountry,
+    pub openai_request_settings: gateway_core::settings::OpenAiRequestSettings,
     pub codex_privacy_policy: gateway_core::settings::privacy::CodexPrivacyPolicy,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -201,9 +200,7 @@ impl RuntimeSettingsValues {
         {
             return Err("reset_credit_max_weekly_remaining_percent");
         }
-        self.openai_request_country
-            .validate()
-            .map_err(|_| "openai_request_country")?;
+        self.openai_request_settings.validate()?;
         self.request_location
             .validate()
             .map_err(|_| "request_location")?;

@@ -329,10 +329,8 @@
     "day": "d",
     "location": {
       "requestCountry": "Request country",
-      "requestCountryDescription": "Choose how requests send the country code",
       "requestCountryScope": "Applies only to OAuth accounts",
       "countryHelp": "Request country mode help",
-      "countryMode": "Policy",
       "countryModes": {
         "default": "Null",
         "passthrough": "Pass through",
@@ -780,6 +778,17 @@
     "resetPriority": {
       "description": "Rank by reset times and weights of the selected windows",
       "windowHelp": "Weights control each window's relative influence; 0 ignores a window, and all zeros use the earliest valid reset time"
+    },
+    "requestOptions": {
+      "title": "Request settings",
+      "residency": "Data residency",
+      "residencyPlaceholder": "us",
+      "accountRoutingOverride": "Account routing",
+      "accountRoutingPlaceholder": "us / us_cr",
+      "residencyHelp": "About residency",
+      "accountRoutingOverrideHelp": "About account routing",
+      "headerHelp": "Sends the header value as entered, or omits the header when left blank",
+      "description": "Configure parameters sent to the upstream provider"
     }
   }
 }

@@ -22,8 +22,12 @@ fn reviewer_operation(model: &str, source: &str, subagent: &str, input: Value) -
 }
 
 fn settings(enabled: bool) -> SettingsValues {
-    SettingsValues::new(2, "smart", Default::default(), None, None)
-        .with_openai_oauth_guardian_review_model(enabled)
+    SettingsValues::new(2, "smart", Default::default(), None, None).with_openai_request_settings(
+        gateway_core::settings::OpenAiRequestSettings {
+            oauth_guardian_review_model: enabled,
+            ..Default::default()
+        },
+    )
 }
 
 fn selected_session(model: &str) -> ProviderSessionState {

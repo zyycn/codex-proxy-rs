@@ -78,14 +78,16 @@ async fn explicit_service_dispatch_composes_once_and_preserves_native_transactio
 
     let mut command = ReplaceRuntimeSettings::from(original);
     command.values.refresh_margin_seconds = 999;
-    command.values.openai_oauth_guardian_review_model = false;
-    command.values.openai_request_country = gateway_core::account::OpenAiRequestCountry::Custom {
-        country: "CA".into(),
-    };
-    for field in [
-        "openai_oauth_guardian_review_model",
-        "openai_request_country",
-    ] {
+    command
+        .values
+        .openai_request_settings
+        .oauth_guardian_review_model = false;
+    command.values.openai_request_settings.request_country =
+        gateway_core::settings::OpenAiRequestCountry::Custom {
+            country: "CA".into(),
+        };
+    {
+        let field = "openai_request_settings";
         let mut args = serde_json::to_value((mutation(), &command)).unwrap();
         args[1].as_object_mut().unwrap().remove(field);
         assert!(
@@ -117,10 +119,15 @@ async fn explicit_service_dispatch_composes_once_and_preserves_native_transactio
         .await
         .unwrap();
     assert_eq!(current.values.refresh_margin_seconds, 1234);
-    assert!(!current.values.openai_oauth_guardian_review_model);
+    assert!(
+        !current
+            .values
+            .openai_request_settings
+            .oauth_guardian_review_model
+    );
     assert_eq!(
-        current.values.openai_request_country,
-        command.values.openai_request_country
+        current.values.openai_request_settings.request_country,
+        command.values.openai_request_settings.request_country
     );
     assert_eq!(
         core.snapshots()
