@@ -355,7 +355,7 @@ Provider 可为模型提供来源账号集合；Core 在公开目录查询时结
 
 ### 3.4 前端模块职责
 
-`frontend/src` 持有应用状态和业务交互，基础组件与主题算法由 `@codex-proxy/ui` 提供，组件目录与合同见 [UI 组件架构](../modules/ui/playground/guide/architecture.md)：
+`frontend/src` 持有应用状态和业务交互，基础组件与主题算法由 `@codex-proxy/ui` 提供，组件目录与合同见 [UI 组件架构](https://github.com/zyycn/codex-proxy-ui/blob/main/playground/guide/architecture.md)：
 
 | 入口 | 职责 |
 | --- | --- |
@@ -696,10 +696,8 @@ OpenAI 模型目录用于发现与原生 Responses 账号资格筛选。
   OpenAI Provider 按 Key 种子、Key ID 与账号 ID 派生出站安装身份；未配置种子时使用账号身份，不改写账号凭据。
   普通连接按生效身份匹配，精确续写固定原连接与身份；配置合同见 [Key 客户端身份](api.md#key-客户端身份)。
   OpenAI 账号目录发现和定时预热每轮读取并解析一次当前全局画像，查询版本和请求头使用同一快照，不接受 Key 覆盖。
-  其余后台账号和 Desktop 专属操作使用独立官方 Desktop 画像。
   管理端连接测试从本次发布快照携带全局画像，经 Provider 解析后冻结为探测身份。
-  xAI 以内置画像为版本检查基线，在进程内更新 Grok CLI 发布资料；模型请求使用已保存的用户选择，
-  OAuth、后台目录和额度查询使用内置官方画像
+  xAI 以内置版本为基线，在进程内更新 Grok CLI 发布资料。各平台后台操作的身份来源见[凭据、额度与主动重置](#凭据额度与主动重置)
 
 xAI 的 Chat 路径将 custom 工具包装为 function 输入，并在直接返回 Chat 时还原；原生 Responses 不做该转换。
 原生续接的账号归属仍由既有会话 owner 管理，同账号重放保留完整上游输出；跨账号重放只清理无法携带的账号绑定状态。

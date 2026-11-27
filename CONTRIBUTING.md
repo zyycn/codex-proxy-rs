@@ -144,8 +144,8 @@ PR 不接受以下协作规则文件的新增、修改、删除或重命名：
 | [插件使用](docs/plugins.md) | 如何安装、授权、配置和使用插件 | 管理员操作与影响，不展开 SDK 调用或宿主事务实现 |
 | [插件 SDK](backend/crates/gateway-plugin/sdk/README.md) / [CLI](backend/apps/plugin-cli/README.md) | 如何编写和打包插件 | 作者合同、权限边界、示例与打包验证 |
 | [数据库迁移](backend/migrations/README.md) | 如何维护 schema 和准备测试库 | 冻结规则、升级约束和测试环境，不罗列迁移历史 |
-| [共用组件](modules/ui/README.md)及其组件参考 | 如何安装、使用和开发独立 UI 库 | 组件公开 API、主题能力与库内开发；宿主页面约定归管理端主题，跨仓库联调归开发文档 |
-| [官方插件示例](modules/plugins/README.md)及其示例说明 | 如何构建、使用和维护示例插件 | 示例自身的功能、配置与验证；通用协议归 SDK，宿主安装操作归插件使用文档 |
+| [共用组件](https://github.com/zyycn/codex-proxy-ui/blob/main/README.md)及其组件参考 | 如何安装、使用和开发独立 UI 库 | 组件公开 API、主题能力与库内开发；宿主页面约定归管理端主题，跨仓库联调归开发文档 |
+| [官方插件示例](https://github.com/zyycn/codex-proxy-plugins/blob/main/README.md)及其示例说明 | 如何构建、使用和维护示例插件 | 示例自身的功能、配置与验证；通用协议归 SDK，宿主安装操作归插件使用文档 |
 | [AGENTS.md](AGENTS.md) 与[项目技能](.agents/skills/cpr-dev-guide/SKILL.md) | AI 如何选择并执行任务流程 | 任务匹配、执行步骤和规范入口，不另建模块合同、版本表或协作标准 |
 | 本文 | 如何协作、审查和交付 | 流程、判断标准与验证要求，任务入口由 [开发技能](.agents/skills/cpr-dev-guide/SKILL.md) 串联 |
 

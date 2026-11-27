@@ -414,12 +414,12 @@ PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`
 
 | 设置 | 入口与边界 |
 | --- | --- |
-| 上游客户端身份 | “系统设置 → 上游配置 → 客户端身份”；Key 可按 Provider 覆盖，OpenAI Key 可独立配置[安装身份种子](../docs/api.md#key-客户端身份) |
-| 并发与排队 | “系统设置 → 运行设置”；Key 与账号分别设置排队容量和超时，可选择账号排队失败后换号，见[排队规则](../docs/api.md#并发与排队) |
-| 账号错误保护 | “系统设置 → 运行设置 → 错误保护”；默认关闭，按[自定义规则](../docs/api.md#账号错误保护)暂停账号调度 |
-| 全局请求位置 | “系统设置 → 上游配置 → 请求位置覆盖”，默认关闭 |
-| Codex OAuth 请求国家 | “系统设置 → 上游配置 → 请求国家”，默认跟随位置，也可选择“空值”“透传”或“自定义” |
-| OpenAI OAuth 同步审核模型 | “系统设置 → 上游配置 → 模型映射”中的“专用审核模型”默认开启，关闭后沿用客户端模型。[适用条件](../docs/api.md#正文兼容) |
+| 上游客户端身份 | 在“系统设置 → 平台设置”选择平台后编辑“客户端身份”。Key 可按 Provider 覆盖，OpenAI Key 可独立配置[安装身份种子](../docs/api.md#key-客户端身份) |
+| 并发与排队 | “系统设置 → 通用设置 → 并发与排队”分别配置 Key 与账号的排队容量和超时。账号排队失败后的处理在同页“重试与换号”中设置，见[排队规则](../docs/api.md#并发与排队) |
+| 账号错误保护 | “系统设置 → 通用设置 → 错误保护”默认关闭，按[自定义规则](../docs/api.md#账号错误保护)暂停账号调度 |
+| 全局请求位置 | “系统设置 → 平台设置 → OpenAI → 请求位置覆盖”，默认关闭 |
+| Codex OAuth 请求国家 | “系统设置 → 平台设置 → OpenAI → 请求国家”，默认跟随位置，也可选择“空值”“透传”或“自定义” |
+| OpenAI OAuth 同步审核模型 | “系统设置 → 平台设置 → OpenAI → 自动审批”中的“专用审核模型”默认开启，关闭后沿用客户端模型。[适用条件](../docs/api.md#正文兼容) |
 | 代理位置 | “代理管理”；优先于全局位置，全局关闭时仍可独立生效 |
 
 位置覆盖只影响 OpenAI 请求中受支持的位置与时区信息，不改变上下文日期、真实出口 IP、epoch 时间戳或系统时区。
@@ -428,7 +428,7 @@ PostgreSQL/Redis 启动密码。日常校验使用 `config --quiet`
 两项均为可选字符串，配置值原样发送并覆盖客户端同名头，支持自定义地域或路由值。
 省略或设为 `null` 时删除对应请求头。
 修改后重启应用生效。身份与位置字段见 [运行设置 API](../docs/api.md#8-运行设置)
-后台账号操作使用 Provider 自己的官方画像；发布资料刷新不改写用户选择或 `config.yaml`
+OAuth 续期和额度刷新等后台操作使用对应平台的全局客户端身份。发布资料刷新不改写用户选择或 `config.yaml`，见 [Provider 客户端身份](../docs/api.md#provider-客户端身份)
 
 ### CPR 互联
 
@@ -517,7 +517,7 @@ Compose 默认只绑定 `127.0.0.1`。从其他设备访问时，在应用前配
 HTTP 传输不加密，公网部署仍建议使用 HTTPS。
 会话 Cookie 合同见 [管理接口鉴权](../docs/api.md#管理接口)
 
-反向代理应保留客户端发送的 `Authorization`、`x-api-key`、`anthropic-version` 和 `anthropic-beta` 请求头，
+反向代理应保留客户端发送的 `Authorization`、`x-api-key`、`x-goog-api-key`、`anthropic-version` 和 `anthropic-beta` 请求头，
 支持 `/v1/responses` 的 WebSocket Upgrade，并关闭 SSE 响应缓冲。读取超时应覆盖长时间生成任务。
 客户端连接网关的部署地址，不要使用前端开发服务的 `5173/dev/v1`。
 当前应用只支持单副本，不能通过复制容器扩容
@@ -607,7 +607,7 @@ example.com {
 
 Caddy 与应用同在容器网络时，将回源地址改为 `codex-proxy-rs:8080`。
 合并到已有站点时，将子路径处理放在兜底路由之前，保留浏览器的 `Origin` 和鉴权头。
-管理入口为 `/proxy/`，模型客户端使用 `/proxy/v1`。
+管理入口为 `/proxy/`。在[客户端配置](#客户端配置)表中，将 Base URL 的 `http://127.0.0.1:8080` 替换为 `https://example.com/proxy`
 
 系统在线更新会替换前端资源。子路径部署在 `config.yaml` 的 `host` 下配置
 `system_update.update_repository: null`，通过重新构建镜像升级。
@@ -621,8 +621,9 @@ Caddy 与应用同在容器网络时，将回源地址改为 `codex-proxy-rs:808
 | --- | --- |
 | OpenAI Responses `/responses`、Chat Completions `/chat/completions` | `http://127.0.0.1:8080/v1` |
 | Anthropic Messages `/v1/messages` | `http://127.0.0.1:8080` |
+| Gemini GenAI `/v1beta/models/{model}:generateContent` | `http://127.0.0.1:8080` |
 
-直接发送 HTTP 请求可参考 [Messages 示例](../docs/api.md#messages-请求)
+直接发送 HTTP 请求时，参见 [Messages 示例](../docs/api.md#messages-请求)和 [GenAI 接口与鉴权](../docs/api.md#antigravity-客户端原生生成)
 
 使用 Codex 时，打开「使用密钥」，按操作系统复制 `config.toml`。
 已有配置先备份，合并后完全退出并重启 Codex。代理密钥由 Provider 配置提供，
@@ -902,7 +903,7 @@ OAuth 恢复开关为 `host.logging.oauth_recovery`，默认关闭，与普通�
 
 ## 密码语义
 
-- **管理员**：`admin.default_password` 只在创建首个管理员时使用。已有管理员在「系统设置 → 安全与访问 → 管理员密码」验证当前密码后修改，所有管理员会话须重新登录
+- **管理员**：`admin.default_password` 只在创建首个管理员时使用。已有管理员在「系统设置 → 通用设置 → 管理员密码」验证当前密码后修改，所有管理员会话须重新登录
 - **PostgreSQL**：镜像只在空数据目录初始化时设置 `database.password`。轮换须先修改数据库用户密码，再同步更新 `config.yaml`，否则应用无法连接
 - **Redis**：容器创建时读取 `redis.password`。在维护窗口更新配置并重新创建 Redis 和应用容器，保留数据目录
 

@@ -12,7 +12,7 @@
 
 ## 环境与依赖
 
-使用 Node.js 26.13.1、PostgreSQL、Redis 和各前端 `packageManager` 指定的 pnpm。宿主 CI 与 Docker 读取 `frontend/package.json`。
+使用 PostgreSQL 16 或更高版本、Redis 和各前端 `packageManager` 指定的 pnpm。Node.js 版本与 [Dockerfile](../deploy/Dockerfile) 的 `frontend-builder` 一致，CI 从该镜像声明读取版本。
 在仓库根目录运行 Cargo 时，用 `+版本号` 选择 `backend/rust-toolchain.toml` 指定的[工具链](architecture.md#验证命令)
 
 ```bash
@@ -54,7 +54,7 @@ pnpm --dir frontend dev
 
 ## 源码入口
 
-[后端 Workspace 边界](architecture.md#3-workspace-边界) · [前端模块职责](architecture.md#34-前端模块职责) · [共享 UI 组件架构](../modules/ui/playground/guide/architecture.md)
+[后端 Workspace 边界](architecture.md#3-workspace-边界) · [前端模块职责](architecture.md#34-前端模块职责) · [共享 UI 组件架构](https://github.com/zyycn/codex-proxy-ui/blob/main/playground/guide/architecture.md)
 
 Chat Completions 到 Responses、Messages、GenAI 的纯协议转换位于 `backend/crates/gateway-protocol/src/chat_completions/`，
 Chat HTTP 入口位于 `backend/crates/gateway-api/src/data_plane/chat_completions/`，各 Provider 的 `provider/chat/` 或 `provider/chat.rs` 负责调用获准的转换。
@@ -139,7 +139,7 @@ pnpm --dir modules/plugins/examples/workbench/frontend build:source
 )
 ```
 
-独立插件的构建、打包和安装后功能验证见 [Workbench 示例](../modules/plugins/examples/workbench/README.md)。
+独立插件的构建、打包和安装后功能验证见 [Workbench 示例](https://github.com/zyycn/codex-proxy-plugins/blob/main/examples/workbench/README.md)。
 宿主插件集成测试的数据库与 Redis 配置见[本地测试库](../backend/migrations/README.md#本地测试库)
 
 ## 编辑与提交

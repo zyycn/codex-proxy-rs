@@ -235,7 +235,7 @@ WebSocket message 和 frame 不设置网关私有长度上限；请求字段与�
 | `GET` | `/v1/usage` | 查询当前 Client Key 的日与周额度，仅使用网关已结算的 USD 账本 |
 | `GET` | `/v1/cpr/link` | 返回当前 Key 获准公开的预算及直连账号池观测 |
 
-生成接口接受 Responses、Messages、GenAI 和 Chat。API Key 账号通过 `protocol` 选择 Responses 或 Messages 上游，仍使用 `openai` Provider；OAuth 账号使用 Responses 上游。xAI 使用原生 Responses，Antigravity 使用 GenAI
+OpenAI Provider 的 OAuth 账号使用 Responses 上游，API Key 账号通过 `protocol` 选择 Responses 或 Messages。xAI 使用 Responses，Antigravity 使用 GenAI
 
 | 入站 | Responses 上游 | Messages 上游 | GenAI 上游 |
 | --- | --- | --- | --- |
@@ -607,12 +607,11 @@ WS 握手的轮次元数据头只随首次请求转发，后续帧在正文中�
 请求头过滤不提供客户端匿名化；系统提示词、工具定义、工具结果、工作目录及其他业务 metadata
 保持原有语义，可能包含客户端环境信息。
 环境正文中的工作区路径、shell 和文件权限信息不会因位置覆盖而隐藏。
-turn metadata 的 `workspaces` 也会保留仓库绝对路径、Git 远端地址、提交及工作区变更状态；
-安装身份和账号绑定字段的处理不提供这些信息的脱敏
+turn metadata 中的 `workspaces` 可能包含仓库绝对路径、Git 远端地址、提交及工作区变更状态。这些字段的处理取决于已启用的[隐私策略](#隐私策略)
 
 Codex 客户端按本地登录方式和模型卡选择同步 Guardian 审核模型。使用默认模型卡时，
 API Key 登录通常选择 `gpt-5.6-luna`，ChatGPT 登录选择 `codex-auto-review`。
-“系统设置 → 上游配置”中的“专用审核模型”默认开启。关闭后沿用客户端模型。开启时，网关按当前请求的
+“系统设置 → 平台设置 → OpenAI → 自动审批”中的“专用审核模型”默认开启。关闭后沿用客户端模型。开启时，网关按当前请求的
 Guardian 身份识别同步审核和审核预热，优先选择允许 `codex-auto-review` 的原生 OAuth 账号。
 入站审核模型可以是任意名称。普通请求、后台分类和会话整理沿用原模型。
 缺少合格账号时，网关按客户端模型正常选路。严格会话亲和下，如果父账号不在专用模型候选中，子审核沿用客户端模型并跟随父账号。
@@ -2763,7 +2762,7 @@ Grok CLI 通用身份默认使用 `grok-shell / headless / linux / x86_64`，版
 ```
 
 配置作用于 Client Key 的 xAI 模型请求，影响 `x-grok-client-version`、`x-grok-client-identifier`、
-`x-grok-client-mode` 与 User-Agent；OAuth、后台目录和额度查询使用 Provider 内置官方画像。
+`x-grok-client-mode` 与 User-Agent。OAuth、后台目录和额度查询使用 xAI 的全局客户端身份。
 User-Agent 使用 `grok-shell/<版本> (<系统>; <架构>)`，其中 `arm64` 按官方规则展示为 `aarch64`。
 `clientIdentifier` 只控制对应请求头，不替换 User-Agent 中的 `grok-shell` 产品名。
 每个请求开始时解析并冻结身份，重试和换号沿用该身份；保存后新请求生效，密钥独立配置优先于通用设置
@@ -3365,7 +3364,8 @@ Host 关闭或任务取消会记录失败终态；状态查询会收敛无执行
 制品 `metadata` 返回 `pluginId`、`name`、`displayName`、`publisher`、可为 `null` 的 `author`、`version`、
 `description`、`license`、`sha256`、`platforms`、可为 `null` 的 `icon`、`contributes`、
 `configurationSchema`、`secretFields` 和 `stateNamespaces`。`contributes` 是以稳定 snake_case capability 为 key 的对象；每个值包含
-`id`、`version`、`stages`、`inputFormats` 和 `outputFormats`。`id` 是实例绑定引用的完整贡献项 ID，客户端必须通过
+`id`、`version`、`stages`、`inputFormats` 和 `outputFormats`。中间件还可返回 `omitBodyAt` 和 `websocketErrorCodes`，分别列出省略请求正文的阶段和订阅的原生 Responses WebSocket 下行错误码。这两个字段为空时省略，见 [SDK 清单](../backend/crates/gateway-plugin/sdk/docs/manifest.md#扩展项简写)。
+`id` 是实例绑定引用的完整贡献项 ID，客户端必须通过
 当前制品的 `contributes` 映射确定其 capability，不能解析 ID 文本推测能力
 
 #### 图标读取
