@@ -586,7 +586,7 @@ Antigravity 的 `credential/catalog` 持有与凭据版本绑定的项目与模�
 
 - `responses`、`chat_completions`、`messages`、`genai` 拥有各自协议入口，生成与计数共用 `generation` 的执行交付、取消传播和连接生命周期
 - `codex` 拥有客户端模型目录投影、Guardian、子代理与轮次身份解析，Responses 入口组合这些扩展；Responses 同时服务 OpenAI 与 xAI，不绑定某个 Provider
-- `antigravity` 识别桌面端和 CLI 的选模请求，负责菜单隐藏、显示名和排序；Core 只按执行计划与账号权限提供目录来源，GenAI 入口负责协议输出与分页
+- `antigravity` 识别桌面端和 CLI 的模型发现请求，按上游声明筛选聊天和生图模型并排序；Core 提供权限范围内的目录来源，GenAI 入口保留原生模型对象并分页
 - `openai` 聚合当前绑定 OpenAI Provider 的 Images、独立 Search 与 Live 入口，通过 Core 端口调用上游能力；账号认证和上游传输仍由 Provider 拥有
 - `headers` 拥有数据面入站业务头与响应头边界，各协议直接使用公共头处理；跨协议 HTTP 规则和重试时间解析归 `gateway-protocol/http`，OpenAI/Codex 私有响应头分类归 `gateway-protocol/openai/headers`，API 出口组合两者
 
@@ -594,7 +594,7 @@ GenAI 从 URL 解码模型和生成方法，要求候选模型在原生目录中
 
 Chat 的角色、公共字段结构与交付选项由 `gateway-protocol/chat_completions/request` 统一校验，目标转换器只补充可表达性与映射规则。选路事实只读取协议声明位置，不递归解释 schema、工具参数或扩展字段。
 
-GenAI 模型目录通过 Core 的原生操作路由判断过滤冻结账号范围；列表、详情和执行使用同一份能力事实。Antigravity 声明生成与输入计数能力，原生 GenAI 计数复用选号、画像、中间件及资源释放流程，出站调用独立的 Cloud Code `countTokens`。计数响应不产生生成用量或费用事实，失败不切换为本地估算
+GenAI 模型目录复用 `ExecutionService::client_model_catalog`，由 Antigravity 提供完整的上游模型对象，Core 处理账号权限、来源选择和别名。API 通过原生操作能力筛选可执行条目，适配 GenAI 外层协议；AGY 列表按上游聊天和生图声明筛选、排序，详情和直接调用仍使用完整的授权目录。Antigravity 声明生成与输入计数能力，原生 GenAI 计数复用选号、画像、中间件及资源释放流程，出站调用独立的 Cloud Code `countTokens`。计数响应不产生生成用量或费用事实，失败不切换为本地估算
 
 Antigravity 目录声明原生 GenAI 和 Chat 转换能力，Responses、Messages 不借用 Chat 能力进入该平台。
 `provider/chat.rs` 装配 Chat ↔ GenAI 直接转换；`transport` 负责 Cloud Code 封装、原生 wire 与调用事实，

@@ -37,6 +37,7 @@ const BODY: &str = r#"{ "contents":[{"role":"user","parts":[{"text":"Read record
 #[derive(Default)]
 struct Execution {
     client: Option<AuthenticatedClient>,
+    catalog: Option<Vec<gateway_core::routing::PublicModelDescriptor>>,
     session: Mutex<Option<Session>>,
     seen: Mutex<Option<PreparedExecutionRequest>>,
 }
@@ -60,6 +61,37 @@ impl ExecutionService for Execution {
     }
     fn public_models(&self, _: &AuthenticatedClient) -> Vec<PublicModelId> {
         vec![]
+    }
+    fn client_model_catalog<'a>(
+        &'a self,
+        client: &'a AuthenticatedClient,
+        protocol: &'a str,
+        _: &'a str,
+        _: Option<&'a axum::http::HeaderValue>,
+    ) -> BoxFuture<
+        'a,
+        Result<
+            Vec<gateway_core::routing::PublicModelDescriptor>,
+            gateway_core::routing::ProviderCatalogUnavailable,
+        >,
+    > {
+        use gateway_core::routing::{ModelPresentation, PublicModelDescriptor, PublicModelProfile};
+        assert_eq!(protocol, GENAI_PROTOCOL);
+        Box::pin(async {
+            Ok(self.catalog.clone().unwrap_or_else(|| {
+                client
+                    .snapshot()
+                    .public_models_for_scope(client.policy().account_scope())
+                    .into_iter()
+                    .map(|id| {
+                        PublicModelDescriptor::Adapted(PublicModelProfile::new(
+                            id,
+                            ModelPresentation::default(),
+                        ))
+                    })
+                    .collect()
+            }))
+        })
     }
     fn contains_public_model(&self, _: &AuthenticatedClient, _: &PublicModelId) -> bool {
         true

@@ -191,18 +191,18 @@ impl QuotaService {
                 .models
                 .iter()
                 .map(|(id, model)| {
-                    (
+                    Ok((
                         id.clone(),
                         model
-                            .quota
-                            .clone()
+                            .quota()?
                             .unwrap_or(crate::transport::account::ModelQuota {
                                 remaining_fraction: None,
                                 reset_time: None,
                             }),
-                    )
+                    ))
                 })
-                .collect(),
+                .collect::<Result<_, serde_json::Error>>()
+                .map_err(|e| error(Kind::Unavailable).with_source(e))?,
         };
         let plan = doc.plan_type();
         let quota = serde_json::to_value(&doc).map_err(|e| error(Kind::Internal).with_source(e))?;

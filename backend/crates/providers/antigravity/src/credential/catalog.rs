@@ -173,8 +173,7 @@ impl CatalogService {
         for (accounts, catalog) in self.catalogs().await? {
             super::model_groups::collect(&mut groups, &catalog, &accounts);
             if let Some(search_model) = catalog
-                .web_search_models
-                .first()
+                .web_search_model()
                 .and_then(|id| UpstreamModelId::new(id).ok())
             {
                 search_models.extend(
@@ -183,9 +182,10 @@ impl CatalogService {
                         .map(|a| (a.account_id.clone(), search_model.clone())),
                 );
             }
+            let discovery_order = catalog.discovery_order();
             for (key, model) in catalog.models {
                 let id = UpstreamModelId::new(key).map_err(|_| unsent(Kind::Protocol))?;
-                let metadata = account_metadata(&id, model, catalog.agent_model_order.as_ref());
+                let metadata = account_metadata(&id, model, discovery_order.as_ref());
                 members.entry(id).or_default().extend(
                     accounts
                         .iter()
@@ -225,6 +225,50 @@ impl CatalogService {
             });
         }
         Ok(models.into_values().collect())
+    }
+
+    pub(crate) async fn client_model_catalog(
+        &self,
+        scope: &gateway_core::account::scope::FrozenAccountScope,
+    ) -> Result<Vec<gateway_core::routing::ProviderModelDescriptor>, ProviderError> {
+        use gateway_core::{
+            operation::RawJsonPayload,
+            routing::{ProviderModelContent, ProviderModelDescriptor},
+        };
+        let mut selected = BTreeMap::new();
+        for (accounts, catalog) in self.catalogs().await? {
+            for (id, mut model) in catalog.models {
+                let Some(account) = accounts
+                    .iter()
+                    .filter(|account| scope.allows_model(&account.account_id, &id))
+                    .min_by_key(|account| &account.account_id)
+                else {
+                    continue;
+                };
+                // 同名模型选择一个完整的授权来源，不跨账号拼接字段
+                if selected
+                    .get(&id)
+                    .is_some_and(|(source, _)| source <= &account.account_id)
+                {
+                    continue;
+                }
+                model.0.remove("quotaInfo");
+                let body = serde_json::to_vec(&model).map_err(|_| unsent(Kind::Protocol))?;
+                selected.insert(id, (account.account_id.clone(), body));
+            }
+        }
+        selected
+            .into_iter()
+            .map(|(id, (_, body))| {
+                Ok(ProviderModelDescriptor {
+                    model: UpstreamModelId::new(id).map_err(|_| unsent(Kind::Protocol))?,
+                    content: ProviderModelContent::Native(
+                        RawJsonPayload::new(gateway_protocol::genai::GENAI_PROTOCOL, body.into())
+                            .map_err(|_| unsent(Kind::Protocol))?,
+                    ),
+                })
+            })
+            .collect()
     }
 
     pub(crate) async fn account_models(
@@ -282,7 +326,7 @@ impl CatalogService {
     ) -> Result<ProviderModels, ProviderAdminError> {
         // 模型目录只拥有能力事实，易变的额度由独立快照保存
         for model in catalog.models.values_mut() {
-            model.quota = None;
+            model.0.remove("quotaInfo");
         }
         let observed = AccountCatalogObservation {
             account_id: account.id().clone(),
@@ -315,10 +359,10 @@ fn account_metadata(
         Some(order) => match order.get(id.as_str()) {
             Some(&order) => AgentModelListing::Listed {
                 order,
-                display_name: if model.name.trim().is_empty() {
+                display_name: if model.name().trim().is_empty() {
                     id.as_str().to_owned()
                 } else {
-                    model.name
+                    model.name().to_owned()
                 },
             },
             None => AgentModelListing::Hidden,
@@ -326,7 +370,7 @@ fn account_metadata(
     };
     AccountModelMetadata {
         agent_listing,
-        max_output_tokens: model.max_output_tokens.filter(|n| *n > 0),
+        max_output_tokens: model.max_output_tokens(),
     }
 }
 
@@ -339,10 +383,10 @@ fn admin_models(
         .into_iter()
         .map(|(id, m)| {
             Ok(ProviderModel {
-                name: if m.name.is_empty() {
+                name: if m.name().is_empty() {
                     id.clone()
                 } else {
-                    m.name
+                    m.name().to_owned()
                 },
                 id: UpstreamModelId::new(id).map_err(|_| error(AdminKind::Invalid))?,
             })

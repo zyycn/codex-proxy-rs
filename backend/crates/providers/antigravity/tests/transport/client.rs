@@ -59,7 +59,7 @@ async fn oauth_refresh_and_native_generate_preserve_grant_profile_and_wire_paylo
         .mount(&server)
         .await;
     let catalog = client.catalog(&access_token).await.unwrap();
-    assert_eq!(catalog.models["fixture-model"].name, "Fixture Model");
+    assert_eq!(catalog.models["fixture-model"].name(), "Fixture Model");
     let body=br#"{ "contents":[{"parts":[{"functionResponse":{"name":"lookup","response":{"x":1}},"thoughtSignature":"opaque"}]}],"unknown":98765432109876543210987654,"systemInstruction":{"parts":[{"text":"You are Claude Code."}]},"system_instruction":{"parts":[{"text":"old"}]} }"#;
     let reply = r#"{ "responseId":"r","candidates":[{"content":{"parts":[{"text":"hidden","thought":true},{"text":"ok"},{"functionCall":{"name":"lookup","args":{"text":"not output"}}}]},"finishReason":"STOP"},{"index":1,"content":{"parts":[{"text":"other candidate"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2},"extra":98765432109876543210987654 }"#;
     let received_body = move |r: &wiremock::Request| {

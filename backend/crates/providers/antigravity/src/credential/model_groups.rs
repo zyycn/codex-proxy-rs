@@ -12,7 +12,11 @@ pub(super) fn collect(
     catalog: &Catalog,
     accounts: &[AccountCatalogObservation],
 ) {
-    let Some(declarations) = catalog.grouped_models.as_object() else {
+    let Some(declarations) = catalog
+        .metadata
+        .get("groupedModels")
+        .and_then(serde_json::Value::as_object)
+    else {
         return;
     };
     for (group, description) in declarations {

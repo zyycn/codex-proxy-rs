@@ -25,50 +25,74 @@ const MAX_CONTROL_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Catalog {
     pub(crate) project: String,
-    #[serde(
-        rename = "agentModelOrder",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub(crate) agent_model_order: Option<BTreeMap<String, usize>>,
-    #[serde(rename = "webSearchModelIds", default)]
-    pub(crate) web_search_models: Vec<String>,
     pub(crate) models: BTreeMap<String, Model>,
-    #[serde(rename = "groupedModels", default)]
-    pub(crate) grouped_models: serde_json::Value,
+    #[serde(flatten)]
+    pub(crate) metadata: serde_json::Map<String, serde_json::Value>,
 }
 
-#[derive(Deserialize)]
-struct AgentModelSort {
-    #[serde(default)]
-    groups: Vec<AgentModelSortGroup>,
-}
-
-#[derive(Deserialize)]
-struct AgentModelSortGroup {
-    #[serde(rename = "modelIds", default)]
-    model_ids: Vec<String>,
-}
-
-fn agent_model_order(sorts: Vec<AgentModelSort>) -> BTreeMap<String, usize> {
-    let mut order = BTreeMap::new();
-    for group in sorts.into_iter().flat_map(|sort| sort.groups) {
-        for id in group.model_ids {
+impl Catalog {
+    pub(crate) fn discovery_order(&self) -> Option<BTreeMap<String, usize>> {
+        let sorts = self.metadata.get("agentModelSorts")?.as_array()?;
+        let mut order = BTreeMap::new();
+        for id in sorts
+            .iter()
+            .filter_map(|sort| sort.get("groups")?.as_array())
+            .flatten()
+            .filter_map(|group| group.get("modelIds")?.as_array())
+            .flatten()
+            .chain(
+                self.metadata
+                    .get("imageGenerationModelIds")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten(),
+            )
+            .filter_map(serde_json::Value::as_str)
+        {
+            // AGY 用同一次发现获取聊天和生图模型，不能把生图入口按聊天菜单隐藏
             let index = order.len();
-            order.entry(id).or_insert(index);
+            order.entry(id.to_owned()).or_insert(index);
         }
+        Some(order)
     }
-    order
+
+    pub(crate) fn web_search_model(&self) -> Option<&str> {
+        self.metadata
+            .get("webSearchModelIds")?
+            .as_array()?
+            .first()?
+            .as_str()
+    }
 }
 
+/// 模型对象完整保存，业务读取必要事实时不改变目录正文
 #[derive(Serialize, Deserialize)]
-pub(crate) struct Model {
-    #[serde(rename = "displayName", default)]
-    pub(crate) name: String,
-    #[serde(rename = "quotaInfo", default)]
-    pub(crate) quota: Option<super::account::ModelQuota>,
-    #[serde(rename = "maxOutputTokens", default)]
-    pub(crate) max_output_tokens: Option<u64>,
+#[serde(transparent)]
+pub(crate) struct Model(pub(crate) serde_json::Map<String, serde_json::Value>);
+
+impl Model {
+    pub(crate) fn name(&self) -> &str {
+        self.0
+            .get("displayName")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn max_output_tokens(&self) -> Option<u64> {
+        self.0
+            .get("maxOutputTokens")
+            .and_then(serde_json::Value::as_u64)
+            .filter(|n| *n > 0)
+    }
+
+    pub(crate) fn quota(&self) -> Result<Option<super::account::ModelQuota>, serde_json::Error> {
+        self.0
+            .get("quotaInfo")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -159,13 +183,9 @@ impl CloudCodeClient {
     ) -> Result<Catalog, ProviderError> {
         #[derive(Deserialize)]
         struct Models {
-            #[serde(rename = "agentModelSorts", default)]
-            agent_model_sorts: Option<Vec<AgentModelSort>>,
-            #[serde(rename = "webSearchModelIds", default)]
-            web_search_models: Vec<String>,
             models: BTreeMap<String, Model>,
-            #[serde(rename = "groupedModels", default)]
-            grouped_models: serde_json::Value,
+            #[serde(flatten)]
+            metadata: serde_json::Map<String, serde_json::Value>,
         }
         let models: Models = control(
             self.post("fetchAvailableModels", token)
@@ -183,10 +203,8 @@ impl CloudCodeClient {
         }
         Ok(Catalog {
             project,
-            agent_model_order: models.agent_model_sorts.map(agent_model_order),
             models: models.models,
-            grouped_models: models.grouped_models,
-            web_search_models: models.web_search_models,
+            metadata: models.metadata,
         })
     }
 

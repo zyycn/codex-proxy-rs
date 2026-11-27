@@ -123,6 +123,27 @@ impl Provider for AntigravityProvider {
     ) -> Result<ProviderStream, ProviderError> {
         self.execute_native(request, context).await
     }
+
+    async fn query_client_model_catalog(
+        &self,
+        _client_api_key_id: &gateway_core::policy::ClientApiKeyId,
+        scope: &gateway_core::account::scope::FrozenAccountScope,
+        protocol: &str,
+        _client_version: &str,
+        _peer_route: Option<&http::HeaderValue>,
+    ) -> Result<
+        Option<Vec<gateway_core::routing::ProviderModelDescriptor>>,
+        gateway_core::routing::ProviderCatalogUnavailable,
+    > {
+        if protocol != gateway_protocol::genai::GENAI_PROTOCOL {
+            return Ok(None);
+        }
+        self.catalog
+            .client_model_catalog(scope)
+            .await
+            .map(Some)
+            .map_err(|_| gateway_core::routing::ProviderCatalogUnavailable)
+    }
 }
 
 fn unavailable(error: impl Into<ErrorSource>) -> ProviderError {

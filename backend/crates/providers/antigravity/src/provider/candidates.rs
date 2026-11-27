@@ -183,8 +183,7 @@ impl AntigravityProvider {
         for (observations, catalog) in self.catalog.catalogs().await? {
             let supports = if search {
                 catalog
-                    .web_search_models
-                    .first()
+                    .web_search_model()
                     .is_some_and(|id| id == model.as_str())
             } else {
                 catalog.models.contains_key(model.as_str())

@@ -57,7 +57,7 @@ impl QuotaGroup {
                 .models
                 .iter()
                 .filter(|(id, model)| {
-                    model.name == member || model_member_name(id, &model.name) == member
+                    model.name() == member || model_member_name(id, model.name()) == member
                 })
                 .peekable();
             matches.peek()?;

@@ -215,8 +215,10 @@ async fn catalog_metadata_and_groups_preserve_declared_members_for_generation() 
             "models": {
                 "gemini-4-hydrogen-medium": {"displayName":"Hydrogen Medium","maxTokens":1048576,"maxOutputTokens":65536,"supportsImages":true,"tagDescription":"Leaving on Nov 30."},
                 "gemini-4-hydrogen-high": {"displayName":"Hydrogen High","maxTokens":900000,"maxOutputTokens":262144,"supportsImages":true,"tagDescription":"Leaving on Nov 30."},
-                "gemini-4-hydrogen-sonar": {"displayName":"Hydrogen Sonar"}
+                "gemini-4-hydrogen-sonar": {"displayName":"Hydrogen Sonar"},
+                "gemini-3.1-flash-image": {"displayName":"Image"}
             },
+            "imageGenerationModelIds": ["gemini-3.1-flash-image"],
             "agentModelSorts": [{"groups": [
                 {"modelIds":["gemini-4-hydrogen-medium"]},
                 {"modelIds":["gemini-4-hydrogen-high","gemini-4-hydrogen-medium","absent"]}
@@ -239,7 +241,7 @@ async fn catalog_metadata_and_groups_preserve_declared_members_for_generation() 
         .unwrap();
     let kind = ProviderKind::new("antigravity").unwrap();
     let models = fixture.provider.query_model_capabilities().await.unwrap();
-    assert_eq!(models.len(), 4);
+    assert_eq!(models.len(), 5);
     let group = models
         .iter()
         .find(|model| model.upstream_model().as_str() == "gemini-4-hydrogen")
@@ -278,6 +280,13 @@ async fn catalog_metadata_and_groups_preserve_declared_members_for_generation() 
             ))
             .collect::<Vec<_>>(),
         [
+            (
+                "gemini-3.1-flash-image",
+                &AgentModelListing::Listed {
+                    order: 3,
+                    display_name: "Image".into(),
+                }
+            ),
             (
                 "gemini-4-hydrogen-high",
                 &AgentModelListing::Listed {

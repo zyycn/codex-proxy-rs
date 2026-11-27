@@ -176,3 +176,116 @@ async fn renewed_identity_rebinds_catalog_without_waiting_for_another_upstream_q
     assert!(catalogs[0].1.models.contains_key("fixture-model"));
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn native_catalog_preserves_upstream_objects_without_chat_menu_filtering() {
+    use gateway_core::routing::ProviderModelContent;
+    let upstream = MockServer::start().await;
+    let fixture = Fixture::new(&upstream.uri());
+    *fixture.store.primary().catalog.lock().unwrap() = None;
+    let document = json!({
+        "models": {
+            "chat-model": {"displayName":"Chat","tagTitle":"New","tagDescription":"Leaving on Nov 30.","quotaInfo":{"remainingFraction":0.5}},
+            "gemini-3.1-flash-image": {"displayName":"Image","unknownImageMetadata":{"future":true}},
+            "gemini-3.5-flash-lite": {"displayName":"Search"},
+            "future-helper": {"unknown":[1,{"newCapability":true}]}
+        },
+        "agentModelSorts":[{"groups":[{"modelIds":["chat-model"],"futureGroupField":"keep"}]}],
+        "imageGenerationModelIds":["gemini-3.1-flash-image"],
+        "webSearchModelIds":["gemini-3.5-flash-lite"],
+        "futureCatalogField":{"values":[1,2,3]}
+    });
+    Mock::given(path("/v1internal:loadCodeAssist"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"cloudaicompanionProject":"fixture-project"})),
+        )
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(path("/v1internal:fetchAvailableModels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&document))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    fixture
+        .catalog
+        .reconcile(&CancellationToken::new())
+        .await
+        .unwrap();
+    let mut expected = document;
+    expected["models"]["chat-model"]
+        .as_object_mut()
+        .unwrap()
+        .remove("quotaInfo");
+    {
+        let stored = fixture.store.primary().catalog.lock().unwrap();
+        let mut actual: serde_json::Value =
+            serde_json::from_slice(&stored.as_ref().unwrap().1).unwrap();
+        assert_eq!(
+            actual.as_object_mut().unwrap().remove("project"),
+            Some(json!("fixture-project"))
+        );
+        assert_eq!(actual, expected);
+    }
+    let entries = fixture
+        .catalog
+        .client_model_catalog(&fixture.store.account_scope())
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), expected["models"].as_object().unwrap().len());
+    for entry in entries {
+        let ProviderModelContent::Native(payload) = entry.content else {
+            panic!("expected native model");
+        };
+        let actual: serde_json::Value = serde_json::from_slice(payload.body()).unwrap();
+        assert_eq!(actual, expected["models"][entry.model.as_str()]);
+    }
+}
+
+#[tokio::test]
+async fn native_catalog_selects_whole_objects_only_from_authorized_sources() {
+    use gateway_core::account::ProviderAccountStore;
+    use gateway_core::routing::ProviderModelContent;
+    let upstream = MockServer::start().await;
+    let fixture = Fixture::with_two_accounts(&upstream.uri());
+    for (accounts, catalog) in fixture.catalog.catalogs().await.unwrap() {
+        let mut document = serde_json::to_value(catalog).unwrap();
+        document["models"]["fixture-model"] = if accounts[0].account_id.as_str() == "acct_fixture" {
+            json!({"displayName":"Primary","primaryOnly":true})
+        } else {
+            json!({"displayName":"Standby","standbyOnly":true})
+        };
+        assert!(
+            fixture
+                .store
+                .save_account_catalog(&accounts[0], &serde_json::to_vec(&document).unwrap())
+                .await
+                .unwrap()
+        );
+    }
+    let scope = fixture.store.account_scope();
+    for (scope, expected) in [
+        (
+            scope.as_ref().clone(),
+            json!({"displayName":"Primary","primaryOnly":true}),
+        ),
+        (
+            scope.excluding_account(
+                gateway_core::account::ProviderAccountId::new("acct_fixture").unwrap(),
+            ),
+            json!({"displayName":"Standby","standbyOnly":true}),
+        ),
+    ] {
+        let entries = fixture.catalog.client_model_catalog(&scope).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        let ProviderModelContent::Native(payload) = &entries[0].content else {
+            panic!("expected native model");
+        };
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(payload.body()).unwrap(),
+            expected
+        );
+    }
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}

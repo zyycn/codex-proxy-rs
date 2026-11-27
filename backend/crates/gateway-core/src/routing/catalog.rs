@@ -19,7 +19,7 @@ pub struct ReasoningModelVariant {
     pub accounts: BTreeSet<ProviderAccountId>,
 }
 
-/// 上游账号的聊天菜单声明，未声明时仍可按模型 ID 发现
+/// 上游账号的客户端发现声明，未声明时仍可按模型 ID 发现
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum AgentModelListing {
     #[default]

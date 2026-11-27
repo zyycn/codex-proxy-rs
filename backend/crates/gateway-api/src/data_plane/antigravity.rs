@@ -1,4 +1,4 @@
-//! Antigravity 桌面端与 CLI 的模型选择器识别及菜单投影
+//! Antigravity 桌面端与 CLI 的模型发现请求识别及目录投影
 
 use axum::http::{HeaderMap, header::USER_AGENT};
 use gateway_core::routing::{AgentModelListing, ExecutableModelMetadata, PublicModelId};

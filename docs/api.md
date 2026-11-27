@@ -770,11 +770,11 @@ OpenAI 聚合当前 Key 范围内合格 OAuth 和 API Key 账号的目录。每�
 服务启动时批量恢复账号目录；目录读取只检查本地账号资格和 Client Key 范围，不等待上游查询。
 成功目录响应带 `Cache-Control: private, no-store`，不借用上游 ETag 标识经过选择/别名/聚合后的正文
 
-Gemini 客户端使用 `GET /v1beta/models` 和 `GET /v1beta/models/{model}`。目录只包含当前 Key 可通过原生 GenAI 入口路由的已知模型，沿用账号范围、模型限制和别名；不会将其他协议的同名模型作为原生候选。条目提供 `name: "models/{id}"`、`displayName` 与 `supportedGenerationMethods`，未知的版本、上下文和输出上限不补默认值
+Antigravity 桌面端和 CLI 的 Gateway/GenAI 接入使用 `GET /v1beta/models` 和 `GET /v1beta/models/{model}`。目录只包含当前 Key 可通过原生 GenAI 入口路由的上游目录条目，沿用账号范围、模型限制和别名；不会将其他协议的同名模型作为原生候选。原生模型对象整体保留，包括未知扩展字段；API 仅适配 `name: "models/{id}"` 和 `supportedGenerationMethods`。未知的版本、上下文和输出上限不补默认值
 
-普通 Gemini 列表按模型 ID 排序，支持 `pageSize`（默认 50，上限 1000，0 使用默认值）和 `pageToken`；后续页保持相同的 `pageSize`，末页省略 `nextPageToken`。详情查不到模型返回 Google RPC 格式的 404；分页及详情均重新检查当前 Key 的可见范围，不发起上游模型请求
+普通列表按模型 ID 排序，AGY 桌面端和 CLI 列表按上游声明顺序排序；支持 `pageSize`（默认 50，上限 1000，0 使用默认值）和 `pageToken`；后续页保持相同的 `pageSize`，末页省略 `nextPageToken`。详情查不到模型返回 Google RPC 格式的 404；分页及详情均重新检查当前 Key 的可见范围，不发起上游模型请求
 
-Antigravity 桌面端和 CLI 的 GenAI 模型列表按上游 `agentModelSorts` 顺序返回当前 Key 可用的具体聊天型号和展示名。客户端用这些型号合并基础模型并选择思考强度。旧账号目录缺少聊天菜单声明时，刷新前仍可按具体型号发现。完整型号的详情与直接调用沿用账号模型权限。对基础模型显式指定分组档位时，网关按上游声明选择具体型号，并按该型号和账号的 `maxOutputTokens` 检查请求的输出上限
+AGY 模型发现按上游 `agentModelSorts` 保留聊天型号，并追加 `imageGenerationModelIds` 声明的生图型号；内部辅助型号不进入选择器，其详情与直接调用仍按账号模型权限处理。模型条目取自当前权限允许的完整账号目录对象，不跨账号拼接字段；账号额度由独立快照管理，不进入公开目录。AGY 网关模式读取 GenAI 列表，不能直接消费 Cloud Code 的目录外层；聊天型号合并、思考强度选择、生图分类和标签展示仍取决于客户端支持。对基础模型显式指定分组档位时，网关按上游声明选择具体型号，并按该型号和账号的 `maxOutputTokens` 检查请求的输出上限
 
 `service_tiers` 中的 `name` 用于生成 `/fast` 等命令，`id` 用作请求的 `service_tier` 值。
 上游未声明档位或返回空数组时，网关不补充档位。档位更新后，客户端需重新加载模型目录

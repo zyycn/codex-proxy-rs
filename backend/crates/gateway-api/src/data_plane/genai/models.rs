@@ -1,4 +1,4 @@
-//! Gemini 模型目录复用冻结范围与原生协议能力，分页不扩大可见模型集合
+//! GenAI 模型目录复用冻结范围与原生协议能力，分页不扩大可见模型集合
 
 use axum::{
     Json,
@@ -10,6 +10,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use gateway_core::{
     engine::execution::AuthenticatedClient,
     operation::{GenerateRequest, Operation, ProtocolPayload, RawJsonPayload, TokenCountRequest},
+    routing::PublicModelDescriptor,
 };
 use gateway_protocol::genai::GENAI_PROTOCOL;
 use serde::{Deserialize, Serialize};
@@ -85,12 +86,13 @@ async fn query_response(
     let agent_menu = model.is_none() && crate::data_plane::antigravity::uses_agent_menu(&headers);
     let mut input = RequestInput::query(endpoint.to_owned(), model.clone(), &headers);
     input.protocol = GENAI_PROTOCOL.to_owned();
+    let response_state = state.clone();
     middleware::query_response(
         service.execution(),
         client,
         input,
         move |client| async move {
-            match catalog(&client, agent_menu) {
+            match catalog(response_state.data_plane(), &client, agent_menu).await {
                 Ok(models) => match model {
                     Some(model) => models
                         .into_iter()
@@ -111,7 +113,22 @@ async fn query_response(
     .await
 }
 
-fn catalog(client: &AuthenticatedClient, agent_menu: bool) -> Result<Vec<Value>, ()> {
+async fn catalog(
+    service: &crate::data_plane::service::DataPlaneService,
+    client: &AuthenticatedClient,
+    agent_menu: bool,
+) -> Result<Vec<Value>, ()> {
+    let context = crate::middleware::current();
+    let entries = service
+        .execution()
+        .client_model_catalog(
+            client,
+            GENAI_PROTOCOL,
+            "",
+            context.as_ref().and_then(|ctx| ctx.extensions.peer_route()),
+        )
+        .await
+        .map_err(|_| ())?;
     let generate = Operation::Generate(
         GenerateRequest::from_protocol_payload(
             ProtocolPayload::json_object(GENAI_PROTOCOL, Map::new()).map_err(|_| ())?,
@@ -128,36 +145,62 @@ fn catalog(client: &AuthenticatedClient, agent_menu: bool) -> Result<Vec<Value>,
     let snapshot = client.snapshot();
     let scope = client.policy().account_scope();
     let counted = snapshot.public_models_for_operation(scope, &count);
-    let models = if agent_menu {
+    let generated = snapshot.public_models_for_operation(scope, &generate);
+    let menu = agent_menu.then(|| {
         crate::data_plane::antigravity::model_menu(
             snapshot.model_metadata_for_operation(scope, &generate),
         )
-    } else {
-        snapshot
-            .public_models_for_operation(scope, &generate)
-            .into_iter()
-            .map(|model| {
-                let name = model.as_str().to_owned();
-                (model, name)
-            })
-            .collect()
-    };
-    Ok(models
         .into_iter()
-        .filter(|(model, _)| super::valid_segment(model.as_str()))
-        .map(|(model, name)| {
-            let mut methods = vec!["generateContent", "streamGenerateContent"];
-            if counted.binary_search(&model).is_ok() {
-                methods.push("countTokens");
+        .enumerate()
+        .map(|(order, (model, name))| (model, (order, name)))
+        .collect::<std::collections::BTreeMap<_, _>>()
+    });
+    let mut models = Vec::new();
+    for entry in entries {
+        let (model, mut object) = match entry {
+            PublicModelDescriptor::Native { model, payload } => {
+                if payload.protocol() != GENAI_PROTOCOL {
+                    return Err(());
+                }
+                let object: Map<String, Value> =
+                    serde_json::from_slice(payload.body()).map_err(|_| ())?;
+                (model, object)
             }
-            // 上游尚未提供完整 Gemini 元数据，未知版本与 Token 上限保持缺失
-            json!({
-                "name": format!("models/{}", model.as_str()),
-                "displayName": name,
-                "supportedGenerationMethods": methods,
-            })
-        })
-        .collect())
+            PublicModelDescriptor::Adapted(profile) => {
+                let name = menu
+                    .as_ref()
+                    .and_then(|menu| menu.get(profile.model()))
+                    .map(|(_, name)| name.as_str())
+                    .or_else(|| profile.presentation().display_name())
+                    .unwrap_or(profile.model().as_str());
+                (
+                    profile.model().clone(),
+                    Map::from_iter([("displayName".into(), json!(name))]),
+                )
+            }
+        };
+        if generated.binary_search(&model).is_err() || !super::valid_segment(model.as_str()) {
+            continue;
+        }
+        let order = if let Some(menu) = &menu {
+            let Some((order, _)) = menu.get(&model) else {
+                continue;
+            };
+            *order
+        } else {
+            0
+        };
+        let mut methods = vec!["generateContent", "streamGenerateContent"];
+        if counted.binary_search(&model).is_ok() {
+            methods.push("countTokens");
+        }
+        // Cloud Code 模型对象完整保留，只适配 AGY Gateway 发现端点的资源名与调用方法
+        object.insert("name".into(), json!(format!("models/{}", model.as_str())));
+        object.insert("supportedGenerationMethods".into(), json!(methods));
+        models.push((order, model, Value::Object(object)));
+    }
+    models.sort_unstable_by(|(a, ma, _), (b, mb, _)| (a, ma).cmp(&(b, mb)));
+    Ok(models.into_iter().map(|(_, _, object)| object).collect())
 }
 
 fn paginate(models: Vec<Value>, query: ModelsQuery) -> Response {
