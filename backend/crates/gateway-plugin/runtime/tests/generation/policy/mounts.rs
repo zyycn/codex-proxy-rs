@@ -15,6 +15,140 @@ impl websocket::Sender for Sender {
 }
 
 #[tokio::test]
+async fn subscriptions_omit_only_declared_bodies_and_dispatch_only_matching_errors() {
+    let worker = std::fs::read(env!("CARGO_BIN_EXE_gateway-plugin-test-middleware")).unwrap();
+    let (capability, mut declaration) = crate::support::contribution(
+        Capability::Middleware,
+        vec![Stage::Request, Stage::Attempt, Stage::WebSocket],
+        vec!["openai".into(), "websocket".into()],
+        vec!["openai".into(), "websocket".into()],
+    );
+    let code = "concurrency_queue_timeout";
+    declaration.omit_body_at.insert(Stage::Attempt);
+    declaration.websocket_error_codes.insert(code.into());
+    let package = crate::support::package_with_contributions(
+        &worker,
+        Contributions::from([(capability, declaration)]),
+    );
+    let (_cache, runtime) = setup_package(
+        vec![InstanceFixture {
+            id: "subscriptions",
+            configuration: serde_json::json!({"mode":"subscriptions"}),
+            bindings: ["request", "attempt", "websocket"]
+                .map(|stage| {
+                    binding(
+                        MIDDLEWARE_CONTRIBUTION,
+                        stage,
+                        0,
+                        PluginFailurePolicy::Reject,
+                    )
+                })
+                .into(),
+        }],
+        package.clone(),
+    )
+    .await;
+    let generation = prepare(&runtime).await;
+    let plan = runtime
+        .execution_registry()
+        .middleware(&generation)
+        .unwrap();
+    let body = Bytes::from(vec![b'x'; 5 * 1024 * 1024]);
+    for (attempt, clear) in [(false, false), (true, false), (true, true)] {
+        let mut headers = middleware_headers();
+        if clear {
+            headers.push(MiddlewareHeader::new("x-clear", Bytes::from_static(b"yes")));
+        }
+        let request = MiddlewareRequest::new("openai", headers.clone(), body.clone());
+        let expected = MiddlewareRequest::new(
+            "openai",
+            headers,
+            if clear { Bytes::new() } else { body.clone() },
+        );
+        let context = if attempt {
+            attempt_middleware_context(Arc::default())
+        } else {
+            middleware_context(ClientTransport::HttpJson)
+        };
+        let response = plan
+            .handle(
+                context,
+                request,
+                TransparencyNext {
+                    status: 200,
+                    expected,
+                    headers: vec![],
+                    frames: VecDeque::new(),
+                }
+                .into_next(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.headers(),
+            &[MiddlewareHeader::new(
+                "x-plugin-called",
+                Bytes::from_static(b"yes")
+            )]
+        );
+        response.into_parts().3.close().await;
+    }
+    for error_code in [None, Some("other"), Some(code)] {
+        assert_eq!(plan.matches_websocket(error_code), error_code == Some(code));
+        let result = plan
+            .handle_websocket(
+                websocket::Context {
+                    extensions: Default::default(),
+                    plan: Some(plan.clone()),
+                    connection_id: "connection".into(),
+                    direction: websocket::Direction::Outgoing,
+                    error_code: error_code.map(Arc::from),
+                    headers: Arc::from([]),
+                    cancellation: CancellationToken::new(),
+                    sender: Arc::new(Sender),
+                },
+                websocket::Message {
+                    kind: websocket::Kind::Text,
+                    payload: Bytes::from_static(b"message"),
+                },
+                compose(Vec::new(), |message| Box::pin(async { Ok(Some(message)) })),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.is_none(), error_code == Some(code));
+    }
+    drop(plan);
+    drop(generation);
+    runtime.shutdown().await;
+
+    // 进程无法完成注册时，reject 也只作用于原有订阅范围
+    let (_cache, runtime) = setup_package(
+        vec![InstanceFixture {
+            id: "unavailable",
+            configuration: serde_json::json!({"call_budgets_ms":"invalid"}),
+            bindings: vec![binding(
+                MIDDLEWARE_CONTRIBUTION,
+                "websocket",
+                0,
+                PluginFailurePolicy::Reject,
+            )],
+        }],
+        package,
+    )
+    .await;
+    let generation = prepare(&runtime).await;
+    let plan = runtime
+        .execution_registry()
+        .middleware(&generation)
+        .unwrap();
+    assert!(!plan.matches_websocket(None));
+    assert!(plan.matches_websocket(Some(code)));
+    drop(plan);
+    drop(generation);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn mixed_mounts_keep_independent_order_and_fresh_continuations() {
     let records_dir = tempfile::tempdir().unwrap();
     let records = records_dir.path().join("calls");
@@ -137,6 +271,7 @@ async fn mixed_mounts_keep_independent_order_and_fresh_continuations() {
                     plan: Some(plan.clone()),
                     connection_id: "connection".into(),
                     direction,
+                    error_code: None,
                     headers: Arc::from([]),
                     cancellation: CancellationToken::new(),
                     sender: Arc::new(Sender),

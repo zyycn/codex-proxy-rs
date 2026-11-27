@@ -133,6 +133,15 @@ impl MiddlewarePlan for PluginMiddlewarePlan {
     fn has_websocket(&self) -> bool {
         self.middleware.contains_key(&MiddlewareMount::WebSocket)
     }
+    fn matches_websocket(&self, error_code: Option<&str>) -> bool {
+        self.middleware
+            .get(&MiddlewareMount::WebSocket)
+            .is_some_and(|entries| {
+                entries
+                    .iter()
+                    .any(|entry| entry.matches_websocket(error_code))
+            })
+    }
     fn handle_websocket(
         &self,
         context: gateway_core::engine::middleware::websocket::Context,
@@ -145,7 +154,7 @@ impl MiddlewarePlan for PluginMiddlewarePlan {
         self.chain(
             MiddlewareMount::WebSocket,
             context,
-            |_entry, _context| true,
+            |entry, context| entry.matches_websocket(context.error_code.as_deref()),
             |entry, context, message, next| {
                 Box::pin(super::websocket::invoke(entry, context, message, next))
             },
@@ -196,6 +205,11 @@ impl MiddlewarePlan for PluginMiddlewarePlan {
 }
 
 impl MiddlewareEntry {
+    fn matches_websocket(&self, error_code: Option<&str>) -> bool {
+        self.websocket_error_codes.is_empty()
+            || error_code.is_some_and(|code| self.websocket_error_codes.contains(code))
+    }
+
     fn matches_processing(
         &self,
         extensions: &ExtensionCallScope,

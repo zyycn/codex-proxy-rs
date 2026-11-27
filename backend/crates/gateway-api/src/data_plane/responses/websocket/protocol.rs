@@ -212,6 +212,7 @@ pub(super) fn initial_engine_error_event(
         Some(request_id),
         headers,
     )
+    .to_string()
 }
 
 fn has_request_id(headers: &Map<String, Value>) -> bool {
@@ -226,7 +227,7 @@ pub(super) fn error_event(
     param: Option<&str>,
     request_id: Option<&str>,
     mut headers: Map<String, Value>,
-) -> String {
+) -> Value {
     let mut error = Map::new();
     error.insert("type".to_owned(), Value::String(error_type.to_owned()));
     error.insert("code".to_owned(), Value::String(code.to_owned()));
@@ -260,12 +261,10 @@ pub(super) fn error_event(
         event.insert("headers".to_owned(), Value::Object(headers));
     }
     let event = Value::Object(event);
-    capacity_error_for_client(&event)
-        .unwrap_or(event)
-        .to_string()
+    capacity_error_for_client(&event).unwrap_or(event)
 }
 
-pub(super) fn connection_limit_event() -> String {
+pub(super) fn connection_limit_event() -> Value {
     error_event(
         StatusCode::BAD_REQUEST,
         "invalid_request_error",

@@ -95,6 +95,12 @@ impl PackageInspector {
                                     .collect::<Result<_, _>>()?,
                                 input_formats: declaration.input_formats.clone(),
                                 output_formats: declaration.output_formats.clone(),
+                                omit_body_at: declaration
+                                    .omit_body_at
+                                    .iter()
+                                    .map(|stage| identifier(*stage))
+                                    .collect::<Result<_, _>>()?,
+                                websocket_error_codes: declaration.websocket_error_codes.clone(),
                             },
                         ))
                     })

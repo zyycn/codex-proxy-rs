@@ -60,6 +60,7 @@ fn context(direction: core::Direction, sender: Arc<Sender>) -> core::Context {
         plan: None,
         connection_id: "ws-fixture".into(),
         direction,
+        error_code: None,
         headers: Arc::from([MiddlewareHeader::new(
             "authorization",
             Bytes::from_static(b"Bearer fixture-secret"),

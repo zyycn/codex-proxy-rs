@@ -33,6 +33,8 @@ pub(in crate::postgres) fn artifact(digest: char, platforms: &[&str]) -> Inspect
             contributes: BTreeMap::from([(
                 "middleware".into(),
                 PluginContribution {
+                    omit_body_at: Default::default(),
+                    websocket_error_codes: Default::default(),
                     id: "test.example.middleware".into(),
                     version: 1,
                     stages: vec!["attempt".into()],

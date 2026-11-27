@@ -83,6 +83,24 @@ fn source_manifest_allows_missing_package_and_wildcard_engine() {
 }
 
 #[test]
+fn middleware_input_subscriptions_require_the_corresponding_mounts() {
+    for (field, value) in [
+        ("omitBodyAt", json!(["attempt"])),
+        ("omitBodyAt", json!(["websocket"])),
+        ("websocketErrorCodes", json!(["concurrency_queue_timeout"])),
+    ] {
+        let mut source = serde_json::to_value(source_manifest()).unwrap();
+        source["contributes"]["middleware"][field] = value;
+        assert_eq!(
+            serde_json::from_value::<Manifest>(source)
+                .unwrap()
+                .validate(),
+            Err(ManifestError::Invalid)
+        );
+    }
+}
+
+#[test]
 fn author_manifest_fills_default_ids_versions_and_fixed_stages() {
     let source = json!({
         "manifestVersion": MANIFEST_VERSION,
@@ -149,6 +167,8 @@ fn capability_contract_versions_are_checked_independently_of_rpc_version() {
             manifest.contributes.insert(
                 capability,
                 ContributionDeclaration {
+                    omit_body_at: Default::default(),
+                    websocket_error_codes: Default::default(),
                     id: "9acme.request-tags.contract".into(),
                     version: supported,
                     stages: vec![stage],
@@ -285,6 +305,8 @@ fn contribution_ids_are_owned_unique_and_stage_bounded() {
     manifest.contributes.insert(
         Capability::Scheduler,
         ContributionDeclaration {
+            omit_body_at: Default::default(),
+            websocket_error_codes: Default::default(),
             id: "9acme.request-tags.scheduler".into(),
             version: 4,
             stages: vec![Stage::Scheduling],
@@ -323,6 +345,8 @@ fn installed_manifest_rejects_non_middleware_stage_drift() {
     manifest.contributes.insert(
         Capability::Management,
         ContributionDeclaration {
+            omit_body_at: Default::default(),
+            websocket_error_codes: Default::default(),
             id: "9acme.request-tags.management".into(),
             version: 2,
             stages: vec![Stage::Management],
@@ -426,6 +450,8 @@ fn contributes_rejects_duplicate_capability_keys_in_direct_json_parsing() {
 #[test]
 fn contribution_declaration_uses_camel_case_description_fields() {
     let declaration = ContributionDeclaration {
+        omit_body_at: Default::default(),
+        websocket_error_codes: Default::default(),
         id: "test.example.middleware".into(),
         version: 6,
         stages: vec![Stage::Request],

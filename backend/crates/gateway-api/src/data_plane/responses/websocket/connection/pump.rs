@@ -115,7 +115,7 @@ where
                     activity.send_replace(Instant::now());
                 }
                 let message = match message {
-                    Some(Ok(message)) => match middleware::transform(message, contract::Direction::Incoming, sender.clone(), context).await {
+                    Some(Ok(message)) => match middleware::transform(message, contract::Direction::Incoming, None, sender.clone(), context).await {
                         Ok(Some(message)) => Some(Ok(message)),
                         Ok(None) => continue,
                         Err(_) => return PumpExitReason::MiddlewareFailed,
@@ -174,6 +174,7 @@ where
         let result = match middleware::transform(
             message,
             contract::Direction::Outgoing,
+            write_context.error_code,
             writer.clone(),
             context,
         )
@@ -282,6 +283,7 @@ where
     let message = middleware::transform(
         Message::Ping(sequence.to_be_bytes().to_vec().into()),
         contract::Direction::Outgoing,
+        None,
         writer.clone(),
         context,
     )

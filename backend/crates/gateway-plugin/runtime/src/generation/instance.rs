@@ -14,7 +14,7 @@ use gateway_admin::{
     ports::plugins::PluginStateStoreErrorKind,
 };
 use gateway_plugin_sdk::{Handshake, Stage, call::registration::Registration};
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 const PROCESS_PREPARATION_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -57,6 +57,7 @@ impl PluginRuntime {
         target_revision: Revision,
         request_body_limit: Option<usize>,
         allow_incompatible: bool,
+        websocket_error_codes: &mut BTreeSet<String>,
     ) -> Result<StartedInstance, InstancePreparationError> {
         let authorization_binding = instance_fingerprint(&instance)?;
         let validation_slot = self
@@ -70,6 +71,10 @@ impl PluginRuntime {
             .load_artifact(&instance.artifact_sha256)
             .await
             .map_err(|_| AdminError::unavailable("插件制品不可用"))?;
+        // 进程启动失败时仍按已安装制品的订阅范围应用绑定故障策略
+        if let Some(middleware) = artifact.metadata.contributes.get("middleware") {
+            websocket_error_codes.clone_from(&middleware.websocket_error_codes);
+        }
         let limits = self.config.package_limits;
         let directory = self.config.cache_directory.clone();
         let host_version = self.config.host_version.clone();
@@ -251,6 +256,7 @@ impl PluginRuntime {
         target_revision: Revision,
         request_body_limit: Option<usize>,
         allow_incompatible: bool,
+        websocket_error_codes: &mut BTreeSet<String>,
     ) -> Result<Arc<PreparedInstance>, InstancePreparationError> {
         // 启动控制期限只包住制品准备与握手，Ready 后每次注册使用协商预算
         let StartedInstance {
@@ -265,6 +271,7 @@ impl PluginRuntime {
                 target_revision,
                 request_body_limit,
                 allow_incompatible,
+                websocket_error_codes,
             ),
         )
         .await

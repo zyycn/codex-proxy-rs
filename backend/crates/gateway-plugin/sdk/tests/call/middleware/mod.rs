@@ -44,6 +44,7 @@ fn middleware_capability_and_mounts_have_one_stable_wire_vocabulary() {
 #[test]
 fn middleware_request_keeps_body_out_of_json_and_rejects_unknown_fields() {
     let request = MiddlewareRequestHead {
+        body_omitted: false,
         settings_sources: serde_json::Value::Null,
         settings: serde_json::Value::Null,
         client_key_id: "fixture-key".into(),

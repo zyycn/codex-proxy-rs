@@ -48,7 +48,7 @@ pub(super) async fn invoke(
         return Err(MiddlewareError::Fault);
     }
     let invocation = MiddlewareInvocation::new(&context, request, next, entry.instance_id.clone());
-    let (protocol, headers, payload) = match invocation.request_parts() {
+    let (protocol, headers, payload) = match invocation.request_parts(entry.omit_body) {
         Ok(projection) => projection,
         Err(_) => return recover_rpc(&entry, &invocation, RpcError::Context(None)).await,
     };
@@ -94,6 +94,7 @@ pub(super) async fn invoke(
         scope,
     )?;
     let head = MiddlewareRequestHead {
+        body_omitted: entry.omit_body,
         settings_sources: invocation.settings_sources(),
         settings: invocation
             .settings()

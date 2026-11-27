@@ -297,6 +297,11 @@ impl Manifest {
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
                 || !contribution_ids.insert(&declaration.id)
+                || declaration.omit_body_at.iter().any(|stage| {
+                    !matches!(stage, Stage::Request | Stage::Attempt) || !stages.contains(stage)
+                })
+                || (!declaration.websocket_error_codes.is_empty()
+                    && !stages.contains(&Stage::WebSocket))
                 || stages.len() != declaration.stages.len()
                 || input_formats.len() != declaration.input_formats.len()
                 || output_formats.len() != declaration.output_formats.len()

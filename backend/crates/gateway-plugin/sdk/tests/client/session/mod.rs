@@ -329,6 +329,8 @@ fn middleware_contributions() -> Contributions {
     Contributions::from([(
         Capability::Middleware,
         ContributionDeclaration {
+            omit_body_at: Default::default(),
+            websocket_error_codes: Default::default(),
             id: "test.example.middleware".into(),
             version: 6,
             stages: vec![Stage::Request],
@@ -413,6 +415,7 @@ fn middleware_context(id: u64) -> CallContext {
 
 pub(super) fn middleware_request() -> MiddlewareRequestHead {
     MiddlewareRequestHead {
+        body_omitted: false,
         settings_sources: serde_json::Value::Null,
         settings: serde_json::Value::Null,
         client_key_id: "fixture-key".into(),

@@ -41,6 +41,8 @@ pub struct Context {
     pub plan: Option<crate::engine::middleware::FrozenMiddlewarePlan>,
     pub connection_id: String,
     pub direction: Direction,
+    /// 原生 Responses 出站消息进入 WebSocket 中间件链前的公开错误码
+    pub error_code: Option<Arc<str>>,
     pub headers: Arc<[MiddlewareHeader]>,
     pub cancellation: CancellationToken,
     pub sender: Arc<dyn Sender>,

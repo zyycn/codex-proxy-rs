@@ -22,7 +22,8 @@ use gateway_protocol::openai::OPENAI_PROTOCOL;
 use crate::data_plane::error::{gateway_error_contract, gateway_error_from_engine};
 use crate::data_plane::middleware::{PendingExecution, pending_execution_response};
 use crate::data_plane::responses::validation::{
-    ResponseValidationFacts, ResponsesDeliveryValidator,
+    ResponseValidationFacts, ResponsesDeliveryValidator, response_error_code,
+    websocket_control_error_code,
 };
 
 use super::{
@@ -195,16 +196,11 @@ pub(super) async fn forward_response(
             return ForwardOutcome::Disconnect;
         }
     };
-    if let Err(error) = validate_frame(&first) {
-        return fail_body(connection, body, error, &request_id).await;
-    }
     let mut delivery_validator = ResponsesDeliveryValidator::default();
-    if delivery_validator
-        .validate_websocket_frame(first.bytes(), first.transformed(), &validation)
-        .is_err()
-    {
-        return fail_body(connection, body, MiddlewareError::InvalidState, &request_id).await;
-    }
+    let first_error_code = match validate_frame(&first, &mut delivery_validator, &validation) {
+        Ok(code) => code,
+        Err(error) => return fail_body(connection, body, error, &request_id).await,
+    };
     if let Err(error) = body.commit_downstream(None).await {
         return fail_body(connection, body, error, &request_id).await;
     }
@@ -220,11 +216,10 @@ pub(super) async fn forward_response(
     }
 
     let mut first_frame_written = false;
-    let mut current = Some(first);
+    let mut current = Some((first, first_error_code));
     let mut terminal_write = None;
-    let mut first_protocol_validated = true;
     loop {
-        let frame = match current.take() {
+        let (frame, error_code) = match current.take() {
             Some(frame) => frame,
             None => {
                 match next_body_input(
@@ -238,7 +233,14 @@ pub(super) async fn forward_response(
                 )
                 .await
                 {
-                    BodyInput::Frame(Ok(Some(frame))) => frame,
+                    BodyInput::Frame(Ok(Some(frame))) if terminal_write.is_none() => {
+                        match validate_frame(&frame, &mut delivery_validator, &validation) {
+                            Ok(code) => (frame, code),
+                            Err(error) => {
+                                return fail_body(connection, body, error, &request_id).await;
+                            }
+                        }
+                    }
                     BodyInput::Frame(Ok(None))
                         if terminal_write.is_some() && body.is_finalized() =>
                     {
@@ -262,7 +264,7 @@ pub(super) async fn forward_response(
                             outcome
                         };
                     }
-                    BodyInput::Frame(Ok(None)) => {
+                    BodyInput::Frame(Ok(_)) => {
                         return fail_body(
                             connection,
                             body,
@@ -281,17 +283,6 @@ pub(super) async fn forward_response(
                 }
             }
         };
-        if terminal_write.is_some() || validate_frame(&frame).is_err() {
-            return fail_body(connection, body, MiddlewareError::InvalidState, &request_id).await;
-        }
-        if first_protocol_validated {
-            first_protocol_validated = false;
-        } else if delivery_validator
-            .validate_websocket_frame(frame.bytes(), frame.transformed(), &validation)
-            .is_err()
-        {
-            return fail_body(connection, body, MiddlewareError::InvalidState, &request_id).await;
-        }
         let terminal = frame.terminal();
         let Ok(message) = Utf8Bytes::try_from(frame.into_bytes()) else {
             return fail_body(connection, body, MiddlewareError::InvalidState, &request_id).await;
@@ -304,7 +295,10 @@ pub(super) async fn forward_response(
         };
         let created_id = super::interrupt::ResponseInterrupt::created_id(&message);
         let Ok(write) = connection
-            .send_text(message, WriteContext::request(&request_id, phase))
+            .send_text(
+                message,
+                WriteContext::request(&request_id, phase).with_error_code(error_code),
+            )
             .await
         else {
             detach_body(body);
@@ -333,7 +327,11 @@ fn detach_body(body: Box<dyn MiddlewareBody>) {
     drop(tokio::spawn(body.close()));
 }
 
-fn validate_frame(frame: &MiddlewareFrame) -> Result<(), MiddlewareError> {
+fn validate_frame(
+    frame: &MiddlewareFrame,
+    validator: &mut ResponsesDeliveryValidator,
+    facts: &ResponseValidationFacts,
+) -> Result<Option<Arc<str>>, MiddlewareError> {
     if !matches!(
         frame.framing(),
         MiddlewareFraming::JsonDocument | MiddlewareFraming::RawBytes
@@ -341,7 +339,9 @@ fn validate_frame(frame: &MiddlewareFrame) -> Result<(), MiddlewareError> {
     {
         return Err(MiddlewareError::InvalidState);
     }
-    Ok(())
+    validator
+        .validate_websocket_frame(frame.bytes(), frame.transformed(), facts)
+        .map_err(|_| MiddlewareError::InvalidState)
 }
 
 enum BodyInput {
@@ -638,15 +638,18 @@ impl WebSocketExecutionBody {
     fn push_gateway_error(&mut self, error: GatewayError) {
         let (status, default_type, default_code) = gateway_error_contract(error.kind());
         self.pending.push_back(MiddlewareFrame::new(
-            Bytes::from(error_event(
-                status,
-                error.client_error_type().unwrap_or(default_type),
-                error.client_error_code().unwrap_or(default_code),
-                error.client_message(),
-                None,
-                Some(&self.request_id),
-                serde_json::Map::new(),
-            )),
+            Bytes::from(
+                error_event(
+                    status,
+                    error.client_error_type().unwrap_or(default_type),
+                    error.client_error_code().unwrap_or(default_code),
+                    error.client_message(),
+                    None,
+                    Some(&self.request_id),
+                    serde_json::Map::new(),
+                )
+                .to_string(),
+            ),
             MiddlewareFraming::JsonDocument,
             true,
         ));
@@ -755,7 +758,7 @@ async fn send_error(
     param: Option<&str>,
     request_id: &Arc<str>,
 ) -> ForwardOutcome {
-    let message = error_event(
+    let event = error_event(
         status,
         error_type,
         code,
@@ -764,18 +767,29 @@ async fn send_error(
         Some(request_id),
         serde_json::Map::new(),
     );
-    if connection
-        .send_text(
-            message,
-            WriteContext::request(request_id, FramePhase::Error),
-        )
-        .await
-        .is_ok()
+    if send_error_event(
+        connection,
+        event,
+        WriteContext::request(request_id, FramePhase::Error),
+    )
+    .await
     {
         ForwardOutcome::Continue
     } else {
         ForwardOutcome::Disconnect
     }
+}
+
+pub(super) async fn send_error_event(
+    connection: &mut ResponsesWebSocketConnection,
+    event: serde_json::Value,
+    context: WriteContext,
+) -> bool {
+    let context = context.with_error_code(response_error_code(&event));
+    connection
+        .send_text(event.to_string(), context)
+        .await
+        .is_ok()
 }
 
 async fn send_metadata(
@@ -840,11 +854,11 @@ pub(super) async fn forward_control_event(
         control.clear();
         return ForwardOutcome::ReconnectIfIdle;
     };
-    if connection
-        .send_text(payload, WriteContext::connection(FramePhase::Data))
-        .await
-        .is_err()
-    {
+    let mut context = WriteContext::connection(FramePhase::Data);
+    if connection.has_websocket_middleware {
+        context = context.with_error_code(websocket_control_error_code(&payload));
+    }
+    if connection.send_text(payload, context).await.is_err() {
         return ForwardOutcome::Disconnect;
     }
     ForwardOutcome::Continue

@@ -423,11 +423,13 @@ HTTP 中间件可调用 `call.upgrade(protocols, handler).await` 接管当前请
 #### 下游 WebSocket 消息
 
 `WebSocketCall` 提供连接 ID、握手完整 headers、`direction`、原始 `message`、单次 `next`、`sender` 和取消信号。
-文本、二进制、Ping、Pong 和 Close 均携带原始正文；消息类型不由宿主预先按第三方协议筛选。
+默认投递双向文本、二进制、Ping、Pong 和 Close 消息。
 `WebSocketPayload` 按需读取，透传不读取、不复制正文；插件需要完整内容时自行 `collect().await`。
 不再使用的句柄通过 `payload.close().await` 释放；读取到 EOF 或转交消息也会消费资源。
 取消一次读取等待后可继续读取；未完成的读取须先继续消费或关闭，直接转交该消息会报错，避免静默丢弃在途正文。
 单次调用最多保留 16 个未消费的消息正文，达到容量后需先消费或关闭已有句柄
+
+清单的 `websocketErrorCodes` 非空时，宿主只为原生 Responses 下行文本中 `type: "error"` 且 `error.code` 精确命中的消息调用该插件。匹配使用进入 WebSocket 中间件链时的客户端可见错误码，链内改写不会重新选择订阅。入站消息、普通输出、其他错误和插件接管的自定义协议会话均跳过该订阅，同一挂载的其他插件按各自声明执行
 
 `next.run(message)` 返回可继续修改的 `Option<WebSocketMessage>`；返回 `None` 丢弃当前消息。
 `sender.send(message).await` 是当前连接的直接写入能力，等待实际 transport 完成，不递归进入消息中间件。
@@ -520,7 +522,9 @@ Messages 入站的 `protocol` 为 `anthropic`，端点为 `/v1/messages`；计�
 中间件可读取和改写完整请求、响应 headers、正文与响应帧，也不按字段名称过滤认证、Cookie、会话或连接头。
 该能力遵循[完整信任](manifest.md#完整信任)边界；类型、HTTP 格式、大小及资源生命周期仍需符合合同
 
-默认使用 `MiddlewareRequestBody::Preserve` 保持正文；`replace_body(Vec::new())` 明确清空。
+默认情况下，`request` 和 `attempt` 均接收完整正文。`omitBodyAt` 可选择这两个挂载中的任意已声明阶段。命中时，宿主保留正文并发送空的 RPC payload，插件看到 `request.head.body_omitted == true` 和空的 `request.body`。真实空正文在完整投递时的标志为 `false`。请求 ID、headers、实际账号、尝试序号等元数据按原阶段提供，响应仍可通过 `next` 读取
+
+默认使用 `MiddlewareRequestBody::Preserve` 将宿主保存的当前正文交给下一层。`replace_body(Vec::new())` 明确清空，包括本层省略正文的情况。
 Header 修改采用增量 remove/append，保留合法多值。`MiddlewareBody::map_frames` 复用会话的流控和唯一终态
 
 `response.metadata` 提供 Provider、实际模型、账号、上游请求 ID 和账号选择观测。
