@@ -524,6 +524,73 @@ async fn backend_http_should_zstd_compress_codex_responses_request_body() {
     assert_eq!(json["instructions"], "compress me");
 }
 
+#[test]
+fn queued_compression_yields_to_cancellation_and_releases_capacity() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_http_request_with_body(&mut stream).await;
+            write_completed_sse_response(&mut stream).await;
+            request
+        });
+        let mut request = codex_request("gpt-test", "compress after cancellation", Vec::new());
+        request.force_http_sse = true;
+        let client = CodexBackendClient::new(
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            format!("http://{address}"),
+            test_wire_profile(),
+        );
+
+        // 占满 blocking pool，只有真正让出 reactor 的压缩任务才能被此定时器取消
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let blocker = tokio::task::spawn_blocking(move || {
+            started.send(()).unwrap();
+            let _ = wait.recv();
+        });
+        ready.await.unwrap();
+        assert!(
+            timeout(
+                Duration::from_millis(50),
+                client.create_response(&request, request_context("req_cancel_compression", None)),
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            !server.is_finished(),
+            "cancelled preparation must not send upstream"
+        );
+        drop(release);
+        blocker.await.unwrap();
+
+        timeout(
+            Duration::from_secs(5),
+            client.create_response(
+                &request,
+                request_context("req_after_compression_cancel", None),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let raw = server.await.unwrap();
+        let separator = raw.windows(4).position(|part| part == b"\r\n\r\n").unwrap();
+        let body = zstd::stream::decode_all(&raw[separator + 4..]).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap()["instructions"],
+            "compress after cancellation"
+        );
+    });
+}
+
 #[tokio::test]
 async fn backend_http_should_force_upstream_sse_for_non_streaming_client_request() {
     let listener = TcpListener::bind("127.0.0.1:0")

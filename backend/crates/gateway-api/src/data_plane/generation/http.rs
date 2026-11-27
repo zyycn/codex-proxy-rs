@@ -90,7 +90,7 @@ pub(crate) async fn execute_prepared_generation(
         peer_address,
         ingress_id,
         headers,
-        input: generation,
+        input: mut generation,
         middleware_body,
     } = request;
     let (client_ip, user_agent) = request_client_context(&headers, peer_address);
@@ -120,6 +120,7 @@ pub(crate) async fn execute_prepared_generation(
     middleware_headers.remove(CONTENT_LENGTH);
     let endpoint = protocol.path();
     let stream_error = protocol.stream_error_encoder();
+    let original_body = middleware_body.clone();
     let input = RequestInput {
         endpoint: endpoint.to_owned(),
         protocol: protocol.wire().to_owned(),
@@ -143,17 +144,24 @@ pub(crate) async fn execute_prepared_generation(
                 if wire_protocol != protocol.wire() {
                     return Err(MiddlewareError::Rejected);
                 }
-                let decoded = generation
-                    .decode(
+                // 只复用当前请求中未被改写的解码事实；设置和能力声明仍按最终请求应用
+                let decoded = generation.decoded.take().filter(|_| {
+                    request_body == original_body && request_headers == middleware_headers
+                });
+                drop(original_body);
+                let decoded = match decoded {
+                    Some(decoded) => decoded,
+                    None => generation.decode(
                         &request_body,
                         &request_headers,
                         prepared
                             .client()
                             .snapshot()
                             .responses_max_decompressed_body_bytes(),
-                    )?
-                    .with_client_context(client_ip, user_agent)
-                    .with_middleware_capabilities(&request)?;
+                    )?,
+                }
+                .with_client_context(client_ip, user_agent)
+                .with_middleware_capabilities(&request)?;
                 if decoded.metadata().stream() != stream {
                     return Err(MiddlewareError::Rejected);
                 }

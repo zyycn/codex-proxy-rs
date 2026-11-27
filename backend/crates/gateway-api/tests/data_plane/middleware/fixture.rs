@@ -39,6 +39,7 @@ pub(in crate::data_plane) struct RequestMiddleware {
     pub(in crate::data_plane) short_circuit_json: Option<Bytes>,
     pub(in crate::data_plane) settings:
         Option<fn(&mut gateway_core::routing::request_settings::ExecutionSettings)>,
+    pub(in crate::data_plane) request_update: Option<fn(MiddlewareRequest) -> MiddlewareRequest>,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +136,9 @@ impl MiddlewarePlan for RequestMiddleware {
                 Ok(settings) => request.with_settings(settings),
                 Err(error) => return Box::pin(async move { Err(error) }),
             };
+        }
+        if let Some(update) = self.request_update {
+            request = update(request);
         }
         Box::pin(async move {
             if let Some(body) = short_circuit_json {

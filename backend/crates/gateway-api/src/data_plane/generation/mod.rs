@@ -28,8 +28,9 @@ impl GenerationEndpoint {
     pub(crate) fn input(self, request: DecodedGenerationRequest) -> GenerationInput {
         GenerationInput {
             endpoint: self,
-            model: request.metadata.requested_model,
+            model: request.metadata.requested_model.clone(),
             stream: request.metadata.stream,
+            decoded: Some(request),
         }
     }
 
@@ -64,6 +65,8 @@ pub(crate) struct GenerationInput {
     pub(super) endpoint: GenerationEndpoint,
     pub(super) model: String,
     pub(super) stream: bool,
+    // GenAI 从 URL 取路由事实，直到 terminal 才首次解码正文
+    pub(super) decoded: Option<DecodedGenerationRequest>,
 }
 
 impl GenerationInput {

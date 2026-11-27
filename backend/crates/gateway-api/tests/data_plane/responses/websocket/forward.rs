@@ -549,6 +549,64 @@ async fn opening_ids_stay_in_metadata_but_do_not_identify_initial_failures() {
 }
 
 #[tokio::test]
+async fn header_only_request_middleware_updates_websocket_turn_context() {
+    let middleware = Arc::new(crate::data_plane::middleware::RequestMiddleware {
+        expected_operation: Some(gateway_core::operation::OperationKind::Generate),
+        request_update: Some(|request| {
+            let (protocol, mut headers, body) = request.clone().into_parts();
+            headers.push(gateway_core::engine::middleware::MiddlewareHeader::new(
+                "x-codex-turn-state",
+                Bytes::from_static(b"rewritten-turn"),
+            ));
+            request
+                .replace_parts(protocol, headers, body, None)
+                .unwrap()
+        }),
+        ..Default::default()
+    });
+    let trace = Arc::new(AtomicFailureTrace {
+        middleware: Some(middleware.frozen()),
+        initial_errors: Mutex::new(VecDeque::from([EngineError::Provider(upstream_failure(
+            502,
+            b"",
+            Vec::new(),
+        ))])),
+        ..Default::default()
+    });
+    let (mut socket, _server) = connect(Arc::clone(&trace), Vec::new()).await;
+    send_request(&mut socket).await;
+    next_error(&mut socket).await;
+    assert_eq!(
+        trace.request_turn_headers.lock().unwrap().as_slice(),
+        [[Some("rewritten-turn".to_owned()), None, None, None]]
+    );
+    socket.close(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn request_middleware_cannot_reuse_decoded_facts_after_replacing_a_websocket_frame() {
+    let middleware = Arc::new(crate::data_plane::middleware::RequestMiddleware {
+        expected_operation: Some(gateway_core::operation::OperationKind::Generate),
+        request_update: Some(|request| {
+            let (protocol, headers, _) = request.clone().into_parts();
+            request
+                .replace_parts(protocol, headers, Bytes::from_static(b"{}"), None)
+                .unwrap()
+        }),
+        ..Default::default()
+    });
+    let trace = Arc::new(AtomicFailureTrace {
+        middleware: Some(middleware.frozen()),
+        ..Default::default()
+    });
+    let (mut socket, _server) = connect(Arc::clone(&trace), Vec::new()).await;
+    send_request(&mut socket).await;
+    next_error(&mut socket).await;
+    assert_eq!(trace.starts.load(Ordering::Acquire), 0);
+    socket.close(None).await.unwrap();
+}
+
+#[tokio::test]
 async fn errors_on_a_reused_connection_keep_their_own_upstream_ids() {
     let errors = ["req_first", "req_second"].map(|request_id| {
         EngineError::Provider(

@@ -83,6 +83,7 @@ fn parse_route(resource: &str, query: Option<&str>) -> Result<GenerationInput, G
         endpoint,
         model: model.to_owned(),
         stream,
+        decoded: None,
     })
 }
 

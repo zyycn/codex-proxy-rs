@@ -136,7 +136,7 @@ pub fn decode_request_with_headers(
 
 /// 解码请求并返回已经解除 HTTP content encoding 的中间件正文
 ///
-/// 外层中间件只接收有界的协议正文；terminal 会用中间件返回的正文重新解码，
+/// 外层中间件只接收有界的协议正文；terminal 在正文或请求头改写后重新解码，
 /// 因而不能把压缩字节与已经移除的传输编码语义混用
 pub(crate) fn decode_request_with_body(
     body: &[u8],

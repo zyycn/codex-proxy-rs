@@ -277,6 +277,33 @@ async fn request_middleware_sees_original_chat_and_preserves_the_endpoint() {
 }
 
 #[tokio::test]
+async fn header_only_middleware_updates_the_decoded_session_context() {
+    let middleware = Arc::new(RequestMiddleware {
+        expected_operation: Some(gateway_core::operation::OperationKind::Generate),
+        request_update: Some(|request| {
+            let (protocol, mut headers, body) = request.clone().into_parts();
+            headers.push(gateway_core::engine::middleware::MiddlewareHeader::new(
+                "session-id",
+                Bytes::from_static(b"rewritten-session"),
+            ));
+            request
+                .replace_parts(protocol, headers, body, None)
+                .unwrap()
+        }),
+        ..RequestMiddleware::default()
+    });
+    let mut execution = Execution::new(Session::new(vec![created(), completed("ok")]));
+    execution.middleware = Some(middleware.frozen());
+    let fixture = Fixture::with_execution(execution).await;
+    let response = fixture.post(chat_request(false)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        fixture.captured().context["session_id"],
+        "rewritten-session"
+    );
+}
+
+#[tokio::test]
 async fn dropping_chat_body_cancels_and_finalizes_the_original_execution() {
     let mut session = Session::new(vec![created()]);
     session.finish = Finish::Pending;

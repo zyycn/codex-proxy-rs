@@ -230,32 +230,33 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
             continue;
         }
         request_count = request_count.saturating_add(1);
-        // 初步解码只取帧中的模型，实际执行使用该帧当前生效的请求头
-        let model_hint =
-            match decode_response_create_with_context(&payload, &OpenAiRequestHeaders::default()) {
-                Ok(decoded) => Some(decoded.metadata().requested_model().to_owned()),
-                Err(error) => {
-                    trace_rejected_request(
-                        &correlation_id,
-                        connection.id(),
-                        &payload,
-                        "decode",
-                        &error.to_string(),
-                    );
-                    if send_protocol_error(
-                        &mut connection,
-                        StatusCode::BAD_REQUEST,
-                        error.protocol_body(),
-                        &correlation_id,
-                    )
-                    .await
-                        == ForwardOutcome::Disconnect
-                    {
-                        break;
-                    }
-                    continue;
+        let original_headers = raw_headers.clone();
+        let request_headers = OpenAiRequestHeaders::from_headers(&original_headers)
+            .with_downstream_websocket_connection_id(connection.id().to_owned());
+        let decoded = match decode_response_create_with_context(&payload, &request_headers) {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                trace_rejected_request(
+                    &correlation_id,
+                    connection.id(),
+                    &payload,
+                    "decode",
+                    &error.to_string(),
+                );
+                if send_protocol_error(
+                    &mut connection,
+                    StatusCode::BAD_REQUEST,
+                    error.protocol_body(),
+                    &correlation_id,
+                )
+                .await
+                    == ForwardOutcome::Disconnect
+                {
+                    break;
                 }
-            };
+                continue;
+            }
+        };
         // deadline 与 Text 可能同时就绪；在任何上游执行开始前再次封住该竞争窗口
         if connection.is_expired() {
             trace_rejected_request(
@@ -317,14 +318,15 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
         response_control = prepared.response_control();
         let capture = new_replay_capture();
         let validation = ResponseValidationFacts::default();
+        let original_body = Bytes::from(payload);
         let input = RequestInput {
             endpoint: crate::data_plane::router::RESPONSES_PATH.to_owned(),
             protocol: OPENAI_PROTOCOL.to_owned(),
             operation: Some(OperationKind::Generate),
             transport: ClientTransport::WebSocket,
-            model_hint,
+            model_hint: Some(decoded.metadata().requested_model().to_owned()),
             headers: encode_headers(&raw_headers),
-            body: Bytes::from(payload),
+            body: original_body.clone(),
         };
         // 握手的轮次头只属于首次执行，复用连接时由各 response.create 携带本轮数据
         raw_headers.remove("x-codex-turn-state");
@@ -353,15 +355,22 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
                     if protocol != OPENAI_PROTOCOL {
                         return Err(MiddlewareError::Rejected);
                     }
-                    let payload =
-                        std::str::from_utf8(&body).map_err(|_| MiddlewareError::Rejected)?;
-                    let request_headers = OpenAiRequestHeaders::from_headers(&headers)
-                        .with_downstream_websocket_connection_id(
-                            connection_id_for_terminal.clone(),
-                        );
-                    let decoded = decode_response_create_with_context(payload, &request_headers)
-                        .map_err(|_| MiddlewareError::Rejected)?
-                        .with_client_context(client_ip, user_agent_for_terminal);
+                    // 帧正文或本轮请求头变化时重新解释，不能复用改写前的路由与续接事实
+                    let decoded = if body == original_body && headers == original_headers {
+                        decoded
+                    } else {
+                        drop(decoded);
+                        let payload =
+                            std::str::from_utf8(&body).map_err(|_| MiddlewareError::Rejected)?;
+                        let request_headers = OpenAiRequestHeaders::from_headers(&headers)
+                            .with_downstream_websocket_connection_id(
+                                connection_id_for_terminal.clone(),
+                            );
+                        decode_response_create_with_context(payload, &request_headers)
+                            .map_err(|_| MiddlewareError::Rejected)?
+                    }
+                    .with_client_context(client_ip, user_agent_for_terminal);
+                    drop(original_body);
                     let decoded = replay_for_terminal
                         .prepare(decoded)
                         .with_middleware_capabilities(&request)?;
