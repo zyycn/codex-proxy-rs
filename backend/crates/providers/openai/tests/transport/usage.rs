@@ -122,7 +122,6 @@ async fn fetch_should_use_wham_usage_headers_only() {
         "session_id",
         "session-id",
         "thread-id",
-        "x-codex-turn-id",
         "x-codex-window-id",
         "x-codex-turn-state",
         "x-codex-turn-metadata",

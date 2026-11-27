@@ -45,7 +45,7 @@ impl CodexBackendClient {
                 || is_transport_managed_request_header(name.as_str())
                 || is_non_codex_request_header(name.as_str())
                 // Live 不继承 Responses 的路由或连接续接状态
-                || matches!(name.as_str(), "x-codex-routing-hint" | "x-codex-turn-state" | "x-codex-turn-id")
+                || matches!(name.as_str(), "x-codex-routing-hint" | "x-codex-turn-state")
             {
                 continue;
             }

@@ -69,7 +69,6 @@ async fn each_core_endpoint_uses_the_current_bundled_release() {
             assert_eq!(headers["chatgpt-account-id"], "audit-account");
             for forbidden in [
                 "x-codex-installation-id",
-                "x-codex-turn-id",
                 "x-openai-internal-codex-residency",
                 "oai-language",
                 "openai-beta",

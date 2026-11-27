@@ -247,7 +247,6 @@ async fn backend_websocket_should_forward_context_headers_and_preserve_payload_f
     for forbidden in [
         "x-codex-turn-state",
         "x-codex-installation-id",
-        "x-codex-turn-id",
         "x-openai-internal-codex-residency",
         "accept",
         "content-type",
@@ -383,7 +382,6 @@ async fn backend_http_should_send_codex_context_without_browser_headers() {
     assert_eq!(header_names, expected_names);
     for forbidden in [
         "x-codex-installation-id",
-        "x-codex-turn-id",
         "x-openai-internal-codex-residency",
         "sec-ch-ua",
         "sec-ch-ua-mobile",
@@ -459,7 +457,6 @@ async fn backend_http_should_ignore_unrepresentable_protocol_headers_without_blo
     for omitted in [
         "session-id",
         "thread-id",
-        "x-codex-turn-id",
         "x-codex-window-id",
         "x-codex-turn-state",
         "x-codex-turn-metadata",

@@ -283,7 +283,6 @@ pub(super) fn append_passthrough_headers(headers: &mut HeaderMap, passthrough: &
                     | "content-type"
                     | "content-encoding"
                     | "x-codex-routing-hint"
-                    | "x-codex-turn-id"
                     | X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER
             )
         {

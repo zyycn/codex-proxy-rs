@@ -20,7 +20,6 @@ pub(crate) struct CodexRequestHeaders {
     version: Option<String>,
     codex_window_id: Option<String>,
     parent_thread_id: Option<String>,
-    turn_id: Option<String>,
     responses_lite: Option<String>,
     memgen_request: Option<String>,
     subagent: Option<String>,
@@ -45,7 +44,6 @@ impl CodexRequestHeaders {
             version: header_string(headers, "version"),
             codex_window_id: header_string(headers, "x-codex-window-id"),
             parent_thread_id: header_string(headers, "x-codex-parent-thread-id"),
-            turn_id: header_string(headers, "x-codex-turn-id"),
             responses_lite: header_string(headers, X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER),
             memgen_request: header_string(headers, X_OPENAI_MEMGEN_REQUEST_HEADER),
             subagent: header_string(headers, OPENAI_SUBAGENT_KEY),
@@ -60,7 +58,6 @@ impl CodexRequestHeaders {
             ("version", self.version.as_ref()),
             ("codex_window_id", self.codex_window_id.as_ref()),
             ("parent_thread_id", self.parent_thread_id.as_ref()),
-            ("turn_id", self.turn_id.as_ref()),
             ("responses_lite", self.responses_lite.as_ref()),
             ("memgen_request", self.memgen_request.as_ref()),
         ] {
