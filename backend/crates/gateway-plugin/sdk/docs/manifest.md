@@ -88,6 +88,21 @@ capability 固定并由工具生成：
 `middleware` 必须从 `http`、`websocket`、`service`、`request`、`attempt`、`outbound` 中显式选择挂载；同一处理器可覆盖多个边界，协议格式等真实业务选择也不能省略。
 安装清单若携带不同的固定阶段会被拒绝，而不是在加载时静默改写
 
+在 `contributes.middleware` 中可以按阶段省略请求正文，也可以订阅指定的原生 Responses WebSocket 下行错误。例如，以下声明在 `request` 读取正文，在 `attempt` 只接收请求元数据，在 WebSocket 上只接收排队超时错误：
+
+```json
+{
+  "version": 6,
+  "stages": ["request", "attempt", "websocket"],
+  "inputFormats": ["openai", "websocket"],
+  "outputFormats": ["openai", "websocket"],
+  "omitBodyAt": ["attempt"],
+  "websocketErrorCodes": ["concurrency_queue_timeout"]
+}
+```
+
+两个字段都可省略，空数组也沿用默认的完整投递。插件进程注册的声明须与清单一致。使用这些字段时，SDK、打包工具和 `engines.codex-proxy-rs` 指定的宿主均须支持对应清单字段。调用语义见[模型请求与 attempt](capabilities.md#模型请求与-attempt)和[下游 WebSocket 消息](capabilities.md#下游-websocket-消息)
+
 ## 完整信任
 
 安装并启用插件意味着信任其全部代码和行为。插件与宿主使用相同的系统身份，可以访问数据、凭据和网络；安全由安装者承担，宿主不提供插件安全沙箱

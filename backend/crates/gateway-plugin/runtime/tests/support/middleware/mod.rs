@@ -25,10 +25,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(budgets) = configuration.get("call_budgets_ms") {
         session.set_call_budgets(serde_json::from_value(budgets.clone())?)?;
     }
+    if mode == "subscriptions" {
+        use gateway_plugin_sdk::client::{MiddlewareCall, MiddlewareResult};
+        let contributes = serde_json::from_value(serde_json::json!({
+            "middleware": {
+                "id":"test.example.middleware", "version":6,
+                "stages":["request","attempt","websocket"],
+                "inputFormats":["openai","websocket"], "outputFormats":["openai","websocket"],
+                "omitBodyAt":["attempt"], "websocketErrorCodes":["concurrency_queue_timeout"]
+            }
+        }))?;
+        let plugin = MiddlewarePlugin::new(&contributes, |call: MiddlewareCall| async move {
+            match call {
+                MiddlewareCall::Request(mut call) => {
+                    let request = &mut call.request;
+                    if call.context.stage == Stage::Attempt {
+                        assert!(request.head.body_omitted && request.body.is_empty());
+                        assert_eq!(request.head.request_id, "req_attempt_http");
+                        assert_eq!(request.head.account_id.as_deref(), Some("acct_openai"));
+                        assert_eq!(request.head.attempt_index, Some(1));
+                        if request
+                            .head
+                            .headers
+                            .iter()
+                            .any(|header| header.name == "x-clear")
+                        {
+                            request.replace_body(Vec::new());
+                        }
+                    } else {
+                        assert!(!request.head.body_omitted);
+                        assert_eq!(request.body.len(), 5 * 1024 * 1024);
+                    }
+                    let mut response = call.next.run(call.request).await?;
+                    response.append_header("x-plugin-called", b"yes".to_vec());
+                    Ok(MiddlewareResult::Request(response))
+                }
+                MiddlewareCall::WebSocket(_) => Ok(MiddlewareResult::WebSocket(None)),
+                _ => panic!("unexpected mount"),
+            }
+        })?;
+        session.run(plugin).await?;
+        return Ok(());
+    }
     if mode == "mixed_mounts" {
         let contributes = Contributions::from([(
             Capability::Middleware,
             ContributionDeclaration {
+                omit_body_at: Default::default(),
+                websocket_error_codes: Default::default(),
                 id: "test.example.middleware".into(),
                 version: 6,
                 stages: vec![
@@ -89,6 +133,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let contributes = Contributions::from([(
         Capability::Middleware,
         ContributionDeclaration {
+            omit_body_at: Default::default(),
+            websocket_error_codes: Default::default(),
             id: "test.example.middleware".into(),
             version: configuration["middleware_version"]
                 .as_u64()

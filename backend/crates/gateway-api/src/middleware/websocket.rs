@@ -91,12 +91,7 @@ pub(crate) async fn transform(
     context: core::Context,
     message: core::Message,
 ) -> Result<Option<core::Message>, MiddlewareError> {
-    let Some(plan) = context
-        .plan
-        .as_ref()
-        .filter(|plan| plan.has_websocket())
-        .cloned()
-    else {
+    let Some(plan) = context.plan.clone() else {
         return Ok(Some(message));
     };
     let cancellation = context.cancellation.clone();
@@ -125,12 +120,20 @@ impl Session {
         message: core::Message,
         direction: core::Direction,
     ) -> Result<Option<core::Message>, MiddlewareError> {
+        if !self
+            .plan
+            .as_ref()
+            .is_some_and(|plan| plan.matches_websocket(None))
+        {
+            return Ok(Some(message));
+        }
         transform(
             core::Context {
                 extensions: self.extensions.clone(),
                 plan: self.plan.clone(),
                 connection_id: self.connection_id.clone(),
                 direction,
+                error_code: None,
                 headers: self.headers.clone(),
                 cancellation: self.cancellation.clone(),
                 sender: self.writer.clone(),

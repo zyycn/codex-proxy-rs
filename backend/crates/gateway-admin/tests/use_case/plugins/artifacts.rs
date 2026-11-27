@@ -476,6 +476,8 @@ fn metadata(with_required_default: bool) -> PluginArtifactMetadata {
 
 fn contribution(id: &str, stages: &[&str]) -> PluginContribution {
     PluginContribution {
+        omit_body_at: Default::default(),
+        websocket_error_codes: Default::default(),
         id: id.into(),
         version: 1,
         stages: stages.iter().map(|stage| (*stage).into()).collect(),

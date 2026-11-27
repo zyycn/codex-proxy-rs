@@ -96,15 +96,26 @@ impl FramePhase {
 pub struct WriteContext {
     pub(super) request_id: Option<Arc<str>>,
     pub(super) phase: FramePhase,
+    pub(super) error_code: Option<Arc<str>>,
 }
 
 impl WriteContext {
+    #[must_use]
+    pub(in crate::data_plane::responses::websocket) fn with_error_code(
+        mut self,
+        error_code: Option<Arc<str>>,
+    ) -> Self {
+        self.error_code = error_code;
+        self
+    }
+
     /// 创建归属于某个请求的写入上下文
     #[must_use]
     pub fn request(request_id: &Arc<str>, phase: FramePhase) -> Self {
         Self {
             request_id: Some(Arc::clone(request_id)),
             phase,
+            error_code: None,
         }
     }
 
@@ -114,6 +125,7 @@ impl WriteContext {
         Self {
             request_id: None,
             phase,
+            error_code: None,
         }
     }
 }

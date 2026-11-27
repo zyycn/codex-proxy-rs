@@ -41,7 +41,7 @@ use gateway_plugin_sdk::client::{read_frame, write_frame};
 不能把一个调用的资源误用到另一个调用。插件程序自行选择运行时和启动入口，不会启动网关。
 `SessionConfig.maximum_stream_chunk_bytes` 默认 1 MiB，只约束单个业务流分块；
 流式响应还需满足宿主实际授予的信用窗口。普通调用与回调的正文不受此预算限制。
-普通业务处理器仍接收完整正文，内存占用随正文增长；HTTP 与下游 WebSocket 中间件使用惰性正文句柄，透传不复制正文
+模型请求中间件默认接收完整正文，内存占用随正文增长。`request` 和 `attempt` 可按阶段省略正文，WebSocket 可只订阅指定下行错误，见[清单](docs/manifest.md#扩展项简写)。HTTP 与下游 WebSocket 中间件使用惰性正文句柄，透传不复制正文
 
 ## 通信边界
 

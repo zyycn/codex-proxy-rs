@@ -57,6 +57,8 @@ pub fn contribution_for_id(
     (
         capability,
         ContributionDeclaration {
+            omit_body_at: Default::default(),
+            websocket_error_codes: Default::default(),
             id: format!("{plugin_id}.{local_id}"),
             version: capability.contract_versions()[0],
             stages,

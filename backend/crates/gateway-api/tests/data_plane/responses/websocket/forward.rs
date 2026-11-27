@@ -12,7 +12,7 @@ use bytes::Bytes;
 use futures::{SinkExt, StreamExt, future::BoxFuture};
 use gateway_core::engine::middleware::{
     FrozenMiddlewarePlan, MiddlewareContext, MiddlewareError, MiddlewareNext, MiddlewarePlan,
-    MiddlewareRequest, MiddlewareResponse,
+    MiddlewareRequest, MiddlewareResponse, websocket,
 };
 use gateway_core::engine::{CommitRequirement, CoordinatedEvent, EngineError};
 use gateway_core::error::{
@@ -54,13 +54,17 @@ async fn connect_with_headers(
     response_headers: Vec<ProviderResponseHeader>,
     opening_headers: axum::http::HeaderMap,
 ) -> (TestSocket, TestServer) {
+    let plan = trace.middleware.clone();
     let execution = Arc::new(AtomicFailureExecution {
         client: authenticated_client("sk_ws_atomic"),
         trace,
         response_headers,
         fail_before_first_event: false,
     });
-    let app = api_router(execution).await;
+    let mut app = api_router(execution).await;
+    if let Some(plan) = plan {
+        app = app.layer(axum::Extension(plan));
+    }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind local API");
@@ -179,6 +183,31 @@ impl ExtensionSetLease for InspectFailureMiddleware {
 }
 
 impl MiddlewarePlan for InspectFailureMiddleware {
+    fn has_websocket(&self) -> bool {
+        true
+    }
+
+    fn matches_websocket(&self, error_code: Option<&str>) -> bool {
+        error_code == Some("concurrency_queue_timeout")
+    }
+
+    fn handle_websocket(
+        &self,
+        context: websocket::Context,
+        mut message: websocket::Message,
+        next: websocket::Next,
+    ) -> BoxFuture<'static, Result<Option<websocket::Message>, MiddlewareError>> {
+        assert_eq!(context.direction, websocket::Direction::Outgoing);
+        let mut event: Value = serde_json::from_slice(&message.payload).unwrap();
+        assert_eq!(
+            event["error"]["code"],
+            context.error_code.as_deref().unwrap()
+        );
+        event["seen_by_subscriber"] = json!(true);
+        message.payload = Bytes::from(serde_json::to_vec(&event).unwrap());
+        next.run(message)
+    }
+
     fn handle(
         &self,
         _: MiddlewareContext,
@@ -193,7 +222,7 @@ impl MiddlewarePlan for InspectFailureMiddleware {
                 0,
                 "next must retain the failed execution until the onion chain returns"
             );
-            assert_eq!(response.status_code(), 503);
+            assert_eq!(response.status_code(), 429);
             Ok(response)
         })
     }
@@ -204,7 +233,10 @@ async fn initial_failure_retains_execution_until_request_middleware_returns() {
     let drops = Arc::new(AtomicUsize::new(0));
     let middleware = Arc::new(InspectFailureMiddleware(Arc::clone(&drops)));
     let trace = Arc::new(AtomicFailureTrace {
-        initial_errors: Mutex::new(VecDeque::from([EngineError::EmptyRoutingPlan])),
+        initial_errors: Mutex::new(VecDeque::from([EngineError::Provider(ProviderError::new(
+            ProviderErrorKind::ConcurrencyQueueTimeout,
+            UpstreamSendState::NotSent,
+        ))])),
         session_drops: Arc::clone(&drops),
         middleware: Some(FrozenMiddlewarePlan::new(
             middleware.clone(),
@@ -218,8 +250,9 @@ async fn initial_failure_retains_execution_until_request_middleware_returns() {
     let (mut socket, _server) = connect(Arc::clone(&trace), vec![]).await;
     send_request(&mut socket).await;
     let error = next_error(&mut socket).await;
-    assert_eq!(error["status"], 503);
-    assert_eq!(error["error"]["code"], "no_available_provider");
+    assert_eq!(error["status"], 429);
+    assert_eq!(error["error"]["code"], "concurrency_queue_timeout");
+    assert_eq!(error["seen_by_subscriber"], true);
     assert_no_duplicate_failure(&mut socket).await;
     assert_eq!(drops.load(Ordering::Acquire), 1);
     assert!(!trace.committed.load(Ordering::Acquire));

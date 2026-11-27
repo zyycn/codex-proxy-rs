@@ -204,8 +204,11 @@ impl ResponsesDeliveryValidator {
         delivered: &[u8],
         transformed: bool,
         facts: &ResponseValidationFacts,
-    ) -> Result<(), ResponseValidationError> {
-        self.validate_parsed(ParsedFrame::parse_json(delivered), transformed, facts)
+    ) -> Result<Option<Arc<str>>, ResponseValidationError> {
+        let parsed = ParsedFrame::parse_json(delivered);
+        let error_code = parsed.as_ref().ok().and_then(ParsedFrame::error_code);
+        self.validate_parsed(parsed, transformed, facts)?;
+        Ok(error_code)
     }
 
     fn validate_parsed(
@@ -346,6 +349,15 @@ impl ParsedFrame {
         Ok(Self::Event { event_type, value })
     }
 
+    fn error_code(&self) -> Option<Arc<str>> {
+        match self {
+            Self::Event { event_type, value } if event_type == "error" => {
+                response_error_code(value)
+            }
+            _ => None,
+        }
+    }
+
     fn parse_json(bytes: &[u8]) -> Result<Self, ResponseValidationError> {
         let value = serde_json::from_slice::<Value>(bytes).map_err(|_| ResponseValidationError)?;
         let event_type = required_identifier(value.get("type"))?.to_owned();
@@ -354,6 +366,21 @@ impl ParsedFrame {
         }
         Ok(Self::Event { event_type, value })
     }
+}
+
+pub(super) fn response_error_code(error_event: &Value) -> Option<Arc<str>> {
+    error_event
+        .get("error")?
+        .get("code")?
+        .as_str()
+        .map(Arc::from)
+}
+
+/// 空闲控制通道透传的上游文本没有经过响应正文校验
+pub(super) fn websocket_control_error_code(payload: &str) -> Option<Arc<str>> {
+    ParsedFrame::parse_json(payload.as_bytes())
+        .ok()?
+        .error_code()
 }
 
 fn terminal_kind(event_type: Option<&str>) -> Option<TerminalKind> {

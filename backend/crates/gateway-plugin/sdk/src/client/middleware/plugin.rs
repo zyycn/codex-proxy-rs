@@ -26,6 +26,8 @@ use super::{
 /// use gateway_plugin_sdk::client::{RequestCall, MiddlewarePlugin};
 ///
 /// let contributes = Contributions::from([(Capability::Middleware, ContributionDeclaration {
+///     omit_body_at: Default::default(),
+///     websocket_error_codes: Default::default(),
 ///     id: "acme.request-tags.tagRequest".into(),
 ///     version: 6,
 ///     stages: vec![Stage::Request],

@@ -1,6 +1,9 @@
 //! 插件能力、调用阶段、失败策略与贡献声明的线协议定义
 
-use std::{collections::BTreeMap, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 use serde::{Deserialize, Deserializer, Serialize, de};
 
@@ -126,6 +129,12 @@ pub struct ContributionDeclaration {
     pub input_formats: Vec<String>,
     #[serde(default)]
     pub output_formats: Vec<String>,
+    /// 在指定模型请求阶段省略二进制正文，next 默认沿用宿主原文
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub omit_body_at: BTreeSet<Stage>,
+    /// 仅投递原生 Responses 下行 error 事件中匹配的错误码
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub websocket_error_codes: BTreeSet<String>,
 }
 
 const fn default_capability_version() -> u32 {

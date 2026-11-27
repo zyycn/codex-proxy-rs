@@ -58,6 +58,8 @@ fn artifact_metadata_wire_preserves_identity_icons_and_contributions() {
         contributes: BTreeMap::from([(
             "middleware".into(),
             PluginContribution {
+                omit_body_at: Default::default(),
+                websocket_error_codes: Default::default(),
                 id: "test.example.middleware".into(),
                 version: 1,
                 stages: vec!["attempt".into()],

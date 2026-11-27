@@ -92,10 +92,15 @@ where
 pub(super) async fn transform(
     message: Message,
     direction: core::Direction,
+    error_code: Option<Arc<str>>,
     sender: Arc<dyn core::Sender>,
     context: &PumpContext,
 ) -> Result<Option<Message>, MiddlewareError> {
-    let Some(plan) = &context.middleware else {
+    let Some(plan) = context
+        .middleware
+        .as_ref()
+        .filter(|plan| plan.matches_websocket(error_code.as_deref()))
+    else {
         return Ok(Some(message));
     };
     crate::middleware::websocket::transform(
@@ -104,6 +109,7 @@ pub(super) async fn transform(
             plan: Some(plan.clone()),
             connection_id: context.connection_id.to_string(),
             direction,
+            error_code,
             headers: context.headers.clone(),
             cancellation: context.cancellation.clone(),
             sender,

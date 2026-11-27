@@ -52,6 +52,9 @@ pub trait MiddlewarePlan: Send + Sync + fmt::Debug {
     fn has_websocket(&self) -> bool {
         false
     }
+    fn matches_websocket(&self, _error_code: Option<&str>) -> bool {
+        self.has_websocket()
+    }
     fn handle_websocket(
         &self,
         _context: crate::engine::middleware::websocket::Context,
@@ -141,6 +144,10 @@ impl FrozenMiddlewarePlan {
     #[must_use]
     pub fn has_websocket(&self) -> bool {
         self.plan.has_websocket()
+    }
+    #[must_use]
+    pub fn matches_websocket(&self, error_code: Option<&str>) -> bool {
+        self.plan.matches_websocket(error_code)
     }
     pub fn handle_websocket(
         &self,

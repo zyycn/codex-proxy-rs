@@ -171,10 +171,6 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
     let cancellation = lifecycle.cancellation().child_token();
     let _connection_cancellation =
         crate::middleware::websocket::CancelOnDrop(Some(cancellation.clone()));
-    // 帧中间件可能改写终态，此时不能据原始响应关闭下游连接
-    let reconnect_for_replay = !middleware
-        .as_ref()
-        .is_some_and(FrozenMiddlewarePlan::has_websocket);
     let mut connection = ResponsesWebSocketConnection::new(
         socket,
         connection_id,
@@ -182,6 +178,8 @@ async fn serve_responses_websocket(socket: Socket, session: ResponsesWebSocketSe
         middleware,
         encode_headers(&raw_headers).into(),
     );
+    // 帧中间件可能改写终态，此时不能据原始响应关闭下游连接
+    let reconnect_for_replay = !connection.has_websocket_middleware;
     let mut request_count = 0_u64;
     let mut replay = ConnectionReplaySnapshot::default();
     let mut response_control = ResponseControl::default();
@@ -466,13 +464,12 @@ fn trace_rejected_request(
 }
 
 async fn expire_connection(connection: &mut ResponsesWebSocketConnection) {
-    if connection
-        .send_text(
-            connection_limit_event(),
-            WriteContext::connection(FramePhase::ConnectionLimit),
-        )
-        .await
-        .is_ok()
+    if forward::send_error_event(
+        connection,
+        connection_limit_event(),
+        WriteContext::connection(FramePhase::ConnectionLimit),
+    )
+    .await
     {
         connection
             .close_for_connection_limit(CONNECTION_LIMIT_CLOSE_REASON)

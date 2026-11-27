@@ -146,6 +146,7 @@ impl PluginRuntime {
                         .and_then(Weak::upgrade)
                         .filter(|instance| instance.session.is_ready())
                 };
+                let mut websocket_error_codes = BTreeSet::new();
                 let result = if let Some(instance) = reusable {
                     Ok(instance)
                 } else {
@@ -154,14 +155,16 @@ impl PluginRuntime {
                         snapshot.config_revision,
                         request_body_limit,
                         confirmation.is_some_and(|confirmed| confirmed.instance_id == instance.id),
+                        &mut websocket_error_codes,
                     )
                     .await
                 };
-                (instance, identity, result)
+                (instance, identity, websocket_error_codes, result)
             },
         ))
         .buffered(super::runtime::MAXIMUM_PARALLEL_PREPARATIONS);
-        while let Some((instance, identity, result)) = preparing.next().await {
+        while let Some((instance, identity, websocket_error_codes, result)) = preparing.next().await
+        {
             match result {
                 Ok(candidate) => {
                     self.prepared_instances
@@ -228,9 +231,12 @@ impl PluginRuntime {
                     contributions
                         .policy_entries
                         .extend(crate::adapter::policy::unavailable_entries(&instance)?);
-                    contributions
-                        .middleware_entries
-                        .extend(crate::adapter::middleware::unavailable_entries(&instance)?);
+                    contributions.middleware_entries.extend(
+                        crate::adapter::middleware::unavailable_entries(
+                            &instance,
+                            &websocket_error_codes,
+                        )?,
+                    );
                     contributions.upstream_entries.extend(
                         crate::adapter::upstream_adapter::unavailable_entries(&instance)?,
                     );

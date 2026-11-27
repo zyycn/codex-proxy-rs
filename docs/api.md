@@ -3559,7 +3559,7 @@ GitHub 的 `location` 使用 `kind: "github"`、`repository: "owner/repo"`、`ta
 `frontend_authentication` 必须由管理员显式配置身份映射，也不自动创建
 
 `middleware` v6 可绑定 `http`、`websocket`、`service`、`request`、`attempt` 和 `outbound`，按声明的挂载阶段分别配置。
-`http`、`websocket` 和 `service` 不使用 Key、分组、Provider 或模型范围，这些数组必须为空；插件在处理器内匹配路径、消息或服务操作。
+`http`、`websocket` 和 `service` 不使用 Key、分组、Provider 或模型范围，这些数组必须为空。插件在处理器内匹配路径、消息或服务操作。WebSocket 插件还可通过[清单](../backend/crates/gateway-plugin/sdk/docs/manifest.md#扩展项简写)订阅指定的原生 Responses 下行错误。
 `request` 与 `routing` 支持 Key、分组和公开模型范围，Provider 范围必须为空；`attempt`、`outbound`、`upstream`、`scheduling`、`retry` 与 `observation` 可使用 Provider 范围
 
 `outbound` 准备原生 Provider 交给 transport 的请求，覆盖 OpenAI Provider 的 Responses HTTP / WS、Messages 生成与原生输入计数、Images、Search、Live 创建，以及 xAI 原生生成。

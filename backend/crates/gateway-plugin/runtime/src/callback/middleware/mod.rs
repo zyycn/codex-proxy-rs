@@ -176,7 +176,10 @@ impl MiddlewareInvocation {
         })
     }
 
-    pub(crate) fn request_parts(&self) -> Result<(String, Vec<WireHeader>, Vec<u8>), PluginFault> {
+    pub(crate) fn request_parts(
+        &self,
+        omit_body: bool,
+    ) -> Result<(String, Vec<WireHeader>, Vec<u8>), PluginFault> {
         let state = self
             .state
             .lock()
@@ -184,7 +187,11 @@ impl MiddlewareInvocation {
         Ok((
             state.original_request.protocol().to_owned(),
             wire_headers(state.original_request.headers())?,
-            state.original_request.body().to_vec(),
+            if omit_body {
+                Vec::new()
+            } else {
+                state.original_request.body().to_vec()
+            },
         ))
     }
 

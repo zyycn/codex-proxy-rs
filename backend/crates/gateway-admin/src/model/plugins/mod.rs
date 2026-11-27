@@ -220,6 +220,10 @@ pub struct PluginContribution {
     pub input_formats: Vec<String>,
     #[serde(default)]
     pub output_formats: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub omit_body_at: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub websocket_error_codes: BTreeSet<String>,
 }
 
 /// 制品清单中的展示图标；路径只用于选择已校验的包资源

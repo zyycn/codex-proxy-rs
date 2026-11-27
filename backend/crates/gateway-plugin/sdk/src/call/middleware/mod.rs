@@ -62,10 +62,13 @@ pub enum MiddlewareHeaderMutation {
 }
 
 /// `middleware.handle` 的请求头
-/// 完整正文位于 RPC binary payload
+/// 订阅要求正文时使用 RPC binary payload
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MiddlewareRequestHead {
+    /// 当前阶段按清单省略了正文；next 的 Preserve 仍传递完整原文
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub body_omitted: bool,
     pub settings_sources: serde_json::Value,
     /// 当前请求的完整有效执行设置；尚未建立可改写设置的边界使用 null
     #[serde(default)]

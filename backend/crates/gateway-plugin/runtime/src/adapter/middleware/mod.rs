@@ -34,6 +34,8 @@ pub(crate) struct MiddlewareEntry {
     mount: MiddlewareMount,
     invocation: Option<MiddlewareInvocationPorts>,
     scope: BindingScope,
+    omit_body: bool,
+    websocket_error_codes: BTreeSet<String>,
     failure_policy: PluginFailurePolicy,
 }
 
@@ -102,12 +104,21 @@ pub(crate) fn compile_entries(
     bindings
         .iter()
         .filter_map(|binding| {
-            let capability = match crate::contribution::resolve(manifest, binding) {
-                Ok(contribution) => contribution.capability,
+            let contribution = match crate::contribution::resolve(manifest, binding) {
+                Ok(contribution) => contribution,
                 Err(error) => return Some(Err(error)),
             };
-            (capability == Capability::Middleware)
-                .then(|| compile_entry(&plugin_id, instance_id, binding, Some(invocation.clone())))
+            (contribution.capability == Capability::Middleware).then(|| {
+                let declaration = contribution.declaration;
+                compile_entry(
+                    &plugin_id,
+                    instance_id,
+                    binding,
+                    Some(invocation.clone()),
+                    &declaration.omit_body_at,
+                    &declaration.websocket_error_codes,
+                )
+            })
         })
         .collect()
 }
@@ -115,6 +126,7 @@ pub(crate) fn compile_entries(
 /// 进程不可用时保留原绑定的范围与故障策略
 pub(crate) fn unavailable_entries(
     instance: &PluginInstance,
+    websocket_error_codes: &BTreeSet<String>,
 ) -> Result<Vec<MiddlewareEntry>, AdminError> {
     instance
         .bindings
@@ -134,6 +146,8 @@ pub(crate) fn unavailable_entries(
                 &instance.id,
                 binding,
                 None,
+                &BTreeSet::new(),
+                websocket_error_codes,
             )
         })
         .collect()
@@ -144,20 +158,35 @@ fn compile_entry(
     instance_id: &str,
     binding: &PluginCapabilityBinding,
     invocation: Option<MiddlewareInvocationPorts>,
+    omit_body_at: &BTreeSet<Stage>,
+    websocket_error_codes: &BTreeSet<String>,
 ) -> Result<MiddlewareEntry, AdminError> {
     let scope = BindingScope::compile(binding)?;
+    let (mount, omit_body) = match binding.stage.as_str() {
+        "http" => (MiddlewareMount::Http, false),
+        "service" => (MiddlewareMount::Service, false),
+        "websocket" => (MiddlewareMount::WebSocket, false),
+        "request" => (
+            MiddlewareMount::Request,
+            omit_body_at.contains(&Stage::Request),
+        ),
+        "attempt" => (
+            MiddlewareMount::Attempt,
+            omit_body_at.contains(&Stage::Attempt),
+        ),
+        "outbound" => (MiddlewareMount::Outbound, false),
+        _ => return Err(AdminError::invalid("插件中间件阶段无效")),
+    };
     Ok(MiddlewareEntry {
         order: binding.order,
         plugin_id: plugin_id.to_owned(),
         instance_id: instance_id.to_owned(),
-        mount: match binding.stage.as_str() {
-            "http" => MiddlewareMount::Http,
-            "service" => MiddlewareMount::Service,
-            "websocket" => MiddlewareMount::WebSocket,
-            "request" => MiddlewareMount::Request,
-            "attempt" => MiddlewareMount::Attempt,
-            "outbound" => MiddlewareMount::Outbound,
-            _ => return Err(AdminError::invalid("插件中间件阶段无效")),
+        mount,
+        omit_body,
+        websocket_error_codes: if mount == MiddlewareMount::WebSocket {
+            websocket_error_codes.clone()
+        } else {
+            BTreeSet::new()
         },
         invocation,
         scope,

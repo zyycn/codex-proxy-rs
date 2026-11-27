@@ -29,6 +29,7 @@ use tokio::{
 
 /// 协调层持有的单 owner WebSocket 连接句柄
 pub struct ResponsesWebSocketConnection {
+    pub(in super::super) has_websocket_middleware: bool,
     connection_id: Arc<str>,
     opened_at: Instant,
     cancellation: CancellationToken,
@@ -366,6 +367,9 @@ where
         .map(|context| context.extensions)
         .unwrap_or_default();
     let input_gate = Arc::new(tokio::sync::Mutex::new(()));
+    let has_websocket_middleware = middleware
+        .as_ref()
+        .is_some_and(FrozenMiddlewarePlan::has_websocket);
     let pump_task = tokio::spawn(run_pump(
         socket,
         activity.clone(),
@@ -384,6 +388,7 @@ where
         extensions,
     ));
     ResponsesWebSocketConnection {
+        has_websocket_middleware,
         connection_id,
         opened_at,
         cancellation,

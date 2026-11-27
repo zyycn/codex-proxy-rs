@@ -725,6 +725,8 @@ fn artifact(digest: &str, plugin_id: &str, version: &str) -> InstalledPluginArti
             contributes: BTreeMap::from([(
                 "middleware".into(),
                 PluginContribution {
+                    omit_body_at: Default::default(),
+                    websocket_error_codes: Default::default(),
                     id: format!("{plugin_id}.middleware"),
                     version: 1,
                     stages: vec!["request".into()],
@@ -1530,6 +1532,8 @@ async fn version_plan_preserves_observer_event_scopes_and_disabled_subscriptions
                 artifact.metadata.contributes.insert(
                     "observer".into(),
                     PluginContribution {
+                        omit_body_at: Default::default(),
+                        websocket_error_codes: Default::default(),
                         id: format!("observer-{index}"),
                         version: 1,
                         stages: vec!["observation".into()],
