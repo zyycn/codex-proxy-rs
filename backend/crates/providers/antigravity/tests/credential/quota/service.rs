@@ -195,6 +195,43 @@ async fn quota_and_catalog_refresh_use_current_global_identity() {
 }
 
 #[tokio::test]
+async fn account_plan_uses_the_desktop_description_for_every_tier() {
+    let server = MockServer::start().await;
+    upstream(&server, json!(1.0), Duration::ZERO).await;
+    let f = Fixture::new(&server.uri());
+    let account = f.store.primary().loaded.lock().unwrap().account.clone();
+    for (paid_id, description) in [
+        (Some("free-tier"), Some("Google's free plan")),
+        (Some("g1-pro-tier"), Some("Pro subscription")),
+        (Some("g1-ultra-tier"), Some("Ultra subscription")),
+        (Some("future-tier"), Some("A future plan")),
+        (Some("future-tier"), Some("Updated description")),
+        (Some("future-tier"), None),
+        (None, None),
+    ] {
+        let paid = paid_id.map(|id| {
+            json!({
+                "id": id, "name": "Different Google name", "description": description
+            })
+        });
+        Mock::given(path("/v1internal:loadCodeAssist"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "cloudaicompanionProject": "p",
+                "paidTier": paid,
+                "currentTier": {"id":"free-tier","description":"Current tier only"}
+            })))
+            .with_priority(1)
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        f.quota.refresh(account.id()).await.unwrap();
+        let view = f.quota.read(account.id()).await.unwrap();
+        assert_eq!(view.plan_type.as_deref(), paid_id.or(Some("free-tier")));
+        assert_eq!(view.plan_type_display.as_deref(), description);
+    }
+}
+
+#[tokio::test]
 async fn quota_refresh_projects_paid_plan_without_exhausting_other_models() {
     let server = MockServer::start().await;
     upstream(&server, json!(0.0), Duration::ZERO).await;

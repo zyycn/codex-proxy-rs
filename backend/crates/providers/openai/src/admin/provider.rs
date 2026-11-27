@@ -267,9 +267,9 @@ impl ProviderAdmin for OpenAiAdminProvider {
         &self.provider_kind
     }
 
-    fn plan_type_display(&self, plan_type: &str) -> String {
+    fn plan_type_display(&self, plan_type: &str) -> Option<String> {
         // Pro 三档沿用管理端短名，其余已知套餐使用 Codex /status 的名称
-        match plan_type.to_ascii_lowercase().as_str() {
+        let display = match plan_type.to_ascii_lowercase().as_str() {
             "free" => "Free",
             "go" => "Go",
             "plus" => "Plus",
@@ -288,8 +288,8 @@ impl ProviderAdmin for OpenAiAdminProvider {
             "sci" => "Academic Researchers",
             "sci_plus" => "Academic Researchers Plus",
             _ => plan_type,
-        }
-        .to_owned()
+        };
+        Some(display.to_owned())
     }
 
     async fn account_unavailable(&self, account_id: &ProviderAccountId) {

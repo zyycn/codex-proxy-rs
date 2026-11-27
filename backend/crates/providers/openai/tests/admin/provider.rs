@@ -38,7 +38,11 @@ async fn plan_display_uses_pro_short_names_and_codex_status_labels_for_other_kno
         ("SCI_PLUS", "Academic Researchers Plus"),
         ("Future_Plan", "Future_Plan"),
     ] {
-        assert_eq!(admin.plan_type_display(raw), display, "{raw}");
+        assert_eq!(
+            admin.plan_type_display(raw).as_deref(),
+            Some(display),
+            "{raw}"
+        );
     }
 }
 
@@ -1456,8 +1460,10 @@ async fn openai_admin_projects_free_plan_from_cached_quota_when_account_claims_o
         .expect("read cached free quota");
     assert_eq!(quota.plan_type.as_deref(), Some("free"));
     assert_eq!(
-        admin.plan_type_display(quota.plan_type.as_deref().expect("plan")),
-        "Free"
+        admin
+            .plan_type_display(quota.plan_type.as_deref().expect("plan"))
+            .as_deref(),
+        Some("Free")
     );
 }
 

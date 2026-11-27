@@ -1408,7 +1408,7 @@ Antigravity OAuth 账号开启后，生成请求携带 `enabledCreditTypes: ["GO
 OpenAI 主动额度刷新和正常响应携带的明确套餐会同步到账号，支持升级与降级；
 空值或 `unknown` 不覆盖已有套餐，同族泛化值（如 `team`）保留已知的具体套餐子类型。
 账号套餐为空或 `unknown` 时，后端优先用已保存的上游额度响应
-中的明确套餐值补全 `planType` 和 `planTypeDisplay`；两处均无套餐信息时才显示“未知套餐”
+中的明确套餐值补全 `planType`。账号页缺少可展示的名称时显示“未知套餐”
 
 `outboundProxyId` 绑定已保存的代理，无需出口测试成功。
 编辑时省略或 `null` 表示保持原配置，空字符串表示清除绑定并使用部署默认出口。列表和详情返回绑定的
@@ -1884,7 +1884,7 @@ Google 授权后，将浏览器中的完整 `http://localhost:8085/auth/callback
 
 其余字段记录导出时已保存的凭据和账号观测，未知值省略；`createdAt`、`updatedAt` 是本地账号时间，`accessTokenExpiresAt` 是当前 AT 的有效期。导出不触发上游刷新，已过期 AT 也按原值记录。导入使用 RT 换取新 AT 并重新验证 Google 身份与权限，套餐由上游重新发现，文件中的历史观测不覆盖验证结果。出站代理通过导入请求的 `outboundProxyId` 指定
 
-Antigravity 主动额度刷新同时读取套餐与上游模型组额度，优先采用明确的付费套餐。`free-tier`、`g1-pro-tier`、`g1-ultra-tier` 分别显示为 `FREE`、`PRO`、`ULTRA`，未知或缺失的套餐不推断为免费账号
+Antigravity 的 `planType` 取自 `paidTier.id`，没有 `paidTier` 时使用 `currentTier.id`。所有档位的展示名均取自 Google 返回的 `paidTier.description`。缺少描述时，账号页显示“未知套餐”。刷新额度后会更新描述
 
 `quota.windows` 返回上游模型组的 5 小时与周额度、已用百分比及重置时间，同组窗口共享 `limitId`，`accountWide` 为 `false`。缺失的上游百分比保持未知。网关从额度分组的成员名单与同次模型目录确定模型 ID，按各窗口重置时间与时长汇总本地请求的 `localUsage`。无匹配请求时总 Token 为 0，成员或窗口边界无法确认时 `localUsage` 为空。账号 `usage` 单独返回近一周的本地用量，分组窗口不参与整号周/月容量预测
 
@@ -3087,6 +3087,7 @@ HTTP SSE 请求可能在返回 HTTP 200 后流内失败；WebSocket 已升级时
 `retryCount` 为额外执行尝试次数之和，`retryRate` 为发生过重试的请求数占该组请求数的比例，同一请求多次重试只计一次
 
 使用记录列表和错误排查列表的 `accountPlanType` / `accountPlanTypeDisplay` 来自记录保存的账号订阅快照。
+Antigravity 请求快照只保存套餐 ID，历史记录的展示名为空。
 账号维度诊断使用该账号最近请求的订阅快照，并通过 `authenticationKind` 返回同一请求的认证类型快照；未保存的字段为 `null`，非账号维度的认证类型为 `null`
 
 管理端请求列表及 Dashboard 最近请求中的 `accountNotes` 来自请求保存的账号备注快照，未保存时为 `null`

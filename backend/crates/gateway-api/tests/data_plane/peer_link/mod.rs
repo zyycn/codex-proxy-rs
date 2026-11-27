@@ -135,6 +135,7 @@ async fn fixture(sharing: ClientPeerSharing, plaintext: &str) -> (AdminTestFixtu
         paused_windows: Vec::new(),
         upstream: None,
         plan_type: Some("pro".into()),
+        plan_type_display: None,
         observed_at: Some(now),
         refresh_token_expires_at: None,
         windows: vec![ProviderQuotaWindow {

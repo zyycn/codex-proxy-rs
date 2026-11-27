@@ -76,14 +76,8 @@ impl ProviderAdmin for AntigravityAdmin {
             ..Default::default()
         }
     }
-    fn plan_type_display(&self, plan: &str) -> String {
-        match plan {
-            "free-tier" => "FREE",
-            "g1-pro-tier" => "PRO",
-            "g1-ultra-tier" => "ULTRA",
-            _ => plan,
-        }
-        .to_owned()
+    fn plan_type_display(&self, _plan: &str) -> Option<String> {
+        None
     }
     fn supported_pricing_bands(&self) -> &'static [&'static str] {
         crate::billing::SUPPORTED_PRICING_BANDS

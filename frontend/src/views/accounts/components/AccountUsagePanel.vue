@@ -25,7 +25,7 @@ const modelUsageColumns = computed(() => (defineTableColumns<AccountModelUsage>(
   {
     key: 'model',
     label: t('accounts.concurrency.model'),
-    kind: 'custom',
+    kind: 'text',
     size: 'xl',
   },
   {
@@ -152,18 +152,13 @@ const modelUsageColumns = computed(() => (defineTableColumns<AccountModelUsage>(
       </div>
 
       <div class="h-56 min-w-0 xl:h-auto xl:min-h-0 xl:flex-1 xl:basis-0">
-        <!-- 模型列按完整内容撑开，超出可视范围时沿用表格的横向滚动 -->
         <ZTable
-          class="[&_table]:table-auto [&_div:has(>_.account-usage-model)]:min-w-max"
           :columns="modelUsageColumns"
           :data="account.usage.models"
           row-key="model"
           size="small"
           :empty-text="t('accounts.usage.noModelUsageYet')"
         >
-          <template #model="{ row }">
-            <span class="account-usage-model whitespace-nowrap">{{ row.model }}</span>
-          </template>
           <template #successRateDisplay="{ row }">
             <span :class="modelSuccessRateTextClass(row.successRate)">
               {{ row.successRateDisplay }}

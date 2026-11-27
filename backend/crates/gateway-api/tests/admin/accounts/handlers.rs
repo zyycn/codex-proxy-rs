@@ -364,6 +364,7 @@ async fn account_quota_refresh_time_uses_server_clock_and_deployment_timezone() 
                 paused_windows: Vec::new(),
                 upstream: None,
                 plan_type: None,
+                plan_type_display: None,
                 observed_at,
                 refresh_token_expires_at: None,
                 windows: Vec::new(),

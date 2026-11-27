@@ -217,6 +217,7 @@ impl PeerInfoService {
             paused_windows: Vec::new(),
             upstream: Some(info),
             plan_type: None,
+            plan_type_display: None,
             observed_at,
             refresh_token_expires_at: None,
             windows,

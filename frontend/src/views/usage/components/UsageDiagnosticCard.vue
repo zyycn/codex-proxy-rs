@@ -199,11 +199,11 @@ function diagnosticNameDisplay(name: string) {
 
         <template #accountPlanType="{ row }">
           <AccountPlanBadge
-            v-if="row.accountUpstreamPeer || row.authenticationKind === 'api_key' || row.accountPlanType"
+            v-if="row.accountUpstreamPeer || row.authenticationKind === 'api_key' || row.accountPlanTypeDisplay"
             :authentication-kind="row.authenticationKind ?? undefined"
             :upstream-peer="row.accountUpstreamPeer"
             :plan-type="row.accountPlanType"
-            :plan-type-display="row.accountPlanTypeDisplay || row.accountPlanType || ''"
+            :plan-type-display="row.accountPlanTypeDisplay || ''"
             size="sm"
           />
           <span v-else class="text-z-text-quaternary">—</span>

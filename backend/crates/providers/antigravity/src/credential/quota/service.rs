@@ -171,8 +171,13 @@ impl QuotaService {
             client.quota_summary(&material.access_token, &info.project),
         )
         .map_err(upstream)?;
+        let (tier, plan_description) = match info.paid_tier {
+            Some(paid) => (Some(paid.tier), paid.description),
+            None => (info.current_tier, None),
+        };
         let doc = Document {
-            tier: info.paid_tier.or(info.current_tier),
+            tier,
+            plan_description,
             bucket_models: super::document::bucket_models(&summary, &catalog),
             summary,
             models: catalog

@@ -280,9 +280,9 @@ pub trait ProviderAdmin: Send + Sync {
         Ok(update.map_or_else(|| current.cloned(), Clone::clone))
     }
 
-    /// 提供最终套餐展示名称；未覆盖时采用通用的大驼峰格式
-    fn plan_type_display(&self, plan_type: &str) -> String {
-        default_plan_type_display(plan_type)
+    /// 仅根据 ID 能确定的展示名称；依赖上游描述的 Provider 返回空值
+    fn plan_type_display(&self, plan_type: &str) -> Option<String> {
+        Some(default_plan_type_display(plan_type))
     }
 
     /// 账号已经由控制面提交为不可调度状态，释放 Provider 持有的账号级运行时资源
@@ -560,6 +560,13 @@ impl ProviderAdminRegistry {
     ) -> Option<String> {
         if let Some(quota) = quota {
             quota.fill_missing_plan_type(plan_type);
+            // 保留账号已知的套餐，不能给它配上另一档快照的描述
+            let quota_id = explicit_plan_type(quota.plan_type.as_deref()).map(str::trim);
+            if let Some(display) = &quota.plan_type_display
+                && quota_id.is_none_or(|id| Some(id) == plan_type.as_deref().map(str::trim))
+            {
+                return Some(display.clone());
+            }
         }
         self.plan_type_display(provider_kind, plan_type.as_deref())
     }
@@ -574,10 +581,10 @@ impl ProviderAdminRegistry {
         let provider = ProviderKind::new(provider_kind.to_owned())
             .ok()
             .and_then(|kind| self.require(&kind).ok());
-        Some(provider.map_or_else(
-            || default_plan_type_display(plan_type),
+        provider.map_or_else(
+            || Some(default_plan_type_display(plan_type)),
             |provider| provider.plan_type_display(plan_type),
-        ))
+        )
     }
 
     /// 返回所有已注册 Provider 的 Dashboard 上游身份画像
