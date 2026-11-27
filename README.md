@@ -5,7 +5,7 @@
 
 # Codex Proxy RS
 
-面向 Codex 的自托管多账号 AI 网关
+多平台自托管多账号 AI 网关
 
 [![CI](https://github.com/zyycn/codex-proxy-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/zyycn/codex-proxy-rs/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/zyycn/codex-proxy-rs?display_name=tag&style=flat-square)](https://github.com/zyycn/codex-proxy-rs/releases)
