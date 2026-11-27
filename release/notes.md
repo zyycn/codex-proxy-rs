@@ -1,34 +1,22 @@
-# v3.56.1
-
-## 协议变更与升级
-
-> [!IMPORTANT]
-> 从 v3.56.0 起，网关移除了原生协议之间的内置转换。Responses、Messages 和 GenAI 请求各走对应的上游。Chat Completions 继续适配这三种上游，支持 JSON 和流式响应。
->
->做 2API 时，跨协议转换很容易变成长期维护负担。工具调用、流式事件和会话续接各有自己的规则，有些天生就不一致，即使是相当热门的开源项目，当下也正在频繁的遇到转换问题，甚至被拖着迈不动脚。这段时间我就在想，这是不是伪需求，发展线路正不正确，客户端更新新功能，转换逻辑就得跟着修，而且虽然各家推出了各家的协议文档，但是放到客户端上总有差别，甚至要花费海量的精力去处理因此带来的问题，更别提安全性，用钦定平台都会被风控，换一个就更别说了。
->
->后续我会把精力放在原生透传和链路安全上，尽量去抹平 apikey 接入带来的风险，实现 OAuth 级别的一致，继续把 Chat Completions 到各上游的适配做稳，为什么是 Chat 呢，因为它已经是成熟非变更的协议，而且国内很多客户端也都是走 Chat。
->
->当然如果有三方 harness 声明支持平台协议，我也很愿意去花费精力去适配少量的协议差错，但是不同的是，这次转变了，不再是网关，而是客户端。
->
->有特定跨协议需求时，可以通过上游适配插件实现，插件系统完全支持。[上游适配器文档](https://github.com/zyycn/codex-proxy-rs/blob/v3.56.1/backend/crates/gateway-plugin/sdk/docs/upstream-adapters.md)
-
-- 此前用 Responses 调用 Messages API Key 账号的客户端，请切换到 `/v1/messages` 或 `/v1/chat/completions`
-- Codex 的模型列表只显示当前 Key 能通过 Responses 调用的模型。此前在 Codex 中选用 Antigravity 模型的用户，可切换到原生 GenAI 客户端或 Chat Completions
+# v3.57.0
 
 ## 新增功能
 
-- 中间件可用 `omitBodyAt` 省略指定阶段的请求正文，或用 `websocketErrorCodes` 仅订阅指定的 Responses WebSocket 下行错误
+- OpenAI 数据驻留与账号路由可在平台设置中调整，保存后对新请求生效，无需重启
+- OpenAI 连接池支持在线调整并发建连上限、建连等待时间、连接寿命、空闲回收时间和流式空闲超时
 
 ## 优化改进
 
-- Antigravity 原生 GenAI 接口支持 `x-goog-api-key` 传入网关 Client Key，桌面端和 CLI 按 Google 的菜单顺序显示当前 Key 可用的型号
-- xAI 原生 Responses 请求保留工具、推理参数和上游续接语义
+- 设置表单补充参数说明，并统一显示时间与数量单位
 
 ## 问题修复
 
-- Antigravity OAuth 账号的额度面板补上「额度点数」入口，可查看 Google AI 点数余额并设置是否自动使用
-- Codex 压缩请求从 HTTP 进入且无需 WebSocket 时，默认沿用 HTTP/SSE
-- Antigravity 刷新额度后，账号页使用 Google 返回的套餐描述
-- Antigravity 的新请求记录恢复显示请求发生时的订阅名称
-- 管理端与 Client Key 用量明细的思考档位列统一左对齐
+- Antigravity 生成与 Token 计数保留客户端的全局规则、项目规则和工具说明，平台提示词放在客户端系统指令之前
+
+## 升级须知
+
+- YAML 中的 `openai.residency`、`openai.account_routing_override` 和 `openai.ws_pool` 不再生效，升级前记录自定义值，升级后在 OpenAI 平台设置中重新保存并删除旧字段
+- 数据驻留初始化为 `us`，账号路由默认为空；需要移除数据驻留请求头时，在管理端清空该项并保存
+- OpenAI 连接池始终启用，不再支持 `ws_pool.enabled: false`；调整连接寿命与空闲回收时间只影响新建连接，已有连接沿用创建时的期限
+- 管理 API 更新设置时须提交完整的 `openaiRequestSettings` 和 `openaiWebsocketPool` 对象；调用运行设置服务的插件须更新 SDK 并重新构建
+- 未发布的 `0048`～`0050` 迁移已合并为 `0048`，从 v3.56.1 及同大版本更早正式版可正常升级；已执行原迁移的源码部署不能直接复用该数据库升级
