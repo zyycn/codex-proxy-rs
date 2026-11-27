@@ -2,7 +2,7 @@
   "settings": {
     "clientProfile": {
       "systemPrompt": "System prompt",
-      "systemPromptHint": "Replaces client system instructions · Default from {source}",
+      "systemPromptHint": "Prepended to client system instructions · Default from {source}",
       "restoreSystemPrompt": "Restore default",
       "userAgent": "User agent",
       "clientIdentitySource": "Client identity source",

@@ -2,7 +2,7 @@
   "settings": {
     "clientProfile": {
       "systemPrompt": "系統提示詞",
-      "systemPromptHint": "取代客戶端系統提示，預設來自 {source}",
+      "systemPromptHint": "前置系統提示，保留客戶端指令，預設來自 {source}",
       "restoreSystemPrompt": "恢復預設",
       "userAgent": "用戶代理",
       "clientIdentitySource": "客戶端身份來源",

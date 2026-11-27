@@ -266,7 +266,7 @@ OpenAI Provider 的 OAuth 账号使用 Responses 上游，API Key 账号通过 `
 
 CPR 在 AGY 的原生与转换入口透传未被过滤的 HTTP 扩展头，保留同名多值的原始字节。下游鉴权、Cookie、账号身份、客户端画像和 HTTP 传输头不透传；认证、项目和 UA 由所选 OAuth 账号与冻结画像生成。`X-Goog-Api-Client` 与 Gateway 的 `X-Goog-Ext-525006001-Bin` 不进入 Cloud Code 请求。`X-Goog-User-Project` 属于调用方指定的计费项目，不能覆盖所选账号的项目，见 [Google 系统参数](https://docs.cloud.google.com/apis/docs/system-parameters)
 
-Cloud Code 生成封套使用 `userAgent: "antigravity"` 与 `requestType: "agent"`，独立搜索使用 `web_search`。原生正文只局部替换配置的 `systemInstruction`、移除其蛇形别名，以及 `labels` 中 Gateway 添加的 `client`、`goog-originating-logical-product-id`、`goog-originating-service-id`。其余字段保留原始 JSON 表达与顺序，不经 Chat 或 canonical 请求重建
+Cloud Code 生成封套使用 `userAgent: "antigravity"` 与 `requestType: "agent"`，独立搜索使用 `web_search`。原生正文在 `systemInstruction.parts` 前添加配置的提示词，保留客户端原有 parts 及系统指令的其他字段，并移除 `labels` 中 Gateway 添加的 `client`、`goog-originating-logical-product-id`、`goog-originating-service-id`。系统指令也接受 `system_instruction`，两者同时提供时以 `systemInstruction` 为准，出站统一使用驼峰名称。其余字段保留原始 JSON 表达与顺序，不经 Chat 或 canonical 请求重建
 
 同账号及归属未知时保留追踪头；会话绑定或本次执行的已有账号归属明确发生切换时，CPR 清理入站或中间件带入的 `traceparent`、`tracestate`、`sentry-trace`、`baggage`。该清理作用于本次出站请求，不修改工具结果、思考签名或业务正文
 
@@ -278,7 +278,7 @@ AGY 上游计数与生成响应的 `usageMetadata.promptTokenCount` 口径不完
 
 Antigravity 模型也可通过 `/v1/chat/completions` 调用，支持 JSON 与 SSE；不接受 Responses 或 Messages 的内置跨协议调用。
 Chat 直接映射文本、图片／文档、函数与 custom 工具历史、生成参数和 JSON Schema。未知内容块或无法表达的语义返回请求错误，模型参数的实际支持范围由上游校验。
-原生入口保留工具结果和思考签名；常规生成与计数在出站时使用同一份 AGY 系统提示词配置，替换客户端系统指令，其余原生字段保持原始表达
+原生入口保留工具结果和思考签名；常规生成与计数共用上述系统指令合成规则
 
 Chat 工具多轮调用须携带完整助手输出和对应结果。Chat 只返回可读思考内容；对 Chat 历史中的工具调用使用 Google 的 `skip_thought_signature_validator` 标记，不增加服务端签名缓存。
 原生 GenAI 的真实签名仍原样回传，见 [Google 签名规则](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking/thought-signatures)
@@ -1807,7 +1807,7 @@ OAuth start 使用：
 
 Antigravity 的全局客户端设置保存在 `providerRequestProfiles.antigravity`，Key 可用 `providerRequestProfileOverrides.antigravity` 覆盖。配置使用 `client`（`desktop` 或 `cli`）、`platform`（`macos`、`linux` 或 `windows`）、`versionMode`、`clientVersion` 和 `arch`。`arch: null` 使用预设架构：macOS 为 `arm64`，Linux 与 Windows 为 `amd64`；也可显式选择 `arm64` 或 `amd64`
 
-`systemPrompt` 可在 AGY 设置中编辑，省略、`null` 或空白值使用内置默认，最长 16 KiB。默认取自已核对的 AGY CLI 1.5.15 身份模板，不包含客户端专属工具和工作区模板；选项接口返回 `defaultSystemPrompt` 与 `systemPromptSource`，客户端版本轮询不会改写它。提示词随请求画像一起冻结，原生和转换入口均用它替换客户端的系统指令
+`systemPrompt` 可在 AGY 设置中编辑，省略、`null` 或空白值使用内置默认，最长 16 KiB。默认取自已核对的 AGY CLI 1.5.15 身份模板，不包含客户端专属工具和工作区模板；选项接口返回 `defaultSystemPrompt` 与 `systemPromptSource`，客户端版本轮询不会改写它。提示词随请求画像一起冻结，原生和转换入口均将它放在客户端系统指令之前。客户端的全局规则、项目规则、工具说明及其他系统指令保持原样；未提供客户端系统指令时只使用配置提示词
 
 自动版本示例：
 

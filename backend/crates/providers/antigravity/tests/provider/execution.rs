@@ -697,6 +697,10 @@ async fn chat_direct_genai_keeps_json_sse_usage_and_releases_the_native_lease() 
     for streaming in [false, true] {
         let fixture = Fixture::new(&upstream.uri());
         let mut body = json!({"model":"fixture-model","stream":streaming,"messages":[{"role":"user","content":"hello"}],"max_completion_tokens":100,"reasoning_effort":"high","temperature":0.3,"top_p":0.8,"tools":[{"type":"function","function":{"name":"pwd","parameters":{"type":"object"}}}],"tool_choice":"required","response_format":{"type":"json_schema","json_schema":{"name":"result","schema":{"type":"object"}}}});
+        body["messages"].as_array_mut().unwrap().insert(
+            0,
+            json!({"role":"system","content":"Preserve the caller's project rules."}),
+        );
         if streaming {
             body["stream_options"] = json!({"include_usage":true});
         }
@@ -775,6 +779,10 @@ async fn chat_direct_genai_keeps_json_sse_usage_and_releases_the_native_lease() 
         assert_eq!(
             body["request"]["systemInstruction"]["parts"][0]["text"],
             "Frozen AGY prompt"
+        );
+        assert_eq!(
+            body["request"]["systemInstruction"]["parts"][1]["text"],
+            "Preserve the caller's project rules."
         );
         assert_eq!(body["request"]["generationConfig"]["maxOutputTokens"], 100);
         assert_eq!(

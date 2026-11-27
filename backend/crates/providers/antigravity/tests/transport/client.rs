@@ -78,7 +78,8 @@ async fn oauth_refresh_and_native_generate_preserve_grant_profile_and_wire_paylo
                 .as_str()
                 .unwrap()
                 .starts_with("You are Antigravity,")
-            && !system.to_string().contains("Claude Code")
+            && system["parts"][1]["text"] == "You are Claude Code."
+            && system["parts"].as_array().unwrap().len() == 2
     };
     post("/v1internal:generateContent")
         .and(received_body)

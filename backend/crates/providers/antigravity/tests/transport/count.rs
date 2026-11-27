@@ -114,6 +114,10 @@ async fn native_and_provider_count_share_identity_and_never_generate_usage() {
             sent["request"]["systemInstruction"]["parts"][0]["text"],
             "count identity"
         );
+        assert_eq!(
+            sent["request"]["systemInstruction"]["parts"][1]["text"],
+            "client identity"
+        );
         assert_eq!(sent["request"]["contents"][0]["parts"][0]["text"], "hello");
         assert_eq!(
             sent["request"]["tools"][0]["functionDeclarations"][0]["name"],
