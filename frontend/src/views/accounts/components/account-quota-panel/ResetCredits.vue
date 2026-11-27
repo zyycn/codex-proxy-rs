@@ -53,7 +53,7 @@ const {
 
 const modalTitle = computed(() => {
   if (!confirmation.value)
-    return t('accounts.quotaReset.limitReset')
+    return t('accounts.quota.quotaManagement')
   return confirmation.value.ambiguous
     ? t('accounts.quotaReset.confirmLastReset')
     : t('accounts.quotaReset.confirmResetAmount')

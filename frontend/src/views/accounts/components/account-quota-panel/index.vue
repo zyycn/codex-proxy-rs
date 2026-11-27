@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { Account } from '@/api'
 
-import { ZEmpty, ZScrollbar } from '@codex-proxy/ui'
+import { ZDialog, ZEmpty, ZScrollbar } from '@codex-proxy/ui'
 
-import { ChartNoAxesCombined, Link2, RefreshCw, UserRound } from '@lucide/vue'
+import { ChartNoAxesCombined, Link2, RefreshCw, TicketCheck, UserRound } from '@lucide/vue'
 
 import { computed, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -12,6 +12,7 @@ import { formatRelativeTime } from '@/utils/relative-time'
 import { groupedAccountQuotaWindows, orderedPanelQuotaWindows } from '../../constants'
 import AccountProfileModal from '../account-profile-modal/index.vue'
 import AccountQuotaForecastModal from '../account-quota-forecast-modal/index.vue'
+import AccountQuotaCredits from './Credits.vue'
 import AccountQuotaPanelEntry from './Entry.vue'
 import QuotaActionButton from './QuotaActionButton.vue'
 import QuotaSettings from './QuotaSettings.vue'
@@ -47,6 +48,7 @@ const quotaEntries = computed(() => {
     : windows.filter(window => !window.sourceAccountId)
   return groupedAccountQuotaWindows(orderedPanelQuotaWindows(visibleWindows))
 })
+const creditsOpen = shallowRef(false)
 const profileOpen = shallowRef(false)
 const forecastOpen = shallowRef(false)
 const hasPlanBadge = computed(() => Boolean(props.account.planType) || props.account.authenticationKind === 'api_key')
@@ -54,7 +56,7 @@ const hasForecast = computed(() => props.account.authenticationKind !== 'api_key
 const hasPersonalInfo = computed(() => props.account.capabilities.profile || props.account.capabilities.subscription)
 const needsPeerDiscovery = computed(() => props.account.upstream?.discovered === false)
 const canRefresh = computed(() => props.account.capabilities.quotaRefresh || props.account.upstream != null)
-const hasActions = computed(() => hasPersonalInfo.value || hasForecast.value || canRefresh.value || props.account.capabilities.resetCredits)
+const hasActions = computed(() => hasPersonalInfo.value || hasForecast.value || canRefresh.value || props.account.capabilities.resetCredits || props.account.capabilities.quotaCredits)
 const lastRefreshed = computed(() => {
   const { upstream, quota } = props.account
   if (upstream?.discovered && !upstream.observedAt)
@@ -109,6 +111,19 @@ watch(hasPersonalInfo, (available) => {
           @account-updated="emit('accountUpdated', $event)"
           @consumed="emit('quotaReset', $event)"
         />
+        <template v-else-if="account.capabilities.quotaCredits">
+          <QuotaActionButton
+            :label="t('accounts.quota.quotaPoints')"
+            aria-haspopup="dialog"
+            :aria-pressed="creditsOpen || undefined"
+            @click="creditsOpen = true"
+          >
+            <TicketCheck class="size-3.5" />
+          </QuotaActionButton>
+          <ZDialog v-model="creditsOpen" :title="t('accounts.quota.quotaManagement')" width="36rem">
+            <AccountQuotaCredits :key="account.id" :account="account" @account-updated="emit('accountUpdated', $event)" />
+          </ZDialog>
+        </template>
         <QuotaActionButton
           v-if="hasForecast"
           :label="t('accounts.quota.forecastWeeklyMonthlyQuota')"
