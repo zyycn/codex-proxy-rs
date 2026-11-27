@@ -12,9 +12,9 @@ pub use crate::account::scope::{
 pub use crate::identity::ProviderKind;
 pub use catalog::{
     AccountModelMetadata, AgentModelListing, ContributedModel, ContributedModelAlias,
-    ProviderCatalogGeneration, ProviderCatalogPort, ProviderCatalogUnavailable,
-    ProviderModelCapabilities, ProviderModelContent, ProviderModelDescriptor,
-    PublicModelDescriptor, ReasoningModelVariant,
+    ExecutableModelMetadata, ModelMetadataSource, ProviderCatalogGeneration, ProviderCatalogPort,
+    ProviderCatalogUnavailable, ProviderModelCapabilities, ProviderModelContent,
+    ProviderModelDescriptor, PublicModelDescriptor, ReasoningModelVariant,
 };
 pub use snapshot::RuntimeSnapshot;
 

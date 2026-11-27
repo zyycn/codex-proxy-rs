@@ -129,7 +129,9 @@ fn catalog(client: &AuthenticatedClient, agent_menu: bool) -> Result<Vec<Value>,
     let scope = client.policy().account_scope();
     let counted = snapshot.public_models_for_operation(scope, &count);
     let models = if agent_menu {
-        snapshot.agent_models_for_operation(scope, &generate)
+        crate::data_plane::antigravity::model_menu(
+            snapshot.model_metadata_for_operation(scope, &generate),
+        )
     } else {
         snapshot
             .public_models_for_operation(scope, &generate)

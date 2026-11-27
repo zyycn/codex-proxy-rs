@@ -38,37 +38,18 @@ pub struct AccountModelMetadata {
     pub max_output_tokens: Option<u64>,
 }
 
-impl ModelCapabilities {
-    pub(super) fn agent_menu_entry<'a>(
-        &'a self,
-        scope: &super::FrozenAccountScope,
-        target: &UpstreamModelId,
-        model: &'a PublicModelId,
-    ) -> Option<(usize, &'a str)> {
-        let fallback = (usize::MAX, model.as_str());
-        if self.account_metadata.is_empty() {
-            return Some(fallback);
-        }
-        self.account_metadata
-            .iter()
-            .filter(|(account, _)| scope.allows_model(account, target.as_str()))
-            .filter_map(|(_, metadata)| match &metadata.agent_listing {
-                AgentModelListing::Unspecified => Some(fallback),
-                AgentModelListing::Hidden => None,
-                AgentModelListing::Listed {
-                    order,
-                    display_name,
-                } => {
-                    let name = if model.as_str() == target.as_str() {
-                        display_name.as_str()
-                    } else {
-                        model.as_str()
-                    };
-                    Some((*order, name))
-                }
-            })
-            .min_by_key(|(order, _)| *order)
-    }
+/// 可执行公开模型及当前账号范围内的目录来源，不应用客户端展示规则
+#[derive(Debug)]
+pub struct ExecutableModelMetadata<'a> {
+    pub model: PublicModelId,
+    pub sources: Vec<ModelMetadataSource<'a>>,
+}
+
+/// 来源只暴露目标型号与元数据，不暴露账号身份；未声明账号级元数据时为 None
+#[derive(Debug)]
+pub struct ModelMetadataSource<'a> {
+    pub target: &'a UpstreamModelId,
+    pub metadata: Option<&'a AccountModelMetadata>,
 }
 
 /// 扩展集合持有的直接模型别名；执行与元数据仍归属内置 Provider

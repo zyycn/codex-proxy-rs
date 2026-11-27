@@ -196,11 +196,14 @@ async fn mock_project(upstream: &MockServer) {
 }
 
 #[tokio::test]
-async fn model_group_menu_routes_chat_and_native_generation_to_declared_members() {
+async fn catalog_metadata_and_groups_preserve_declared_members_for_generation() {
     use gateway_core::{
         engine::provider::ProviderRequest,
         operation::{GenerateRequest, Operation, ProtocolPayload},
-        routing::{ConfigRevision, ProviderModel, PublicModelId, RoutingContext, RuntimeSnapshot},
+        routing::{
+            AgentModelListing, ConfigRevision, ProviderModel, PublicModelId, RoutingContext,
+            RuntimeSnapshot,
+        },
         settings::SettingsValues,
     };
     let upstream = MockServer::start().await;
@@ -265,15 +268,31 @@ async fn model_group_menu_routes_chat_and_native_generation_to_declared_members(
         )
         .requiring_native_protocol(),
     );
-    let entries = snapshot.agent_models_for_operation(&fixture.store.account_scope(), &discovery);
+    let entries = snapshot.model_metadata_for_operation(&fixture.store.account_scope(), &discovery);
     assert_eq!(
         entries
             .iter()
-            .map(|(id, name)| (id.as_str(), name.as_str()))
+            .map(|entry| (
+                entry.model.as_str(),
+                &entry.sources[0].metadata.unwrap().agent_listing,
+            ))
             .collect::<Vec<_>>(),
         [
-            ("gemini-4-hydrogen-medium", "Hydrogen Medium"),
-            ("gemini-4-hydrogen-high", "Hydrogen High")
+            (
+                "gemini-4-hydrogen-high",
+                &AgentModelListing::Listed {
+                    order: 1,
+                    display_name: "Hydrogen High".into(),
+                }
+            ),
+            (
+                "gemini-4-hydrogen-medium",
+                &AgentModelListing::Listed {
+                    order: 0,
+                    display_name: "Hydrogen Medium".into(),
+                }
+            ),
+            ("gemini-4-hydrogen-sonar", &AgentModelListing::Hidden),
         ]
     );
     for stream in [false, true] {

@@ -333,11 +333,19 @@ fn reasoning_groups_resolve_before_account_and_group_model_policies() {
         assert!(listed.contains(&base));
         let other_only =
             Arc::new(scope.restricted_to(&BTreeSet::new(), &BTreeSet::from([other.clone()])));
-        let menu = snapshot.agent_models_for_operation(&other_only, &operation("", count));
-        assert!(
-            menu.iter()
-                .all(|(model, _)| !matches!(model.as_str(), "family-medium" | "pinned"))
-        );
+        let metadata = snapshot.model_metadata_for_operation(&other_only, &operation("", count));
+        for name in ["family-medium", "pinned"] {
+            let entry = metadata
+                .iter()
+                .find(|entry| entry.model.as_str() == name)
+                .unwrap();
+            assert_eq!(entry.sources.len(), 1);
+            assert_eq!(entry.sources[0].target.as_str(), "family-medium");
+            assert_eq!(
+                entry.sources[0].metadata.unwrap().agent_listing,
+                AgentModelListing::Hidden
+            );
+        }
         assert!(
             !snapshot
                 .public_models_for_operation(&other_only, &operation("", count))
@@ -1043,7 +1051,7 @@ struct MixedCatalog {
 
 impl ProviderCatalogPort for MixedCatalog {
     fn catalog_generations(&self) -> BTreeMap<ProviderKind, ProviderCatalogGeneration> {
-        ["openai", "xai"]
+        ["openai", "xai", "antigravity"]
             .into_iter()
             .map(|provider| {
                 (
@@ -1065,7 +1073,13 @@ impl ProviderCatalogPort for MixedCatalog {
         let model = match provider.as_str() {
             "openai" => "gpt-5.5",
             "xai" if self.xai_available => "grok-4.7",
+            "antigravity" => "gemini-model",
             _ => return Box::pin(async { Err(ProviderCatalogUnavailable) }),
+        };
+        let protocol = if provider.as_str() == "antigravity" {
+            "genai"
+        } else {
+            "openai"
         };
         Box::pin(async move {
             Ok([model, "shared-model"]
@@ -1073,7 +1087,9 @@ impl ProviderCatalogPort for MixedCatalog {
                 .map(|model| {
                     ProviderModelCapabilities::new(
                         UpstreamModelId::new(model).unwrap(),
-                        super::capabilities(),
+                        super::capabilities()
+                            .with_generation_protocol(protocol)
+                            .with_translated_generation_protocols(["chat_completions"]),
                     )
                 })
                 .collect())
@@ -1092,7 +1108,7 @@ fn mixed_catalog_snapshot_with_xai(xai_available: bool) -> gateway_core::routing
         super::settings(),
         vec![],
         vec![],
-        ["openai", "xai"]
+        ["openai", "xai", "antigravity"]
             .into_iter()
             .map(|provider| {
                 SnapshotProviderAccountFacts::new(
@@ -1794,6 +1810,60 @@ fn mixed_catalog_should_preserve_provider_order_for_shared_models() {
             .collect::<Vec<_>>(),
         ["openai", "xai"]
     );
+}
+
+#[test]
+fn mixed_catalog_keeps_protocol_constraints_for_shared_models_and_mappings() {
+    use gateway_core::operation::{GenerateRequest, Operation, ProtocolPayload};
+
+    let snapshot = mixed_catalog_snapshot();
+    let settings = snapshot
+        .settings()
+        .clone()
+        .with_model_mappings(BTreeMap::from([
+            ("alias-shared".into(), "shared-model".into()),
+            ("alias-genai".into(), "gemini-model".into()),
+        ]));
+    let snapshot = snapshot.with_settings(&settings).unwrap();
+    let scope = snapshot.all_account_scope();
+    for (protocol, shared_providers, genai_providers) in [
+        ("openai", vec!["openai", "xai"], vec![]),
+        ("genai", vec!["antigravity"], vec!["antigravity"]),
+        (
+            "chat_completions",
+            vec!["antigravity", "openai", "xai"],
+            vec!["antigravity"],
+        ),
+    ] {
+        let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(protocol, Default::default()).unwrap(),
+        ));
+        let metadata = snapshot.model_metadata_for_operation(&scope, &operation);
+        for (name, expected) in [
+            ("shared-model", &shared_providers),
+            ("alias-shared", &shared_providers),
+            ("gemini-model", &genai_providers),
+            ("alias-genai", &genai_providers),
+        ] {
+            let model = PublicModelId::new(name).unwrap();
+            let plan = snapshot.plan(&model, &operation, scope.clone(), &Default::default());
+            let actual = plan
+                .as_ref()
+                .map(|plan| {
+                    plan.candidates()
+                        .iter()
+                        .map(|candidate| candidate.provider().as_str())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            assert_eq!(&actual, expected, "{protocol}: {name}");
+            assert_eq!(
+                metadata.iter().any(|entry| entry.model == model),
+                !expected.is_empty(),
+                "{protocol}: {name}"
+            );
+        }
+    }
 }
 
 #[test]

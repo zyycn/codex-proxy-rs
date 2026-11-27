@@ -144,3 +144,161 @@ async fn google_api_key_reads_the_same_authorized_catalog() {
         assert_eq!(actual, expected);
     }
 }
+
+fn agent_menu_client() -> AuthenticatedClient {
+    use gateway_core::{
+        account::ProviderAccountId,
+        routing::{AccountModelMetadata, AgentModelListing},
+    };
+    use std::collections::BTreeMap;
+    let source = super::super::authenticated_client_for_provider(KEY, "antigravity");
+    let provider = ProviderKind::new("antigravity").unwrap();
+    let account = ProviderAccountId::new("acct_api_test").unwrap();
+    let private = ProviderAccountId::new("acct_private").unwrap();
+    let listed = |order, name: &str| AccountModelMetadata {
+        agent_listing: AgentModelListing::Listed {
+            order,
+            display_name: name.into(),
+        },
+        ..Default::default()
+    };
+    let capabilities = ModelCapabilities::new(
+        [OperationKind::Generate, OperationKind::CountTokens].into(),
+        None,
+    )
+    .with_generation_protocol(GENAI_PROTOCOL);
+    let models = [
+        (
+            "model-z",
+            BTreeMap::from([(account.clone(), listed(0, "Zed"))]),
+        ),
+        (
+            "model-b",
+            BTreeMap::from([(account.clone(), listed(1, "Bee"))]),
+        ),
+        (
+            "model-hidden",
+            BTreeMap::from([
+                (
+                    account.clone(),
+                    AccountModelMetadata {
+                        agent_listing: AgentModelListing::Hidden,
+                        ..Default::default()
+                    },
+                ),
+                (private, listed(0, "Private Model")),
+            ]),
+        ),
+        (
+            "model-fallback",
+            BTreeMap::from([(account, AccountModelMetadata::default())]),
+        ),
+        ("model-plain", BTreeMap::new()),
+    ]
+    .into_iter()
+    .map(|(id, metadata)| {
+        ProviderModel::new(
+            provider.clone(),
+            UpstreamModelId::new(id).unwrap(),
+            capabilities.clone().with_account_metadata(metadata),
+        )
+    })
+    .collect();
+    let settings = source
+        .snapshot()
+        .settings()
+        .clone()
+        .with_model_mappings(BTreeMap::from([("alias-z".into(), "model-z".into())]));
+    let snapshot = RuntimeSnapshot::new(
+        ConfigRevision::new(1).unwrap(),
+        settings,
+        vec![provider],
+        models,
+        vec![source.policy().clone()],
+    )
+    .unwrap();
+    super::super::authenticated_client_from_snapshot(KEY, snapshot)
+}
+
+async fn agent_query(router: &axum::Router, path: &str, user_agent: &str) -> Value {
+    let response = router
+        .clone()
+        .oneshot(
+            Request::get(path)
+                .header("authorization", format!("Bearer {KEY}"))
+                .header("user-agent", user_agent)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn agent_menus_apply_scoped_visibility_names_and_order_before_pagination() {
+    let router = api_router(Arc::new(Execution {
+        client: Some(agent_menu_client()),
+        ..Default::default()
+    }))
+    .await;
+    for agent in ["antigravity/hub/2.34.0", "antigravity/cli/1.5.17"] {
+        let first = agent_query(&router, "/v1beta/models?pageSize=2", agent).await;
+        let names = |body: &Value| {
+            body["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|model| (model["name"].clone(), model["displayName"].clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&first),
+            vec![
+                (json!("models/alias-z"), json!("alias-z")),
+                (json!("models/model-z"), json!("Zed")),
+            ]
+        );
+        let second = agent_query(
+            &router,
+            &format!(
+                "/v1beta/models?pageSize=2&pageToken={}",
+                first["nextPageToken"].as_str().unwrap()
+            ),
+            agent,
+        )
+        .await;
+        assert_eq!(
+            names(&second),
+            vec![
+                (json!("models/model-b"), json!("Bee")),
+                (json!("models/model-fallback"), json!("model-fallback")),
+            ]
+        );
+        let third = agent_query(
+            &router,
+            &format!(
+                "/v1beta/models?pageSize=2&pageToken={}",
+                second["nextPageToken"].as_str().unwrap()
+            ),
+            agent,
+        )
+        .await;
+        assert_eq!(
+            names(&third),
+            vec![(json!("models/model-plain"), json!("model-plain"))]
+        );
+        assert!(third.get("nextPageToken").is_none());
+        let detail = agent_query(&router, "/v1beta/models/model-hidden", agent).await;
+        assert_eq!(detail["name"], "models/model-hidden");
+    }
+    let (_, ordinary) = query(&router, "/v1beta/models", true).await;
+    assert!(
+        ordinary["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["name"] == "models/model-hidden")
+    );
+}

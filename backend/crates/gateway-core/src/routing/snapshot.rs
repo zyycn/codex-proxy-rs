@@ -1116,13 +1116,13 @@ impl RuntimeSnapshot {
             .collect()
     }
 
-    /// 聊天客户端用可直接路由的具体型号重建档位菜单，来源必须在当前 Key 的账号范围内
+    /// 复用执行计划筛选目录来源，保留元数据供客户端投影，不按展示状态裁剪模型
     #[must_use]
-    pub fn agent_models_for_operation(
+    pub fn model_metadata_for_operation(
         &self,
         scope: &Arc<FrozenAccountScope>,
         operation: &Operation,
-    ) -> Vec<(PublicModelId, String)> {
+    ) -> Vec<super::ExecutableModelMetadata<'_>> {
         let mut entries = Vec::new();
         for model in self.public_models_for_scope(scope) {
             let Ok(plan) = self.plan(
@@ -1133,28 +1133,39 @@ impl RuntimeSnapshot {
             ) else {
                 continue;
             };
-            let entry = plan
-                .candidates()
-                .iter()
-                .filter_map(|candidate| {
-                    let target = candidate.upstream_model()?;
-                    let capabilities = self
-                        .provider_models
+            let mut sources = Vec::new();
+            for candidate in plan.candidates() {
+                let Some((target, capabilities)) = candidate.upstream_model().and_then(|target| {
+                    self.provider_models
                         .get(candidate.provider())?
-                        .get(target)?;
-                    capabilities.agent_menu_entry(candidate.account_scope(), target, &model)
-                })
-                .min_by_key(|(order, _)| *order);
-            if let Some((order, name)) = entry {
-                let name = name.to_owned();
-                entries.push((order, model, name));
+                        .get_key_value(target)
+                }) else {
+                    continue;
+                };
+                if capabilities.account_metadata.is_empty() {
+                    sources.push(super::ModelMetadataSource {
+                        target,
+                        metadata: None,
+                    });
+                } else {
+                    sources.extend(capabilities.account_metadata.iter().filter_map(
+                        |(account, metadata)| {
+                            candidate
+                                .account_scope()
+                                .allows_model(account, target.as_str())
+                                .then_some(super::ModelMetadataSource {
+                                    target,
+                                    metadata: Some(metadata),
+                                })
+                        },
+                    ));
+                }
+            }
+            if !sources.is_empty() {
+                entries.push(super::ExecutableModelMetadata { model, sources });
             }
         }
-        entries.sort_unstable();
         entries
-            .into_iter()
-            .map(|(_, id, name)| (id, name))
-            .collect()
     }
 
     /// 合并冻结账号范围内实际存在 Provider 的公开模型画像

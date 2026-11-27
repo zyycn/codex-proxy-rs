@@ -585,7 +585,7 @@ Antigravity 的 `credential/catalog` 持有与凭据版本绑定的项目与模�
 
 - `responses`、`chat_completions`、`messages`、`genai` 拥有各自协议入口，生成与计数共用 `generation` 的执行交付、取消传播和连接生命周期
 - `codex` 拥有客户端模型目录投影、Guardian、子代理与轮次身份解析，Responses 入口组合这些扩展；Responses 同时服务 OpenAI 与 xAI，不绑定某个 Provider
-- `antigravity` 识别桌面端和 CLI 对聊天选模目录的请求，GenAI 入口按账号声明的展示名和顺序返回可执行型号
+- `antigravity` 识别桌面端和 CLI 的选模请求，负责菜单隐藏、显示名和排序；Core 只按执行计划与账号权限提供目录来源，GenAI 入口负责协议输出与分页
 - `openai` 聚合当前绑定 OpenAI Provider 的 Images、独立 Search 与 Live 入口，通过 Core 端口调用上游能力；账号认证和上游传输仍由 Provider 拥有
 - `headers` 拥有数据面入站业务头与响应头边界，各协议直接使用公共头处理；跨协议 HTTP 规则和重试时间解析归 `gateway-protocol/http`，OpenAI/Codex 私有响应头分类归 `gateway-protocol/openai/headers`，API 出口组合两者
 
