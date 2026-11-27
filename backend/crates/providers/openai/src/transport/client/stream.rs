@@ -636,6 +636,7 @@ impl CodexBackendClient {
                 } = *route;
                 let exchange = execute_prepared_response_create_request_stream(
                     &websocket_request,
+                    request.generate(),
                     prepared,
                     context.response_control.cloned(),
                     context

@@ -535,8 +535,8 @@ Responses 的安装身份通过正文 `client_metadata` 及 turn metadata 发送
 上述过滤描述原生转发；已信任插件的显式 header 改写可以覆盖账号与画像生成的默认头，
 不按认证或会话字段名称拦截，边界见 [SDK 请求中间件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)
 
-Responses 透传客户端的 `x-codex-exclude`，由上游按请求省略响应字段。上游 WebSocket 只在握手时读取该头，
-因此连接池按最终握手中的全部同名头值复用连接。头值变化时，依赖原连接的精确续接需要客户端重放完整历史
+Responses 透传 `x-codex-exclude` 和 `x-codex-exclude-stream-fields`，分别协商省略的响应字段和流事件字段。
+上游 WebSocket 在握手时读取两组头值。复用连接要求两组值分别匹配。任一组变化时，依赖原连接的精确续接需要客户端重放完整历史
 
 Responses 也不透传 `x-stainless-*`、`Origin`、`Referer`、`sec-ch-ua*` 和 `sec-fetch-*`
 携带的下游 SDK/浏览器环境或页面来源。过滤规则适用于所有下游客户端，与 User-Agent 无关；

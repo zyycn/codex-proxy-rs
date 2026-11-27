@@ -4,12 +4,21 @@ use super::*;
 
 #[tokio::test]
 async fn reused_websocket_should_keep_response_metadata_scoped_to_each_exchange() {
+    for warmup_rounds in [0, 2] {
+        assert_metadata_on_pooled_connection(warmup_rounds).await;
+    }
+}
+
+async fn assert_metadata_on_pooled_connection(warmup_rounds: usize) {
     const ROUNDS: usize = 40;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut websocket = accept_codex_test_websocket_with(stream, |_, response| {
+            response
+                .headers_mut()
+                .insert("x-models-etag", "opening".parse().unwrap());
             for value in ["first", "second"] {
                 response
                     .headers_mut()
@@ -54,6 +63,14 @@ async fn reused_websocket_should_keep_response_metadata_scoped_to_each_exchange(
     )
     .with_websocket_pool(pool);
     let request = pooled_websocket_request("conversation-response-metadata");
+    let mut body = codex_request_body("gpt-test", "be brief", vec![]);
+    body.insert("generate".to_owned(), json!(false));
+    body.insert("store".to_owned(), json!(false));
+    let mut warmup = CodexResponsesRequest::from_body(body);
+    warmup.use_websocket = true;
+    warmup
+        .local_conversation_id
+        .clone_from(&request.local_conversation_id);
     let expected = CodexResponseMetadata {
         client_headers: vec![
             (
@@ -68,18 +85,40 @@ async fn reused_websocket_should_keep_response_metadata_scoped_to_each_exchange(
         ..CodexResponseMetadata::default()
     };
 
+    let mut first_generation = expected.clone();
+    first_generation.models_etag = Some("opening".into());
+    first_generation.client_headers.insert(
+        0,
+        (
+            "x-models-etag".into(),
+            bytes::Bytes::from_static(b"opening"),
+        ),
+    );
+
     for round in 0..ROUNDS {
         let response = timeout(
             Duration::from_secs(10),
             backend.create_response(
-                &request,
+                if round < warmup_rounds {
+                    &warmup
+                } else {
+                    &request
+                },
                 request_context("req_response_metadata", Some("chatgpt-account")),
             ),
         )
         .await
         .expect("response within timeout")
         .expect("response should complete on the same socket");
-        assert_eq!(response.response_metadata, expected, "exchange {round}");
+        let expected_metadata = if round == warmup_rounds {
+            &first_generation
+        } else {
+            &expected
+        };
+        assert_eq!(
+            &response.response_metadata, expected_metadata,
+            "exchange {round}"
+        );
         assert!(response.body.contains(&format!("etag-{round}")));
         assert_eq!(response.turn_state, Some(format!("turn-{round}")));
         if round > 0 {

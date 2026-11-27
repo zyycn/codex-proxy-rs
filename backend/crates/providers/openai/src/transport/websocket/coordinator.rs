@@ -609,6 +609,7 @@ fn continuation_unavailable(
 
 pub(crate) async fn execute_prepared_response_create_request_stream(
     request: &CodexWebSocketRequest,
+    generate: bool,
     prepared: PreparedWebSocket,
     response_control: Option<gateway_core::engine::response_control::ResponseControl>,
     trace: gateway_core::diagnostics::TraceContext,
@@ -683,6 +684,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
     let connection_local_available = lease.is_some() && !websocket.is_closed();
     let pool_return = lease.map(|lease| WebSocketStreamPoolReturn {
         lease,
+        reused,
         created_at,
         lifetime,
         continuation,
@@ -693,7 +695,7 @@ pub(crate) async fn execute_prepared_response_create_request_stream(
         websocket,
         metadata,
         pool_return,
-        reused,
+        generate,
         stream_idle_timeout,
         trace,
         response_control,

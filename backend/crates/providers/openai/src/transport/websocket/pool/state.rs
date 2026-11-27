@@ -24,7 +24,7 @@ pub struct CodexWebSocketPoolKey {
     account_id: String,
     conversation_id: String,
     connection_profile: String,
-    response_exclusions: Vec<String>,
+    response_exclusions: Vec<(&'static str, String)>,
     installation_id: Option<String>,
     routing_affinity_id: Option<Uuid>,
     fedramp_routing: bool,
@@ -69,11 +69,15 @@ impl CodexWebSocketPoolKey {
 
     /// 上游只在握手时读取响应排除项，精确续接也必须匹配最终发出的头值
     pub(crate) fn with_response_exclusions(mut self, opening_headers: &[(String, String)]) -> Self {
-        self.response_exclusions = opening_headers
-            .iter()
-            .filter(|(name, _)| name.eq_ignore_ascii_case("x-codex-exclude"))
-            .map(|(_, value)| value.clone())
-            .collect();
+        self.response_exclusions.clear();
+        for header in ["x-codex-exclude", "x-codex-exclude-stream-fields"] {
+            self.response_exclusions.extend(
+                opening_headers
+                    .iter()
+                    .filter(|(name, _)| name.eq_ignore_ascii_case(header))
+                    .map(|(_, value)| (header, value.clone())),
+            );
+        }
         self
     }
 
@@ -135,9 +139,11 @@ impl CodexWebSocketPoolKey {
             routing_affinity.as_str(),
         ];
         short_sha256(
-            parts
-                .into_iter()
-                .chain(self.response_exclusions.iter().map(String::as_str)),
+            parts.into_iter().chain(
+                self.response_exclusions
+                    .iter()
+                    .flat_map(|(name, value)| [*name, value.as_str()]),
+            ),
         )
     }
 

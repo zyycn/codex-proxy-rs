@@ -2049,12 +2049,22 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_unknown_resp
 
 #[tokio::test]
 async fn response_exclusions_bind_websocket_reuse_and_exact_continuation() {
-    const EXCLUSIONS: &[&[&str]] = &[
+    const RESPONSE: &str = "x-codex-exclude";
+    const STREAM: &str = "x-codex-exclude-stream-fields";
+    const EXCLUSIONS: &[&[(&str, &str)]] = &[
         &[],
-        &["tools,usage.attribution"],
-        &["tools"],
-        &["tools", "usage.attribution"],
-        &[""],
+        &[(STREAM, "delta.sequence_number")],
+        &[(RESPONSE, "tools"), (STREAM, "delta.sequence_number")],
+        &[
+            (RESPONSE, "tools"),
+            (STREAM, "delta.sequence_number"),
+            (STREAM, "reasoning.added.encrypted_content"),
+        ],
+        &[(RESPONSE, "tools")],
+        &[(RESPONSE, "tools"), (RESPONSE, "usage.attribution")],
+        &[(RESPONSE, "tools,usage.attribution")],
+        &[(RESPONSE, "")],
+        &[(STREAM, "")],
     ];
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -2063,13 +2073,18 @@ async fn response_exclusions_bind_websocket_reuse_and_exact_continuation() {
         for (index, &expected) in EXCLUSIONS.iter().enumerate() {
             let (stream, _) = listener.accept().await.unwrap();
             let mut socket = accept_codex_test_websocket_with(stream, |request, _| {
-                let actual: Vec<_> = request
-                    .headers()
-                    .get_all("x-codex-exclude")
-                    .iter()
-                    .map(|value| value.to_str().unwrap())
-                    .collect();
-                assert_eq!(actual, expected);
+                for header in [RESPONSE, STREAM] {
+                    let actual = request
+                        .headers()
+                        .get_all(header)
+                        .iter()
+                        .map(|value| value.to_str().unwrap());
+                    let values = expected
+                        .iter()
+                        .filter(|(name, _)| *name == header)
+                        .map(|(_, value)| *value);
+                    assert!(actual.eq(values), "{header} in opening {index}");
+                }
             })
             .await;
             handlers.spawn(async move {
@@ -2098,14 +2113,10 @@ async fn response_exclusions_bind_websocket_reuse_and_exact_continuation() {
         test_wire_profile(),
     )
     .with_websocket_pool(pool.clone());
-    let make_request = |values: &[&str]| {
-        let headers: Vec<_> = values
-            .iter()
-            .map(|&value| ("x-codex-exclude", value))
-            .collect();
+    let make_request = |headers: &[(&str, &str)]| {
         let mut request = encode_request_with_headers(
             codex_request_body("gpt-test", "be brief", vec![]),
-            &headers,
+            headers,
         );
         request.local_conversation_id = Some("shared-session".into());
         request.use_websocket = true;
