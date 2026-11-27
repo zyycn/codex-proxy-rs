@@ -1,21 +1,23 @@
-# v3.55.3
+# v3.56.0
 
 ## 新增功能
 
-- Codex 模型选择器按基础模型展示 Antigravity 模型，可选择当前密钥有权使用的思考档位，并读取模型说明与上下文大小
-- Responses 显式选择联网搜索时，使用账号授权的搜索模型；JSON 和流式响应均可返回来源链接与正文引用
+- Antigravity OAuth 账号可开启自动使用 Google AI 点数，套餐额度耗尽后按上游余额和最低使用门槛继续生成
+- 中间件可用 `omitBodyAt` 省略指定阶段的请求正文，或用 `websocketErrorCodes` 仅订阅指定的 Responses WebSocket 下行错误
 
 ## 优化改进
 
-- 展开账号额度面板直接读取已保存的数据；健康账号在成功生成后按需刷新，距上次刷新至少 5 分钟
-- 加宽用量明细中的模型列，方便查看完整型号
+- Chat Completions 直接适配 Responses、Messages 和 GenAI 上游，支持 JSON 和 SSE
+- Antigravity 原生 GenAI 接口支持 `x-goog-api-key` 传入网关 Client Key，桌面端和 CLI 按 Google 的菜单顺序显示当前 Key 可用的型号
+- xAI 原生 Responses 请求保留工具、推理参数和上游续接语义
 
 ## 问题修复
 
-- 修复 Codex 开启可选网页搜索后，Gemini 编码请求因同时携带函数工具而返回 400 的问题
-- Antigravity 按模型分组显示 5 小时和周额度窗口内的本地 Token 消耗，已知窗口内无用量时显示 0
-- Gemini 原生流式响应在等待数据时保持静默，首帧前失败时保留 HTTP 错误状态
+- Codex 压缩请求从 HTTP 进入且无需 WebSocket 时，默认沿用 HTTP/SSE
+- Antigravity 刷新额度后，账号页使用 Google 返回的套餐描述
+- 管理端与 Client Key 用量明细的思考档位列统一左对齐
 
 ## 升级须知
 
-- 已有账号刷新模型目录后可使用专用联网搜索；下次刷新额度时会补齐上游可识别的窗口成员
+- 原生 Responses、Messages 和 GenAI 请求只匹配支持对应协议的上游；此前通过 Responses 调用已导入的 Messages API Key 账号时，请切换到 `/v1/messages` 或 `/v1/chat/completions`
+- Codex 模型目录只显示当前 Key 可通过 Responses 执行的模型，Antigravity 模型请通过原生 GenAI 客户端或 Chat Completions 调用
