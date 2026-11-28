@@ -1,4 +1,4 @@
-import type { UsageErrorFacts } from '@/api'
+import type { UsageErrorFacts, UsageListRecord } from '@/api'
 import { t } from '@/i18n'
 
 export type UsageErrorRecord = UsageErrorFacts & {
@@ -56,12 +56,33 @@ export function usageSendStateText(state: string) {
   }
 }
 
-export function usageErrorReason(code: string | null): string | undefined {
+export function usageErrorSummary(record: UsageListRecord): string {
+  const reason = usageErrorReason(record.errorKind) || usageErrorReason(record.errorCode)
+  if (reason)
+    return reason
+
+  // 历史限流分类也包含额度耗尽，只有记录了具体原因才能进一步区分
+  if (record.errorKind === 'rate_limited' || record.errorCode === 'rate_limited')
+    return t('usage.error.requestLimited')
+
+  const upstreamClosed = record.websocketCloseCode != null
+    || record.upstreamConnectionExitReason === 'upstream_close'
+    || record.upstreamConnectionExitReason === 'normal_close'
+  if (record.errorKind === 'upstream_unavailable' && upstreamClosed)
+    return t('usage.error.upstreamConnectionClosed')
+
+  return record.errorMessage || record.errorCode || record.errorKind
+    || (record.websocketCloseCode != null
+      ? `WS ${record.websocketCloseCode}`
+      : t('usage.error.noDetails'))
+}
+
+function usageErrorReason(code: string | null): string | undefined {
   switch (code) {
     case 'no_available_provider': return t('usage.error.noAvailableProvider')
     case 'account_pool_quota_exhausted':
     case 'quota_exhausted': return t('accounts.fields.quotaExhausted')
-    case 'rate_limited':
+    case 'upstream_capacity_unavailable': return t('usage.error.upstreamCapacityUnavailable')
     case 'rate_limit_exceeded': return t('common.errors.rateLimited')
     case 'invalid_request': return t('common.errors.invalidParameters')
     case 'upstream_connection_closed': return t('usage.error.upstreamConnectionClosed')

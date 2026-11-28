@@ -267,6 +267,8 @@
     "error": {
       "noDetails": "未记录具体错误消息",
       "noAvailableProvider": "此请求没有可用的上游服务",
+      "requestLimited": "请求受限",
+      "upstreamCapacityUnavailable": "上游模型容量不足",
       "upstreamConnectionClosed": "上游连接已关闭",
       "queueTimeout": "请求排队超时",
       "queueFull": "请求队列已满",

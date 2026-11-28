@@ -267,6 +267,8 @@
     "error": {
       "noDetails": "No detailed error message was recorded",
       "noAvailableProvider": "No upstream provider is available for this request.",
+      "requestLimited": "Request limited",
+      "upstreamCapacityUnavailable": "Upstream model is at capacity",
       "upstreamConnectionClosed": "Upstream connection closed",
       "queueTimeout": "Request queue wait timed out",
       "queueFull": "Request queue is full",

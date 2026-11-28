@@ -4,7 +4,7 @@ import { ZPopover, ZScrollbar } from '@codex-proxy/ui'
 import { CheckCheck, CircleHelp, Network, Server, Unplug } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { usageErrorOrigin, usageErrorReason, usageErrorTitle } from './errors'
+import { usageErrorOrigin, usageErrorSummary, usageErrorTitle } from './errors'
 
 const props = defineProps<{ record: UsageListRecord }>()
 
@@ -20,14 +20,7 @@ const code = computed(() => props.record.errorCode || props.record.errorKind)
 const errorType = computed(() => props.record.errorKind || props.record.errorCode)
 const origin = computed(() => usageErrorOrigin(props.record))
 const outcome = computed(() => usageErrorTitle(props.record))
-const summary = computed(() => {
-  const reason = props.record.errorMessage || usageErrorReason(code.value) || code.value
-  if (reason)
-    return reason
-  return props.record.websocketCloseCode != null
-    ? `WS ${props.record.websocketCloseCode}`
-    : t('usage.error.noDetails')
-})
+const summary = computed(() => usageErrorSummary(props.record))
 </script>
 
 <template>
@@ -64,11 +57,11 @@ const summary = computed(() => {
           :aria-describedby="open ? id : undefined"
           translate="no"
         >
-          <template v-if="errorType && errorType !== summary">
-            <code class="font-mono text-z-xs text-z-text-secondary">{{ errorType }}</code>
-            <span class="mx-1 text-z-text-secondary" aria-hidden="true">·</span>
-          </template>
           <span>{{ summary }}</span>
+          <template v-if="errorType && errorType !== summary">
+            <span class="mx-1 text-z-text-secondary" aria-hidden="true">·</span>
+            <code class="font-mono text-z-xs text-z-text-secondary">{{ errorType }}</code>
+          </template>
         </button>
       </template>
       <ZScrollbar class="w-max max-w-[min(26rem,calc(100vw-2rem))]" max-height="min(18rem, 60dvh)">
