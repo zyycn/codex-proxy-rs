@@ -42,13 +42,15 @@ impl PeerInfoService {
             .clone()
     }
 
-    pub(super) fn refresh_due(&self, connection: &UpstreamConnection) -> bool {
-        if self.unsupported(connection) {
-            return false;
-        }
-        let state = self.refresh_state(connection);
-        state.try_lock().is_ok_and(|state| {
-            state.connection != *connection || Instant::now() >= state.next_attempt
+    pub(super) fn retry_ready(&self, connection: &UpstreamConnection) -> bool {
+        let attempts = self
+            .attempts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        attempts.get(&connection.account_id).is_none_or(|slot| {
+            slot.try_lock().is_ok_and(|state| {
+                state.connection != *connection || Instant::now() >= state.next_attempt
+            })
         })
     }
 
@@ -128,8 +130,9 @@ impl PeerInfoService {
             };
         let now = SystemTime::now();
         let failure = result.as_ref().err().copied();
+        let min_delay = Duration::from_secs(15);
         let delay = match failure {
-            None => Duration::from_secs(240 + stable_jitter(id.as_str())),
+            None => min_delay,
             Some(UpstreamInfoFailure::Unauthorized | UpstreamInfoFailure::SharingDisabled) => {
                 Duration::from_secs(1800)
             }
@@ -138,8 +141,7 @@ impl PeerInfoService {
         .max(retry_after.unwrap_or_default());
         state.next_attempt = Instant::now() + delay;
         // 管理员修复授权后可主动复核，不继承自动重试的长退避，仍遵守上游限流
-        state.manual_after =
-            Instant::now() + Duration::from_secs(15).max(retry_after.unwrap_or_default());
+        state.manual_after = Instant::now() + min_delay.max(retry_after.unwrap_or_default());
         state.last_error = failure;
         let document = match result {
             Ok(document) => Some(document),
@@ -212,12 +214,6 @@ impl PeerInfoService {
             .map_err(store_error)
             .map(Option::unwrap_or_default)
     }
-}
-
-fn stable_jitter(id: &str) -> u64 {
-    id.bytes().fold(0_u64, |hash, byte| {
-        hash.wrapping_mul(31).wrapping_add(u64::from(byte))
-    }) % 60
 }
 
 fn refresh_error(error: UpstreamInfoFailure) -> Option<ProviderAdminError> {

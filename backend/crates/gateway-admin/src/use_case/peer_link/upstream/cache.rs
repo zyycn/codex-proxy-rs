@@ -11,10 +11,10 @@ use gateway_core::{
 use std::{collections::BTreeMap, sync::Arc, time::SystemTime};
 
 impl PeerInfoService {
-    pub(crate) async fn read_summaries(
+    pub(super) async fn hydrate(
         &self,
         connections: &[UpstreamConnection],
-    ) -> Result<Vec<(UpstreamConnection, ProviderQuota)>, StoreError> {
+    ) -> Result<(), StoreError> {
         let _refresh = self.cache_refresh.lock().await;
         let ids = connections
             .iter()
@@ -78,6 +78,15 @@ impl PeerInfoService {
                 self.cache(connection, observation);
             }
         }
+        Ok(())
+    }
+
+    pub(crate) async fn read_summaries(
+        &self,
+        connections: &[UpstreamConnection],
+    ) -> Result<Vec<(UpstreamConnection, ProviderQuota)>, StoreError> {
+        self.hydrate(connections).await?;
+        let now = SystemTime::now();
         let summaries = {
             let observations = self
                 .observations

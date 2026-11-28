@@ -252,21 +252,21 @@ export function quotaWindowDetails(window: AccountQuotaWindow) {
     amountDisplay,
     consumptionTokens && `${consumptionTokens} ${t('common.units.tokens')}`,
   ].filter(Boolean).join(' · ')
+  const observationDisplay = window.observedAtDisplay && window.observedAtDisplay !== '—'
+    ? t('accounts.upstream.observedAt', { time: window.observedAtDisplay })
+    : ''
+  const quotaValueDisplay = window.amount && window.usedPercent === null
+    ? window.amount.totalDisplay
+    : window.usedPercentDisplay
   return {
     stale: window.stale,
-    observationDisplay: [
-      window.stale
-        ? t('accounts.upstream.stale')
-        : null,
-      window.observedAtDisplay && window.observedAtDisplay !== '—'
-        ? t('accounts.upstream.observedAt', { time: window.observedAtDisplay })
-        : null,
-    ].filter(Boolean).join(' · '),
+    observationDisplay,
+    quotaValueDisplay,
+    ariaValueText: window.stale && observationDisplay
+      ? `${quotaValueDisplay} · ${observationDisplay}`
+      : quotaValueDisplay,
     localUsageDisplay: tokenDisplay,
     amountUsedDisplay: amountDisplay,
-    quotaValueDisplay: window.amount && window.usedPercent === null
-      ? window.amount.totalDisplay
-      : window.usedPercentDisplay,
     consumptionDisplay: consumption || (window.amount ? null : '—'),
     resetAtDisplay: window.amount && window.resetAtDisplay === '—'
       ? t('accounts.upstream.startsOnNextUse')

@@ -2,7 +2,6 @@
 import type { AccountQuotaWindow } from '@/api'
 
 import { computed } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { quotaWindowLabel, quotaWindowPresentation } from '@/components/account-usage-window/presenter'
 
 const props = withDefaults(defineProps<{
@@ -12,7 +11,6 @@ const props = withDefaults(defineProps<{
 }>(), {
   showPercentage: true,
 })
-const { t } = useI18n({ useScope: 'global' })
 
 const windowItems = computed(() => props.windows.map(window => ({
   key: window.key,
@@ -64,7 +62,7 @@ const trackGridStyle = computed(() => ({
         aria-valuemin="0"
         aria-valuemax="100"
         :aria-valuenow="item.stale ? undefined : item.usedPercent ?? undefined"
-        :aria-valuetext="item.stale ? t('accounts.upstream.stale') : item.usedPercentDisplay"
+        :aria-valuetext="item.usedPercentDisplay"
       >
         <div
           class="h-full rounded-full transition-[width,background-color] duration-200 motion-reduce:transition-none"

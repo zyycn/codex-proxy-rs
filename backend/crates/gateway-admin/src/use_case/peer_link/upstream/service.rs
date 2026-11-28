@@ -12,7 +12,8 @@ use futures::{StreamExt as _, stream};
 use gateway_core::{
     account::{
         LoadedCredential, ProviderAccount, ProviderAccountId, ProviderAccountStore,
-        UpstreamConnection, UpstreamInfoFailure, UpstreamInfoSource, UpstreamSchedulingSignal,
+        QuotaObservationVersion, UpstreamConnection, UpstreamInfoFailure, UpstreamInfoSource,
+        UpstreamSchedulingSignal,
     },
     error::{StoreError, StoreErrorKind},
     routing::ProviderKind,
@@ -22,11 +23,12 @@ use gateway_protocol::peer::PeerLink;
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{Arc, Mutex, RwLock},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 use tokio::sync::Semaphore;
 
 const REFRESH_CONCURRENCY: usize = 4;
+const REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 pub(super) struct CachedObservation {
     pub connection: UpstreamConnection,
@@ -209,56 +211,35 @@ impl PeerInfoService {
             if context.cancellation().is_cancelled() {
                 break;
             }
-            let accounts = match self.accounts.list_for_provider(provider, false).await {
+            let mut accounts = match self.accounts.list_for_provider(provider, false).await {
                 Ok(accounts) => accounts,
                 Err(error) => {
                     failure.get_or_insert(error);
                     continue;
                 }
             };
-            let connections = accounts
-                .iter()
-                .filter(|account| self.supported(account))
-                .map(UpstreamConnection::for_account)
-                .collect::<Vec<_>>();
-            active.extend(
-                connections
-                    .iter()
-                    .map(|connection| connection.account_id.clone()),
-            );
-            let connections = {
+            accounts.retain(|account| self.supported(account));
+            active.extend(accounts.iter().map(|account| account.id().clone()));
+            if accounts.is_empty() {
+                continue;
+            }
+            let batch = {
                 let mut cursors = self
                     .cursors
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let offset = cursors.entry(provider.clone()).or_default();
-                if *offset >= connections.len() {
+                if *offset >= accounts.len() {
                     *offset = 0;
                 }
-                let batch = connections
-                    .iter()
-                    .skip(*offset)
-                    .take(100)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                *offset += batch.len();
+                let end = (*offset + 100).min(accounts.len());
+                let batch = &accounts[*offset..end];
+                *offset = end;
                 batch
             };
-            if let Err(error) = self.read_summaries(&connections).await {
+            if let Err(error) = self.refresh_batch(batch).await {
                 failure.get_or_insert(error);
-                continue;
             }
-            // 每轮有界并发，运行期到期记录在请求开始时预留，取消后可按普通重试恢复
-            let pending = connections
-                .into_iter()
-                .filter(|connection| self.refresh_due(connection))
-                .take(100)
-                .collect::<Vec<_>>();
-            stream::iter(pending).map(|connection| async move {
-                if let Err(error) = self.refresh(&connection.account_id, false).await {
-                    tracing::warn!(account_id = %connection.account_id, error = %error, "Upstream quota refresh failed");
-                }
-            }).buffer_unordered(REFRESH_CONCURRENCY).collect::<Vec<_>>().await;
         }
         // 查询失败时保留该轮无法核对的账号，避免错误风暴清空所有节流记录
         if failure.is_none() && !context.cancellation().is_cancelled() {
@@ -278,6 +259,74 @@ impl PeerInfoService {
             .collect::<Vec<_>>();
         drop(removed);
         failure.map_or(Ok(()), Err)
+    }
+
+    async fn refresh_batch(&self, accounts: &[ProviderAccount]) -> Result<(), StoreError> {
+        let connections: Vec<_> = accounts
+            .iter()
+            .map(UpstreamConnection::for_account)
+            .collect();
+        self.hydrate(&connections).await?;
+        let now = SystemTime::now();
+        let mut due = Vec::new();
+        let mut stale = Vec::new();
+        {
+            let observations = self
+                .observations
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for (account, connection) in accounts.iter().zip(connections) {
+                let cached = observations
+                    .get(account.id())
+                    .filter(|c| c.connection == connection);
+                if cached
+                    .is_some_and(|c| c.stored_failure == Some(UpstreamInfoFailure::Unsupported))
+                    || !self.retry_ready(&connection)
+                {
+                    continue;
+                }
+                // 只有成功识别的快照参与惰性刷新，授权失败等识别记录仍按退避复查
+                let Some(observed_at) = cached
+                    .filter(|c| c.summary.is_some())
+                    .and_then(|c| c.observed_at)
+                else {
+                    due.push(connection.account_id);
+                    continue;
+                };
+                let aged = now.duration_since(observed_at).unwrap_or_default() >= REFRESH_INTERVAL;
+                let quota = account.quota();
+                if quota.is_exhausted() {
+                    // 已在重置后查过但未获恢复证据时，等下一个复查周期
+                    if quota.exhaustion_refresh_due(now, REFRESH_INTERVAL)
+                        && (aged || quota.reset_at().is_some_and(|reset| observed_at < reset))
+                    {
+                        due.push(connection.account_id);
+                    }
+                } else if aged {
+                    stale.push(QuotaObservationVersion {
+                        account_id: connection.account_id,
+                        credential_revision: connection.credential_revision,
+                        observed_at,
+                    });
+                }
+            }
+        }
+        // 用量查询失败只影响正常账号，首查与耗尽复查仍可执行
+        let mut outcome = Ok(());
+        if !stale.is_empty() {
+            match self.accounts.accounts_used_since_quota(&stale).await {
+                Ok(active) => due.extend(active),
+                Err(error) => outcome = Err(error),
+            }
+        }
+        stream::iter(due)
+            .for_each_concurrent(REFRESH_CONCURRENCY, |id| async move {
+                if let Err(error) = self.refresh(&id, false).await {
+                    tracing::warn!(account_id = %id, error = %error, "Upstream quota refresh failed");
+                }
+            })
+            .await;
+        outcome
     }
 }
 

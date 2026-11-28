@@ -48,9 +48,92 @@ async fn unsupported_detection_survives_restart_until_manual_rediscovery() {
     let discovered = restarted.service().refresh_quota(&id).await.unwrap();
     assert!(discovered.upstream.unwrap().discovered);
     assert_eq!(transport.requests.load(Ordering::SeqCst), 2);
-    tokio::time::advance(Duration::from_secs(360)).await;
-    cycle(&resumed_worker).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn healthy_peer_refresh_requires_generation_after_an_aged_local_snapshot() {
+    let (mut bundle, accounts, transport, id) = fixture(UpstreamInfoFailure::Unavailable);
+    *transport.failure.lock().unwrap() = None;
+    cycle(&worker(&mut bundle)).await;
+    let initial = accounts.records.lock().unwrap()[&id].observed_at;
+
+    let mut restarted = initialize(accounts.clone(), transport.clone());
+    let worker = worker(&mut restarted);
+    accounts
+        .last_generation
+        .lock()
+        .unwrap()
+        .insert(id.clone(), initial + Duration::from_secs(1));
+    cycle(&worker).await;
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
+    assert!(
+        restarted
+            .scheduling_source()
+            .is_peer(&accounts.accounts.lock().unwrap()[0])
+    );
+
+    let old = initial - Duration::from_secs(600);
+    accounts
+        .records
+        .lock()
+        .unwrap()
+        .get_mut(&id)
+        .unwrap()
+        .observed_at = old;
+    accounts
+        .last_generation
+        .lock()
+        .unwrap()
+        .insert(id.clone(), old);
+    cycle(&worker).await;
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
+
+    accounts
+        .last_generation
+        .lock()
+        .unwrap()
+        .insert(id.clone(), old + Duration::from_secs(1));
+    cycle(&worker).await;
+    tokio::time::advance(Duration::from_secs(600)).await;
+    cycle(&worker).await;
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 2);
+    restarted.service().refresh_quota(&id).await.unwrap();
     assert_eq!(transport.requests.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn exhausted_peer_rechecks_at_reset_or_after_five_minutes_without_usage() {
+    let (mut bundle, accounts, transport, id) = fixture(UpstreamInfoFailure::Unavailable);
+    *transport.failure.lock().unwrap() = None;
+    let worker = worker(&mut bundle);
+    cycle(&worker).await;
+    let now = SystemTime::now();
+    let old = now - Duration::from_secs(600);
+    let account = accounts.accounts.lock().unwrap()[0].clone();
+    for (exhausted_at, reset_at, expected) in [
+        (old, Some(now + Duration::from_secs(600)), 1),
+        (old, Some(now), 2),
+        (now, None, 2),
+        (old, None, 3),
+    ] {
+        accounts
+            .records
+            .lock()
+            .unwrap()
+            .get_mut(&id)
+            .unwrap()
+            .observed_at = old;
+        accounts.accounts.lock().unwrap()[0] = account.clone().with_account_facts(
+            true,
+            CredentialState::Ready,
+            QuotaState::exhausted(QuotaEvidence::ProviderDenied, exhausted_at, reset_at),
+            None,
+            None,
+        );
+        tokio::time::advance(Duration::from_secs(30)).await;
+        cycle(&worker).await;
+        assert_eq!(transport.requests.load(Ordering::SeqCst), expected);
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -382,12 +465,12 @@ fn fixture(
     let accounts = Arc::new(TestAccounts {
         accounts: Mutex::new(vec![record]),
         records: Mutex::default(),
+        last_generation: Mutex::default(),
         failed_provider: None,
     });
     let transport = Arc::new(DetectionTransport {
         requests: AtomicUsize::new(0),
         failure: Mutex::new(Some(failure.into())),
-        success: TestTransport(Mutex::default()),
     });
     (
         initialize(accounts.clone(), transport.clone()),
@@ -432,15 +515,14 @@ async fn cycle(worker: &WorkerRegistration) {
 struct DetectionTransport {
     requests: AtomicUsize,
     failure: Mutex<Option<PeerFetchFailure>>,
-    success: TestTransport,
 }
 
 #[async_trait]
 impl PeerTransport for DetectionTransport {
     async fn fetch(
         &self,
-        account: &ProviderAccount,
-        connection: &PeerConnection,
+        _account: &ProviderAccount,
+        _connection: &PeerConnection,
     ) -> Result<Vec<u8>, PeerFetchFailure> {
         self.requests.fetch_add(1, Ordering::SeqCst);
         if let Some(failure) = self.failure.lock().unwrap().as_ref() {
@@ -449,6 +531,6 @@ impl PeerTransport for DetectionTransport {
                 retry_after: failure.retry_after,
             });
         }
-        self.success.fetch(account, connection).await
+        Ok(peer_snapshot(true))
     }
 }

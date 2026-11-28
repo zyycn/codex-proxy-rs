@@ -49,6 +49,7 @@ async fn manual_and_periodic_refreshes_share_capacity_and_release_it_after_failu
     let accounts = Arc::new(TestAccounts {
         accounts: Mutex::new(records.clone()),
         records: Mutex::default(),
+        last_generation: Mutex::default(),
         failed_provider: None,
     });
     let transport = Arc::new(GatedTransport::new());
@@ -113,6 +114,7 @@ async fn queued_refresh_reads_current_account_after_capacity_becomes_available()
     let accounts = Arc::new(TestAccounts {
         accounts: Mutex::new(records.clone()),
         records: Mutex::default(),
+        last_generation: Mutex::default(),
         failed_provider: None,
     });
     let transport = Arc::new(GatedTransport::new());
@@ -232,6 +234,7 @@ async fn discovery_uses_provider_capabilities_and_publishes_neutral_signals() {
                 account("acct_native", "xai", "oauth"),
             ]),
             records: Mutex::default(),
+            last_generation: Mutex::default(),
             failed_provider,
         });
         let transport = Arc::new(TestTransport(Mutex::new(Vec::new())));
@@ -329,6 +332,7 @@ async fn account_edits_preserve_observation_and_refresh_budget_until_connection_
     let accounts = Arc::new(TestAccounts {
         accounts: Mutex::new(vec![initial.clone()]),
         records: Mutex::default(),
+        last_generation: Mutex::default(),
         failed_provider: None,
     });
     let transport = Arc::new(TestTransport(Mutex::new(Vec::new())));
@@ -403,22 +407,29 @@ impl PeerTransport for TestTransport {
             .lock()
             .unwrap()
             .push(account.id().as_str().to_owned());
-        let now = Utc::now();
-        Ok(serde_json::to_vec(&serde_json::json!({
-            "object":"cpr.peer", "schema_version":3,
-            "observed_at":now.to_rfc3339(),
-            "expires_at":(now + chrono::Duration::minutes(5)).to_rfc3339(),
-            "capabilities":["key_usage"],
-            "usage":{"status":"available","observed_at":now.to_rfc3339(),"data":{"unit":"USD","allowed":false,
-                "windows":[{"key":"daily","total":"1","used":"1","remaining":"0","reset_at":(now + chrono::Duration::days(1)).to_rfc3339()}]}},
-            "models":[]
-        })).unwrap())
+        Ok(peer_snapshot(false))
     }
+}
+
+fn peer_snapshot(allowed: bool) -> Vec<u8> {
+    let now = Utc::now();
+    let (used, remaining) = if allowed { ("0", "1") } else { ("1", "0") };
+    serde_json::to_vec(&serde_json::json!({
+        "object":"cpr.peer", "schema_version":3,
+        "observed_at":now.to_rfc3339(),
+        "expires_at":(now + chrono::Duration::minutes(5)).to_rfc3339(),
+        "capabilities":["key_usage", "key_limits"],
+        "key_limits":{"max_concurrency":4},
+        "usage":{"status":"available","observed_at":now.to_rfc3339(),"data":{"unit":"USD","allowed":allowed,
+            "windows":[{"key":"daily","total":"1","used":used,"remaining":remaining,"reset_at":(now + chrono::Duration::days(1)).to_rfc3339()}]}},
+        "models":[]
+    })).unwrap()
 }
 
 struct TestAccounts {
     accounts: Mutex<Vec<ProviderAccount>>,
     records: Mutex<BTreeMap<ProviderAccountId, QuotaObservation>>,
+    last_generation: Mutex<BTreeMap<ProviderAccountId, SystemTime>>,
     failed_provider: Option<&'static str>,
 }
 
@@ -549,6 +560,22 @@ impl ProviderAccountStore for TestAccounts {
             .filter_map(|id| stored.get(id).cloned())
             .collect())
     }
+    async fn accounts_used_since_quota(
+        &self,
+        snapshots: &[QuotaObservationVersion],
+    ) -> Result<Vec<ProviderAccountId>, StoreError> {
+        let completed = self.last_generation.lock().unwrap();
+        Ok(snapshots
+            .iter()
+            .filter(|s| {
+                completed
+                    .get(&s.account_id)
+                    .is_some_and(|at| *at > s.observed_at)
+            })
+            .map(|s| s.account_id.clone())
+            .collect())
+    }
+
     async fn compare_and_swap_quota(
         &self,
         observation: QuotaObservation,

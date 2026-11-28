@@ -661,7 +661,6 @@
       "startsOnNextUse": "Starts on next use",
       "link": "CPR Link",
       "observedAt": "Updated {time}",
-      "stale": "Data expired",
       "unauthorized": "Upstream access denied",
       "sharingDisabled": "Upstream sharing is disabled",
       "unsupported": "Upstream does not support CPR Link",

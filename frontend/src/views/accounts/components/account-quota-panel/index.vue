@@ -69,8 +69,8 @@ const lastRefreshed = computed(() => {
       })
     : undefined
 })
-const refreshTitle = computed(() => props.account.upstream?.stale && props.account.upstream.observedAt
-  ? `${props.account.upstream.observedAtDisplay} · ${t('accounts.upstream.stale')}`
+const refreshTitle = computed(() => props.account.upstream?.observedAt
+  ? props.account.upstream.observedAtDisplay
   : lastRefreshed.value)
 watch(hasPersonalInfo, (available) => {
   if (!available)

@@ -23,13 +23,18 @@ fn peer_document() -> Value {
     })
 }
 
-async fn exhaust_account(accounts: &MemoryAccountStore, id: &ProviderAccountId, at: SystemTime) {
+async fn exhaust_account(
+    accounts: &MemoryAccountStore,
+    id: &ProviderAccountId,
+    at: SystemTime,
+    reset_at: Option<SystemTime>,
+) {
     let account = accounts.account(id.as_str()).unwrap();
     accounts
         .apply_quota_access(QuotaAccessChange {
             account_id: id.clone(),
             expected_revision: account.revision(),
-            state: QuotaState::exhausted(QuotaEvidence::UsageLimitReached, at, None),
+            state: QuotaState::exhausted(QuotaEvidence::UsageLimitReached, at, reset_at),
         })
         .await
         .unwrap();
@@ -63,7 +68,7 @@ async fn peer_sync_restores_exhausted_accounts_only_from_current_key_budget_fact
         let server = MockServer::start().await;
         let (mut bundle, accounts, _, id, _config) = fixture(&server).await;
         let exhausted_at = SystemTime::now() - Duration::from_secs(60);
-        exhaust_account(&accounts, &id, exhausted_at).await;
+        exhaust_account(&accounts, &id, exhausted_at, None).await;
         let mut document = peer_document();
         let older = DateTime::<Utc>::from(exhausted_at - Duration::from_secs(1)).to_rfc3339();
         match case {
@@ -190,7 +195,13 @@ async fn peer_sync_restores_exhausted_accounts_only_from_current_key_budget_fact
 async fn peer_sync_cannot_clear_an_exhaustion_recorded_while_the_request_is_in_flight() {
     let server = MockServer::start().await;
     let (mut bundle, accounts, _, id, _config) = fixture(&server).await;
-    exhaust_account(&accounts, &id, SystemTime::now() - Duration::from_secs(60)).await;
+    exhaust_account(
+        &accounts,
+        &id,
+        SystemTime::now() - Duration::from_secs(60),
+        None,
+    )
+    .await;
     let mut document = peer_document();
     // 上游时钟略快时也必须按本地请求开始时间保护并发失败
     let future = (Utc::now() + chrono::Duration::seconds(10)).to_rfc3339();
@@ -211,7 +222,7 @@ async fn peer_sync_cannot_clear_an_exhaustion_recorded_while_the_request_is_in_f
     });
     wait_for_request(&server).await;
     let failed_at = SystemTime::now();
-    exhaust_account(&accounts, &id, failed_at).await;
+    exhaust_account(&accounts, &id, failed_at, None).await;
     running.await.unwrap();
     let account = accounts.account(id.as_str()).unwrap();
     assert_eq!(
@@ -634,10 +645,12 @@ async fn transient_failure_preserves_observation_and_revocation_erases_it() {
         .respond_with(ResponseTemplate::new(200).set_body_json(peer_document()))
         .mount(&server)
         .await;
-    let (mut bundle, _, _store, id, _config) = fixture(&server).await;
+    let (mut bundle, accounts, _store, id, _config) = fixture(&server).await;
     let worker = worker(&mut bundle);
     cycle(&worker).await;
     let observed_at = quota(&bundle, &id).await.observed_at;
+    let reset = SystemTime::now();
+    exhaust_account(&accounts, &id, reset, Some(reset)).await;
     server.reset().await;
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(503))
@@ -801,10 +814,12 @@ async fn invalid_or_redirected_responses_never_replace_the_last_valid_snapshot()
         .respond_with(ResponseTemplate::new(200).set_body_json(peer_document()))
         .mount(&server)
         .await;
-    let (mut bundle, _, _store, id, _config) = fixture(&server).await;
+    let (mut bundle, accounts, _store, id, _config) = fixture(&server).await;
     let worker = worker(&mut bundle);
     cycle(&worker).await;
     let observed_at = quota(&bundle, &id).await.observed_at;
+    let reset = SystemTime::now();
+    exhaust_account(&accounts, &id, reset, Some(reset)).await;
     let mut wrong_schema = peer_document();
     wrong_schema["schema_version"] = json!(2);
     let mut wrong_object = peer_document();
@@ -1207,7 +1222,7 @@ async fn ordinary_api_upstreams_persist_detection_without_changing_quota_access(
         .mount(&server)
         .await;
     let (mut bundle, accounts, store, id, config) = fixture(&server).await;
-    exhaust_account(&accounts, &id, SystemTime::now()).await;
+    exhaust_account(&accounts, &id, SystemTime::now(), None).await;
     let worker = worker(&mut bundle);
     cycle(&worker).await;
     cycle(&worker).await;

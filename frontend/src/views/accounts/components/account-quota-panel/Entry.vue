@@ -129,7 +129,7 @@ const items = computed(() => props.windows.map((window) => {
             aria-valuemin="0"
             aria-valuemax="100"
             :aria-valuenow="item.stale ? undefined : item.usedPercent ?? undefined"
-            :aria-valuetext="item.stale ? `${item.quotaValueDisplay} · ${item.observationDisplay}` : item.quotaValueDisplay"
+            :aria-valuetext="item.ariaValueText"
           >
             <div
               class="h-full rounded-full transition-[width,background-color] duration-200 motion-reduce:transition-none"

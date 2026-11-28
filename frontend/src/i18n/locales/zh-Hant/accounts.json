@@ -661,7 +661,6 @@
       "startsOnNextUse": "下次使用時開啟",
       "link": "CPR 互聯",
       "observedAt": "{time}更新",
-      "stale": "資料已過期",
       "unauthorized": "上游未授權",
       "sharingDisabled": "上游已關閉互聯共享",
       "unsupported": "上游暫不支援互聯",
