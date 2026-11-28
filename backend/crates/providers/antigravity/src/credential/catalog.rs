@@ -197,7 +197,7 @@ impl CatalogService {
             [OperationKind::Generate, OperationKind::CountTokens].into(),
             None,
         )
-        .with_dedicated_web_search(search_models)
+        .with_native_web_search_helper("gemini-3.1-flash-lite-preview", search_models)
         .with_generation_protocol(gateway_protocol::genai::GENAI_PROTOCOL)
         .with_translated_generation_protocols([gateway_protocol::chat_completions::CHAT_PROTOCOL])
         .with_upstream_feature_validation();

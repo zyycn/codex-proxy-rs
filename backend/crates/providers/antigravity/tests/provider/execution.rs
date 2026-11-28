@@ -960,7 +960,7 @@ async fn search_snapshot(fixture: &Fixture) -> gateway_core::routing::RuntimeSna
 }
 
 #[tokio::test]
-async fn native_search_resolves_groups_and_preserves_explicit_models_and_grounding() {
+async fn native_search_routes_the_client_helper_and_groups_and_preserves_grounding() {
     use gateway_core::{
         engine::provider::ProviderRequest,
         operation::{GenerateRequest, Operation, ProtocolPayload},
@@ -995,22 +995,35 @@ async fn native_search_resolves_groups_and_preserves_explicit_models_and_groundi
     };
     let grounded = json!({"candidates":[{"content":{"parts":[{"text":"Found"}]},"finishReason":"STOP",
         "groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://example.org/source"}}]}}]});
-    for (requested, target, kind) in [
-        ("family", "search-only", "web_search"),
-        ("family-low", "family-low", "agent"),
+    let cli_body = json!({
+        "contents": body["contents"],
+        "systemInstruction":{"parts":[{"text":"Search the web"}]},
+        "generationConfig":{}, "tools":[{"googleSearch":{}}]
+    });
+    for (requested, target, kind, body) in [
+        (
+            "gemini-3.1-flash-lite-preview",
+            "search-only",
+            "web_search",
+            &cli_body,
+        ),
+        ("family", "search-only", "web_search", &body),
+        ("family-low", "family-low", "agent", &body),
     ] {
-        let op = operation(&body, false);
+        let op = operation(body, false);
         let route = plan(requested, &op).unwrap();
         let [candidate] = route.candidates() else {
             panic!("one eligible target")
         };
-        Mock::given(path("/v1internal:generateContent"))
+        let _upstream = Mock::given(path("/v1internal:generateContent"))
             .and(body_partial_json(
-                json!({"model":target,"requestType":kind,"request":body}),
+                json!({"model":target,"requestType":kind,"request":{
+                    "contents":body["contents"],"tools":body["tools"],"generationConfig":body["generationConfig"]
+                }}),
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"response":grounded})))
             .expect(1)
-            .mount(&server)
+            .mount_as_scoped(&server)
             .await;
         let events = fixture
             .provider
@@ -1043,13 +1056,42 @@ async fn native_search_resolves_groups_and_preserves_explicit_models_and_groundi
     explicit["generationConfig"]["thinkingConfig"] = json!({"thinkingLevel":"UNSUPPORTED"});
     for op in [
         operation(&body, true),
+        operation(&json!({"contents":body["contents"]}), false),
         operation(&mixed, false),
         operation(&explicit, false),
     ] {
         assert!(matches!(
+            plan("gemini-3.1-flash-lite-preview", &op),
+            Err(RoutingError::ModelNotFound { .. })
+        ));
+        assert!(matches!(
             plan("family", &op),
             Err(RoutingError::InvalidReasoningVariant)
         ));
+    }
+    let helper = PublicModelId::new("gemini-3.1-flash-lite-preview").unwrap();
+    let op = operation(&body, false);
+    for target in ["family-low", "missing-mapped-model"] {
+        let settings = snapshot
+            .settings()
+            .clone()
+            .with_model_mappings([(helper.as_str().to_owned(), target.to_owned())].into());
+        let result = snapshot.with_settings(&settings).unwrap().plan(
+            &helper,
+            &op,
+            fixture.store.account_scope(),
+            &RoutingContext::default(),
+        );
+        if target == "family-low" {
+            let route = result.unwrap();
+            assert_eq!(
+                route.candidates()[0].upstream_model().unwrap().as_str(),
+                target
+            );
+            assert!(!route.candidates()[0].uses_dedicated_web_search());
+        } else {
+            assert!(matches!(result, Err(RoutingError::ModelNotFound { .. })));
+        }
     }
     server.verify().await;
 }
