@@ -93,6 +93,49 @@ impl fmt::Debug for PlaintextClientApiKey {
     }
 }
 
+/// 密钥可用的绝对时间范围，包含起点、不包含终点
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClientKeyValidity {
+    pub starts_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ClientKeyValidityStatus {
+    Scheduled,
+    Active,
+    Expired,
+}
+
+impl ClientKeyValidity {
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        match (self.starts_at, self.expires_at) {
+            (None, None) => true,
+            (Some(start), Some(end)) => start < end,
+            _ => false,
+        }
+    }
+
+    #[must_use]
+    pub fn status_at(self, now: chrono::DateTime<chrono::Utc>) -> ClientKeyValidityStatus {
+        if self.expires_at.is_some_and(|end| now >= end) {
+            ClientKeyValidityStatus::Expired
+        } else if self.starts_at.is_some_and(|start| now < start) {
+            ClientKeyValidityStatus::Scheduled
+        } else {
+            ClientKeyValidityStatus::Active
+        }
+    }
+
+    #[must_use]
+    pub fn is_active(self) -> bool {
+        self.status_at(chrono::Utc::now()) == ClientKeyValidityStatus::Active
+    }
+}
+
 /// 零表示对应维度不额外限制
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -122,6 +165,7 @@ pub struct ClientSettings {
 /// 从 `client_api_keys` 冻结的公开准入事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientPolicy {
+    validity: ClientKeyValidity,
     peer_sharing: ClientPeerSharing,
     name_snapshot: Option<String>,
     defaults: Arc<ClientSettings>,
@@ -168,6 +212,7 @@ impl ClientPolicy {
         limits: RateLimits,
     ) -> Self {
         Self {
+            validity: ClientKeyValidity::default(),
             peer_sharing: ClientPeerSharing::default(),
             name_snapshot: None,
             defaults: Arc::new(ClientSettings {
@@ -181,6 +226,12 @@ impl ClientPolicy {
             enabled,
             limits,
         }
+    }
+
+    #[must_use]
+    pub const fn with_validity(mut self, validity: ClientKeyValidity) -> Self {
+        self.validity = validity;
+        self
     }
 
     #[must_use]
@@ -233,17 +284,21 @@ impl ClientPolicy {
         self.limits
     }
 
-    /// 禁用的 Key 不接受新请求
+    /// 每次准入按当前时间检查冻结的有效期
     ///
     /// # Errors
     ///
-    /// Key 已禁用时返回稳定拒绝原因
+    /// Key 已禁用或不在有效期内时返回拒绝原因
     pub fn authorize(&self) -> Result<(), PolicyError> {
-        if self.enabled {
+        if !self.enabled {
+            Err(PolicyError::Denied {
+                reason: "client API key is disabled",
+            })
+        } else if self.validity.is_active() {
             Ok(())
         } else {
             Err(PolicyError::Denied {
-                reason: "client API key is disabled",
+                reason: "client API key is outside its validity period",
             })
         }
     }

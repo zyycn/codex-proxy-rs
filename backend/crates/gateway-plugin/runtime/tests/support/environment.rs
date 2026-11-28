@@ -158,6 +158,7 @@ impl Environment {
             .client_keys()
             .create_client_key(
                 NewClientKey {
+                    validity: Default::default(),
                     peer_sharing: Default::default(),
                     request_profile_overrides: BTreeMap::new(),
                     id: ClientApiKeyId::new(id).unwrap(),

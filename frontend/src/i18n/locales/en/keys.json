@@ -1,5 +1,19 @@
 {
   "keys": {
+    "validity": {
+      "noExpiry": "No expiry",
+      "timeLimited": "Time-limited",
+      "label": "Key validity",
+      "startsAt": "Starts at",
+      "expiresAt": "Expires at",
+      "startDate": "Start date",
+      "endDate": "End date",
+      "week": "7 days",
+      "month": "30 days",
+      "invalidRange": "Expiry must be after the start time",
+      "scheduled": "Scheduled",
+      "expired": "Expired"
+    },
     "configuration": {
       "platform": "Platform",
       "toggleWebSocket": "Switch WebSocket configuration",
@@ -69,7 +83,7 @@
       "dailyQuota": "Daily quota",
       "weeklyQuota": "Weekly quota",
       "keyQuotaReset": "Key quota reset",
-      "description": "Clear spending for the selected period, the reset date is set again on the next request",
+      "description": "Clear spending for the selected periods and start them again now",
       "targetKey": "Target key",
       "resetScope": "Reset scope",
       "currentlyUsed": "Currently used",
@@ -93,9 +107,9 @@
     "editor": {
       "description": "Set API key details, account groups, and usage limits",
       "namePlaceholder": "For example: Production",
-      "labelOptional": "Label (optional)",
+      "label": "Label",
       "forExampleBackendService": "For example: backend service",
-      "customKeyOptional": "Custom Key (optional)",
+      "customKey": "Custom Key",
       "keyPlaceholder": "Leave blank to generate a key",
       "upstreamIdentity": "Upstream identity",
       "dailyLimit": "Daily limit",

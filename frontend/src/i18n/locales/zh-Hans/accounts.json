@@ -353,7 +353,7 @@
       "batchImport": "批量导入",
       "selectAccountPlatform": "选择账号平台",
       "accountPlatform": "账号平台",
-      "maximumWordsOptional": "最多 500 字，可不填",
+      "notesPlaceholder": "最多 500 字",
       "namePlaceholder": "留空保留原名称，仅单账号导入生效",
       "copyAccount": "复制账号",
       "accountCopied": "账号已复制",

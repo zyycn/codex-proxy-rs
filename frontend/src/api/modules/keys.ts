@@ -13,7 +13,16 @@ export interface ApiKeyPeerSharing {
   sharePlans: boolean
 }
 
+export interface ApiKeyValidity {
+  startsAt: string | null
+  expiresAt: string | null
+}
+
 export interface ApiKey {
+  validity: ApiKeyValidity
+  validityStatus: 'scheduled' | 'active' | 'expired'
+  startsAtDisplay: string | null
+  expiresAtDisplay: string | null
   peerSharing: ApiKeyPeerSharing
   providerRequestProfileOverrides: ProviderRequestProfiles
 
@@ -75,6 +84,7 @@ interface ApiKeyListParams {
 }
 
 export interface ApiKeyWriteParam {
+  validity?: ApiKeyValidity
   peerSharing: ApiKeyPeerSharing
   name: string
   label: string | null
@@ -120,7 +130,7 @@ export function createApiKey(data: ApiKeyCreateParam) {
   })
 }
 
-export interface ApiKeyBatchChanges extends Partial<Omit<ApiKeyWriteParam, 'name' | 'label' | 'peerSharing'>> {
+export interface ApiKeyBatchChanges extends Partial<Omit<ApiKeyWriteParam, 'name' | 'label' | 'peerSharing' | 'validity'>> {
   enabled?: boolean
   peerSharing?: Partial<ApiKeyPeerSharing>
   providerRequestProfileOverrides?: ProviderRequestProfileUpdates

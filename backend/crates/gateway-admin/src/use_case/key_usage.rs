@@ -137,7 +137,7 @@ impl KeyUsageService for DefaultKeyUsageService {
         self.keys
             .get_client_key(id)
             .await
-            .map(|key| key.filter(|key| key.enabled).map(|key| key.budget))
+            .map(|key| key.filter(|key| key.is_active()).map(|key| key.budget))
             .map_err(|error| map_store_error(error, "key usage budget"))
     }
 
@@ -159,7 +159,7 @@ impl KeyUsageService for DefaultKeyUsageService {
         self.keys
             .reveal_client_key(&id)
             .await
-            .map(|secret| secret.filter(|secret| secret.record.enabled))
+            .map(|secret| secret.filter(|secret| secret.record.is_active()))
             .map_err(|error| map_store_error(error, "key usage config"))
     }
 
@@ -176,7 +176,7 @@ impl KeyUsageService for DefaultKeyUsageService {
             .get_client_key(&id)
             .await
             .map_err(|error| map_store_error(error, "key usage profile"))?
-            .filter(|key| key.enabled)
+            .filter(|key| key.is_active())
         else {
             return Ok(None);
         };

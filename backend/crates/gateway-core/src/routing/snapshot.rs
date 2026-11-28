@@ -10,8 +10,8 @@ use crate::account::{FastMode, ProviderAccountId};
 use crate::concurrency::ConcurrencyQueuePolicy;
 use crate::operation::{Operation, OperationKind};
 use crate::policy::{
-    ClientApiKeyId, ClientPeerSharing, ClientPolicy, CodexClientMinVersions, PlaintextClientApiKey,
-    RateLimits,
+    ClientApiKeyId, ClientKeyValidity, ClientPeerSharing, ClientPolicy, CodexClientMinVersions,
+    PlaintextClientApiKey, RateLimits,
 };
 use crate::settings::{SettingsValues, compiled::CompiledSettings};
 use crate::validation::RoutingError;
@@ -30,6 +30,7 @@ type ModelCatalogAccounts = BTreeMap<ProviderKind, BTreeMap<String, BTreeSet<Pro
 /// Store 读取到的一个启用 Client API Key 策略事实
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotClientPolicyFacts {
+    validity: ClientKeyValidity,
     peer_sharing: ClientPeerSharing,
     name_snapshot: Option<String>,
     request_profiles: BTreeMap<ProviderKind, crate::account::OpaqueProviderData>,
@@ -43,6 +44,12 @@ impl SnapshotClientPolicyFacts {
     #[must_use]
     pub const fn with_peer_sharing(mut self, sharing: ClientPeerSharing) -> Self {
         self.peer_sharing = sharing;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_validity(mut self, validity: ClientKeyValidity) -> Self {
+        self.validity = validity;
         self
     }
 
@@ -69,6 +76,7 @@ impl SnapshotClientPolicyFacts {
         limits: RateLimits,
     ) -> Self {
         Self {
+            validity: ClientKeyValidity::default(),
             peer_sharing: ClientPeerSharing::default(),
             key_id,
             name_snapshot: None,
@@ -634,6 +642,7 @@ async fn compile_runtime_snapshot(
                 policy.limits,
             )
             .with_name_snapshot(policy.name_snapshot)
+            .with_validity(policy.validity)
             .with_peer_sharing(policy.peer_sharing),
         );
     }

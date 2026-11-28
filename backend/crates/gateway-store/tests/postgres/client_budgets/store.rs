@@ -89,6 +89,7 @@ async fn deleting_a_key_preserves_its_ledger_and_settles_inflight_requests_once(
 
     keys.create_client_key(
         NewClientKey {
+            validity: Default::default(),
             id: key_id("replacement"),
             name: "original".into(),
             label: None,
@@ -202,6 +203,7 @@ async fn manual_reset_clears_selected_windows_and_preserves_policy_and_history()
         store.settle(billed.clone()).await.unwrap();
         assert!(store.admit(key_id(key)).await.is_err());
         let before = status(&database, key).await;
+        let earliest_start = SystemTime::now() - std::time::Duration::from_micros(1);
         admin
             .reset_client_key_budget(
                 ResetClientKeyBudget {
@@ -217,19 +219,32 @@ async fn manual_reset_clears_selected_windows_and_preserves_policy_and_history()
         assert_eq!(after.daily_used_usd.canonical(), daily);
         assert_eq!(after.weekly_used_usd.canonical(), weekly);
         assert_eq!(after.limits, before.limits);
-        assert_eq!(
-            after.daily_resets_at(),
-            (period == ClientKeyBudgetPeriod::Weekly)
-                .then_some(before.daily_resets_at())
-                .flatten()
-        );
-        assert_eq!(
-            after.weekly_resets_at(),
-            (period == ClientKeyBudgetPeriod::Daily)
-                .then_some(before.weekly_resets_at())
-                .flatten()
-        );
-        // 同一费用重试既不重复扣额，也不能重新开启已重置的窗口
+        for (selected, window, previous, hours) in [
+            (
+                period != ClientKeyBudgetPeriod::Weekly,
+                after.daily_window,
+                before.daily_window,
+                24,
+            ),
+            (
+                period != ClientKeyBudgetPeriod::Daily,
+                after.weekly_window,
+                before.weekly_window,
+                168,
+            ),
+        ] {
+            if selected {
+                let window = window.unwrap();
+                assert!((earliest_start..=SystemTime::now()).contains(&window.start));
+                assert_eq!(
+                    window.end.duration_since(window.start).unwrap(),
+                    std::time::Duration::from_hours(hours)
+                );
+            } else {
+                assert_eq!(window, previous);
+            }
+        }
+        // 已入账费用的重试不会再次扣额或移动窗口
         store.settle(billed).await.unwrap();
         assert_eq!(status(&database, key).await, after);
         assert_eq!(
@@ -247,7 +262,7 @@ async fn manual_reset_clears_selected_windows_and_preserves_policy_and_history()
 }
 
 #[tokio::test]
-async fn manual_reset_restarts_selected_windows_only_after_new_usage() {
+async fn late_charges_and_new_usage_preserve_manual_reset_windows() {
     let Some(database) = TestDatabase::create("budget_reset_restart").await else {
         return;
     };
@@ -261,9 +276,6 @@ async fn manual_reset_restarts_selected_windows_only_after_new_usage() {
         seed(&database, key, "10", "20").await;
         store.admit(key_id(key)).await.unwrap();
         store.settle(charge(key, key, "1")).await.unwrap();
-        sqlx::query("update client_api_key_budget_windows set weekly_start = weekly_start - interval '3 days', weekly_end = weekly_end - interval '3 days' where client_api_key_id = $1")
-            .bind(key).execute(&database.pool).await.unwrap();
-        let before = status(&database, key).await;
         let delayed = charge(key, &format!("{key}-delayed"), "0.5");
         let old = charge(key, &format!("{key}-old"), "0.7");
         admin
@@ -278,7 +290,7 @@ async fn manual_reset_restarts_selected_windows_only_after_new_usage() {
             .await
             .unwrap();
         let reset = status(&database, key).await;
-        // 重置前完成的迟到费用保留历史，但不能开启窗口或重新扣入所选周期
+        // 重置前完成的迟到费用保留历史，但不能重新扣入所选周期
         store.settle(delayed).await.unwrap();
         let delayed = status(&database, key).await;
         assert_eq!(delayed.daily_resets_at(), reset.daily_resets_at());
@@ -302,17 +314,8 @@ async fn manual_reset_restarts_selected_windows_only_after_new_usage() {
 
         store.admit(key_id(key)).await.unwrap();
         let restarted = status(&database, key).await;
-        assert_eq!(restarted.daily_resets_at(), before.daily_resets_at());
-        if period == ClientKeyBudgetPeriod::Daily {
-            assert_eq!(restarted.weekly_resets_at(), before.weekly_resets_at());
-        } else {
-            assert_eq!(
-                restarted.weekly_resets_at().unwrap(),
-                restarted.daily_resets_at().unwrap() + std::time::Duration::from_secs(6 * 86400)
-            );
-            assert_ne!(restarted.weekly_resets_at(), before.weekly_resets_at());
-        }
-        // 开启窗口后仍保留重置边界，另一笔重置前的迟到费用也不能重新扣额
+        assert_eq!(restarted, delayed);
+        // 新请求准入后，重置前完成的费用仍按原完成时间归属
         store.settle(old).await.unwrap();
         let after_old = status(&database, key).await;
         assert_eq!(after_old.daily_resets_at(), restarted.daily_resets_at());
@@ -401,7 +404,8 @@ async fn manual_reset_excludes_old_completions_but_counts_inflight_requests_afte
 }
 
 #[tokio::test]
-async fn manual_reset_leaves_unused_and_expired_windows_inactive_and_reports_missing_keys() {
+async fn manual_reset_opens_selected_windows_for_unused_and_expired_keys_and_reports_missing_keys()
+{
     let Some(database) = TestDatabase::create("budget_reset_inactive").await else {
         return;
     };
@@ -414,12 +418,15 @@ async fn manual_reset_leaves_unused_and_expired_windows_inactive_and_reports_mis
     store.settle(charge("expired", "old", "2")).await.unwrap();
     sqlx::query("update client_api_key_budget_windows set daily_end = now() - interval '1 second', weekly_end = now() - interval '1 second'")
         .execute(&database.pool).await.unwrap();
-    for key in ["unused", "expired"] {
+    for (key, period) in [
+        ("unused", ClientKeyBudgetPeriod::Weekly),
+        ("expired", ClientKeyBudgetPeriod::All),
+    ] {
         admin
             .reset_client_key_budget(
                 ResetClientKeyBudget {
                     id: key_id(key),
-                    period: ClientKeyBudgetPeriod::All,
+                    period,
                 },
                 ClientKeyBudgetMutationOrigin::Admin,
                 &context(),
@@ -427,8 +434,11 @@ async fn manual_reset_leaves_unused_and_expired_windows_inactive_and_reports_mis
             .await
             .unwrap();
         let after = status(&database, key).await;
-        assert!(after.daily_resets_at().is_none());
-        assert!(after.weekly_resets_at().is_none());
+        assert_eq!(
+            after.daily_resets_at().is_some(),
+            period == ClientKeyBudgetPeriod::All
+        );
+        assert!(after.weekly_resets_at().is_some());
         assert_eq!(after.daily_used_usd.canonical(), "0");
     }
     // 未使用的 Key 也记录控制版本，重置前读到的窗口版本不能继续提交
@@ -720,6 +730,7 @@ async fn budget_updates_preserve_omitted_limits_and_do_not_clear_usage() {
         .await
         .unwrap();
     let update = UpdateClientKey {
+        validity: Default::default(),
         peer_sharing: None,
         request_profile_override_updates: Default::default(),
         id: ClientApiKeyId::new("key").unwrap(),
@@ -740,6 +751,7 @@ async fn budget_updates_preserve_omitted_limits_and_do_not_clear_usage() {
     admin
         .update_client_key(
             UpdateClientKey {
+                validity: Default::default(),
                 peer_sharing: None,
                 request_profile_override_updates: Default::default(),
                 daily_limit_usd: None,
@@ -765,6 +777,7 @@ async fn budget_updates_preserve_omitted_limits_and_do_not_clear_usage() {
     admin
         .update_client_key(
             UpdateClientKey {
+                validity: Default::default(),
                 peer_sharing: None,
                 request_profile_override_updates: Default::default(),
                 daily_limit_usd: Some("0".parse().unwrap()),

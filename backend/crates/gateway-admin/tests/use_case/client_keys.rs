@@ -151,6 +151,7 @@ impl ClientKeyStore for TestClientKeyStore {
         }
         self.plaintexts.lock().unwrap().push(key.plaintext);
         let record = ClientKeyRecord {
+            validity: Default::default(),
             peer_sharing: key.peer_sharing,
             request_profile_overrides: Default::default(),
             id: key.id,
@@ -318,6 +319,7 @@ async fn plugin_client_key_list_projects_only_public_identity_and_uses_stable_na
         list_response: Mutex::new(Some(ClientKeyPage {
             config_revision: Revision::new(7).expect("revision"),
             items: vec![ClientKeyRecord {
+                validity: Default::default(),
                 peer_sharing: Default::default(),
                 request_profile_overrides: Default::default(),
                 id: key_id.clone(),
@@ -455,6 +457,7 @@ async fn duplicate_names_report_the_same_actionable_conflict_on_create_and_updat
         .update(
             &mutation_context(),
             UpdateClientKey {
+                validity: Default::default(),
                 peer_sharing: None,
                 request_profile_override_updates: Default::default(),
                 id: ClientApiKeyId::new("key_existing").unwrap(),
@@ -476,6 +479,7 @@ async fn duplicate_names_report_the_same_actionable_conflict_on_create_and_updat
 
 fn create_command(key: Option<&str>) -> CreateClientKey {
     CreateClientKey {
+        validity: Default::default(),
         peer_sharing: Default::default(),
         request_profile_overrides: Default::default(),
         custom_key: key.map(|value| PlaintextClientApiKey::new(value).unwrap()),
@@ -570,6 +574,7 @@ async fn duplicate_group_ids_are_rejected_before_key_creation_or_update() {
         .update(
             &mutation_context(),
             UpdateClientKey {
+                validity: Default::default(),
                 peer_sharing: None,
                 request_profile_override_updates: Default::default(),
                 id: ClientApiKeyId::new("key_existing").unwrap(),
@@ -592,6 +597,7 @@ async fn duplicate_group_ids_are_rejected_before_key_creation_or_update() {
 async fn clearing_an_unregistered_provider_profile_is_rejected_before_writing() {
     let services = super::AdminHarness::new().build().await;
     let command = UpdateClientKey {
+        validity: None,
         id: ClientApiKeyId::new("key_existing").unwrap(),
         name: "test".to_owned(),
         label: None,

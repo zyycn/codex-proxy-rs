@@ -337,6 +337,11 @@ impl ClientKeyService for DefaultClientKeyService {
         context: &MutationContext,
         command: CreateClientKey,
     ) -> Result<CreatedClientKey, AdminError> {
+        if !command.validity.is_valid() {
+            return Err(AdminError::invalid(
+                "请填写完整有效期，到期时间须晚于生效时间",
+            ));
+        }
         crate::model::client_keys::validate_group_ids(&command.group_ids)
             .map_err(|_| AdminError::invalid("API Key 分组不合法"))?;
         for (provider, profile) in &command.request_profile_overrides {
@@ -354,6 +359,7 @@ impl ClientKeyService for DefaultClientKeyService {
             .store
             .create_client_key(
                 NewClientKey {
+                    validity: command.validity,
                     peer_sharing: command.peer_sharing,
                     request_profile_overrides: command.request_profile_overrides,
                     id,
@@ -382,6 +388,11 @@ impl ClientKeyService for DefaultClientKeyService {
     ) -> Result<ClientKeyMutation, AdminError> {
         crate::model::client_keys::validate_group_ids(&command.group_ids)
             .map_err(|_| AdminError::invalid("API Key 分组不合法"))?;
+        if command.validity.is_some_and(|range| !range.is_valid()) {
+            return Err(AdminError::invalid(
+                "请填写完整有效期，到期时间须晚于生效时间",
+            ));
+        }
         for (provider, profile) in &command.request_profile_override_updates {
             self.validate_profile(provider, profile.as_ref())?;
         }

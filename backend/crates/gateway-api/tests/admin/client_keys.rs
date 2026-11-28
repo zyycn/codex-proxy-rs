@@ -491,6 +491,7 @@ fn client_key_responses_should_keep_shape_and_redact_creation_debug() {
         .expect("valid time");
     let view = ClientKeyView::from((
         gateway_admin::model::client_keys::ClientKeyRecord {
+            validity: Default::default(),
             peer_sharing: Default::default(),
             request_profile_overrides: Default::default(),
             budget: Default::default(),

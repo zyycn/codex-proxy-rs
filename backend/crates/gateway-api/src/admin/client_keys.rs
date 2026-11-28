@@ -154,6 +154,8 @@ impl ClientKeySort {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateClientKeyRequest {
     #[serde(default)]
+    validity: gateway_core::policy::ClientKeyValidity,
+    #[serde(default)]
     peer_sharing: gateway_core::policy::ClientPeerSharing,
     #[serde(default)]
     provider_request_profile_overrides: ProviderRequestProfileOverrides,
@@ -188,6 +190,7 @@ impl CreateClientKeyRequest {
         let request_profile_overrides =
             normalize_request_profile_overrides(self.provider_request_profile_overrides)?;
         Ok(CreateClientKey {
+            validity: self.validity,
             peer_sharing: self.peer_sharing,
             request_profile_overrides,
             custom_key: self
@@ -216,6 +219,7 @@ impl CreateClientKeyRequest {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateClientKeyRequest {
+    validity: Option<gateway_core::policy::ClientKeyValidity>,
     peer_sharing: Option<gateway_core::policy::ClientPeerSharing>,
     #[serde(default)]
     provider_request_profile_overrides: ProviderRequestProfileOverrideUpdates,
@@ -241,6 +245,7 @@ impl UpdateClientKeyRequest {
         let request_profile_override_updates =
             normalize_request_profile_override_updates(self.provider_request_profile_overrides)?;
         Ok(UpdateClientKey {
+            validity: self.validity,
             peer_sharing: self.peer_sharing,
             request_profile_override_updates,
             id: client_key_id(self.id, "clientKeyMutationNotFound")?,
@@ -370,6 +375,10 @@ impl
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientKeyView {
+    validity: gateway_core::policy::ClientKeyValidity,
+    validity_status: gateway_core::policy::ClientKeyValidityStatus,
+    starts_at_display: Option<String>,
+    expires_at_display: Option<String>,
     peer_sharing: gateway_core::policy::ClientPeerSharing,
     provider_request_profile_overrides: ProviderRequestProfileOverrides,
     id: String,
@@ -407,6 +416,10 @@ impl From<(ClientKeyRecord, crate::time::TimePresenter)> for ClientKeyView {
             .collect::<ProviderRequestProfileOverrides>();
         Self {
             provider_request_profile_overrides,
+            validity: record.validity,
+            validity_status: record.validity.status_at(time.now()),
+            starts_at_display: record.validity.starts_at.map(|start| time.datetime(&start)),
+            expires_at_display: record.validity.expires_at.map(|end| time.datetime(&end)),
             peer_sharing: record.peer_sharing,
             id: record.id.to_string(),
             name: record.name,

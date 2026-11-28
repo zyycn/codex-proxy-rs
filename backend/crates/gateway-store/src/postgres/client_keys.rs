@@ -34,7 +34,9 @@ use gateway_core::{
     engine::budget::{ClientBudgetLimits, ClientBudgetStatus},
     engine::execution::ClientApiKeyUsageSink,
     metering::Decimal,
-    policy::{ClientApiKeyId, ClientPeerSharing, PlaintextClientApiKey, RateLimits},
+    policy::{
+        ClientApiKeyId, ClientKeyValidity, ClientPeerSharing, PlaintextClientApiKey, RateLimits,
+    },
     routing::{AccountGroupId, ProviderKind},
     task::{DaemonTask, WorkerDaemonContext, WorkerTaskError},
 };
@@ -55,6 +57,7 @@ const CLIENT_API_KEY_LAST_USED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientApiKeySnapshot {
+    pub validity: ClientKeyValidity,
     pub peer_sharing: ClientPeerSharing,
     pub name_snapshot: Option<String>,
     pub request_profiles: std::collections::BTreeMap<
@@ -76,6 +79,7 @@ impl ClientApiKeySnapshot {
         requests_per_minute: i64,
     ) -> StoreResult<Self> {
         Ok(Self {
+            validity: ClientKeyValidity::default(),
             peer_sharing: ClientPeerSharing::default(),
             name_snapshot: None,
             request_profiles: std::collections::BTreeMap::new(),
@@ -122,6 +126,7 @@ impl fmt::Debug for ClientApiKeySecret {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientApiKeyRecord {
+    pub validity: ClientKeyValidity,
     pub peer_sharing: ClientPeerSharing,
     pub request_profile_overrides: BTreeMap<ProviderKind, OpaqueProviderData>,
     pub id: String,
@@ -284,6 +289,7 @@ pub struct ClientApiKeyPage {
 
 #[derive(Clone)]
 pub struct NewClientApiKey {
+    pub validity: ClientKeyValidity,
     pub peer_sharing: ClientPeerSharing,
     pub request_profile_overrides: BTreeMap<ProviderKind, OpaqueProviderData>,
     pub id: String,
@@ -322,6 +328,7 @@ impl NewClientApiKey {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateClientApiKeyDetails {
+    pub validity: Option<ClientKeyValidity>,
     pub peer_sharing: Option<ClientPeerSharing>,
     pub request_profile_override_updates: BTreeMap<ProviderKind, Option<OpaqueProviderData>>,
     pub id: String,
@@ -389,7 +396,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         let total = count_client_api_keys(&self.pool, query.search.as_deref()).await?;
         let mut statement = QueryBuilder::<Postgres>::new(
             "select k.id, k.name, k.label, k.peer_sharing_json, k.provider_request_profiles_json as request_profile_overrides,
-                    left(k.key, least(10, length(k.key) / 2)) as prefix, k.enabled,
+                    left(k.key, least(10, length(k.key) / 2)) as prefix, k.enabled, k.starts_at, k.expires_at,
                     k.max_concurrency, k.requests_per_minute, k.last_used_at, k.created_at,
                     k.updated_at, '[]'::jsonb as groups, '{}'::text[] as provider_kinds
              from client_api_keys k
@@ -449,7 +456,7 @@ impl ClientApiKeyRepository for PgClientApiKeyRepository {
         require_nonempty(ENTITY, "id", id)?;
         let record = sqlx::query(
             "select k.id, k.name, k.label, k.peer_sharing_json, k.provider_request_profiles_json as request_profile_overrides,
-                    left(k.key, least(10, length(k.key) / 2)) as prefix, k.enabled,
+                    left(k.key, least(10, length(k.key) / 2)) as prefix, k.enabled, k.starts_at, k.expires_at,
                     k.max_concurrency, k.requests_per_minute, k.last_used_at, k.created_at,
                     k.updated_at, coalesce(groups.groups, '[]'::jsonb) as groups,
                     case
@@ -687,10 +694,11 @@ impl PgAdminClientKeyStore {
         }
     }
 
-    /// 会话恢复只读启用状态，不加载明文凭据或其他 Key 的资料
+    /// 会话恢复只读启用状态和有效期，不加载明文凭据或其他 Key 的资料
     pub async fn is_enabled(&self, id: &ClientApiKeyId) -> AdminStoreResult<bool> {
         sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM client_api_keys WHERE id = $1 AND enabled)",
+            "SELECT EXISTS(SELECT 1 FROM client_api_keys WHERE id = $1 AND enabled
+             AND (starts_at IS NULL OR starts_at <= now()) AND (expires_at IS NULL OR now() < expires_at))",
         )
         .bind(id.as_str())
         .fetch_one(&self.keys.pool)
@@ -980,6 +988,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
             .control_plane
             .create_client_api_key(
                 NewClientApiKey {
+                    validity: command.validity,
                     peer_sharing: command.peer_sharing,
                     request_profile_overrides: command.request_profile_overrides,
                     id: id.as_str().to_owned(),
@@ -1011,6 +1020,8 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                         "weekly_limit_usd",
                         "provider_request_profiles_json",
                         "peer_sharing_json",
+                        "starts_at",
+                        "expires_at",
                     ]
                     .into_iter()
                     .map(str::to_owned)
@@ -1032,6 +1043,7 @@ impl ClientKeyStore for PgAdminClientKeyStore {
             .control_plane
             .update_client_api_key(
                 UpdateClientApiKeyDetails {
+                    validity: command.validity,
                     peer_sharing: command.peer_sharing,
                     request_profile_override_updates: command.request_profile_override_updates,
                     id: id.as_str().to_owned(),
@@ -1063,6 +1075,13 @@ impl ClientKeyStore for PgAdminClientKeyStore {
                         "peer_sharing_json",
                     ]
                     .into_iter()
+                    .chain(
+                        command
+                            .validity
+                            .map(|_| ["starts_at", "expires_at"])
+                            .into_iter()
+                            .flatten(),
+                    )
                     .map(str::to_owned)
                     .collect(),
                 ),
@@ -1240,6 +1259,7 @@ fn admin_client_key_cursor(cursor: ClientApiKeyCursor) -> AdminStoreResult<Admin
 
 fn admin_client_key_record(record: ClientApiKeyRecord) -> AdminStoreResult<AdminClientKeyRecord> {
     Ok(AdminClientKeyRecord {
+        validity: record.validity,
         peer_sharing: record.peer_sharing,
         request_profile_overrides: record.request_profile_overrides,
         id: ClientApiKeyId::new(record.id)
@@ -1293,8 +1313,8 @@ pub(crate) async fn insert_client_api_key_in_transaction(
     sqlx::query(
         "insert into client_api_keys (
            id, name, label, key, enabled, max_concurrency, requests_per_minute,
-           last_used_at, created_at, updated_at, daily_limit_usd, weekly_limit_usd, provider_request_profiles_json, peer_sharing_json
-         ) values ($1, $2, $3, $4, true, $5, $6, null, now(), now(), $7::text::numeric, $8::text::numeric, $9::jsonb, $10::jsonb)",
+           last_used_at, created_at, updated_at, daily_limit_usd, weekly_limit_usd, provider_request_profiles_json, peer_sharing_json, starts_at, expires_at
+         ) values ($1, $2, $3, $4, true, $5, $6, null, now(), now(), $7::text::numeric, $8::text::numeric, $9::jsonb, $10::jsonb, $11, $12)",
     )
     .bind(&key.id)
     .bind(key.name.trim())
@@ -1306,6 +1326,8 @@ pub(crate) async fn insert_client_api_key_in_transaction(
     .bind(key.budget.weekly_usd.canonical())
     .bind(sqlx::types::Json(request_profile_overrides))
     .bind(sqlx::types::Json(key.peer_sharing))
+    .bind(key.validity.starts_at)
+    .bind(key.validity.expires_at)
     .execute(&mut **transaction)
     .await
     .map_err(|error| {
@@ -1385,7 +1407,9 @@ pub(crate) async fn update_client_api_key_in_transaction(
              weekly_limit_usd = coalesce($7::text::numeric, weekly_limit_usd),
              provider_request_profiles_json = (provider_request_profiles_json - $8::text[])
                  || $9::jsonb,
-             peer_sharing_json = coalesce($10::jsonb, peer_sharing_json)
+             peer_sharing_json = coalesce($10::jsonb, peer_sharing_json),
+             starts_at = case when $11 then $12 else starts_at end,
+             expires_at = case when $11 then $13 else expires_at end
          where id = $1",
     )
     .bind(&key.id)
@@ -1398,6 +1422,9 @@ pub(crate) async fn update_client_api_key_in_transaction(
     .bind(removed_profiles)
     .bind(sqlx::types::Json(replacement_profiles))
     .bind(key.peer_sharing.map(sqlx::types::Json))
+    .bind(key.validity.is_some())
+    .bind(key.validity.and_then(|range| range.starts_at))
+    .bind(key.validity.and_then(|range| range.expires_at))
     .execute(&mut **transaction)
     .await
     .map_err(|source| postgres_unavailable("update client API key in transaction", source))?;
@@ -1709,6 +1736,14 @@ fn client_record_from_row(row: &sqlx::postgres::PgRow) -> StoreResult<ClientApiK
         .map_err(|source| invalid("invalid groups").with_source(source))?;
     Ok(
         ClientApiKeyRecord {
+            validity: ClientKeyValidity {
+                starts_at: row
+                    .try_get("starts_at")
+                    .map_err(|source| invalid("invalid start time").with_source(source))?,
+                expires_at: row
+                    .try_get("expires_at")
+                    .map_err(|source| invalid("invalid expiry time").with_source(source))?,
+            },
             peer_sharing: row
                 .try_get::<sqlx::types::Json<ClientPeerSharing>, _>("peer_sharing_json")
                 .map_err(|source| invalid("invalid peer sharing").with_source(source))?

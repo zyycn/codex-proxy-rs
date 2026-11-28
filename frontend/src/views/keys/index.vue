@@ -216,17 +216,17 @@ watch([showFormModal, showBatchEdit], ([editor, batch]) => {
               <ApiKeyBudgetCell :api-key="row" />
             </template>
             <template #limits="{ row }">
-              <dl class="m-0 grid grid-cols-[max-content_max-content] gap-x-2 gap-y-1 text-xs tabular-nums">
+              <dl class="m-0 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs tabular-nums">
                 <dt class="text-right text-z-text-tertiary">
                   {{ t('keys.page.concurrency') }}
                 </dt>
-                <dd class="m-0 whitespace-nowrap text-z-text">
+                <dd class="m-0 break-all whitespace-normal text-z-text">
                   {{ row.maxConcurrency || '∞' }}
                 </dd>
                 <dt class="text-right text-z-text-tertiary">
                   RPM
                 </dt>
-                <dd class="m-0 whitespace-nowrap text-z-text">
+                <dd class="m-0 break-all whitespace-normal text-z-text">
                   {{ row.requestsPerMinute || '∞' }}
                 </dd>
               </dl>
