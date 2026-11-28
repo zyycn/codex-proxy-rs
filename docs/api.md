@@ -256,6 +256,8 @@ OpenAI Provider 的 OAuth 账号使用 Responses 上游，API Key 账号通过 `
 
 使用分组名调用 `generateContent` 时，若唯一工具为 `googleSearch` 且未指定 `thinkingConfig`，网关使用所选账号目录中 `webSearchModelIds` 的首个搜索型号，保留搜索选项。同一账号及授权分组须同时允许至少一个具体分组成员和该搜索型号
 
+AGY 在 API Key 模式下使用 `gemini-3.1-flash-lite-preview` 发起同样的独立搜索。网关优先使用显式映射、别名和已有的 GenAI 原生型号。缺少对应型号时，网关使用各 OAuth 账号目录中 `webSearchModelIds` 的第一项，账号和授权分组都必须允许该型号
+
 | 方法 | 路径 | 交付 |
 | --- | --- | --- |
 | POST | `/v1beta/models/{model}:generateContent` | 原生 JSON |

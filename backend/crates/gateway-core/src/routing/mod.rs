@@ -162,6 +162,7 @@ pub struct ModelCapabilities {
     translated_generation_protocols: BTreeSet<&'static str>,
     reasoning_variants: BTreeMap<String, ReasoningModelVariant>,
     account_metadata: BTreeMap<crate::account::ProviderAccountId, AccountModelMetadata>,
+    native_web_search_helper: Option<&'static str>,
     dedicated_web_search: Option<Arc<BTreeMap<crate::account::ProviderAccountId, UpstreamModelId>>>,
 }
 
@@ -440,6 +441,7 @@ impl ModelCapabilities {
             reasoning_variants: BTreeMap::new(),
             account_metadata: BTreeMap::new(),
             dedicated_web_search: None,
+            native_web_search_helper: None,
         }
     }
 
@@ -481,6 +483,17 @@ impl ModelCapabilities {
     ) -> Self {
         self.dedicated_web_search = Some(Arc::new(targets));
         self
+    }
+
+    /// 原生客户端用固定辅助型号发起独立搜索，目标来自 Provider 的账号搜索目录
+    #[must_use]
+    pub fn with_native_web_search_helper(
+        mut self,
+        model: &'static str,
+        targets: BTreeMap<crate::account::ProviderAccountId, UpstreamModelId>,
+    ) -> Self {
+        self.native_web_search_helper = Some(model);
+        self.with_dedicated_web_search(targets)
     }
 
     /// 将请求形态 feature 的最终合法性判断交给上游 wire API

@@ -1614,23 +1614,37 @@ impl RuntimeSnapshot {
         }
 
         let requested_model = public_model.as_str();
+        let explicitly_mapped = self
+            .settings
+            .values
+            .model_mappings
+            .contains_key(requested_model)
+            || self.model_alias(requested_model).is_some();
         let upstream_model = if let Some(direct) = direct_model {
             direct.clone()
         } else {
             let mapped_model = self.mapped_model(requested_model);
-            if self
-                .settings
-                .values
-                .model_mappings
-                .contains_key(requested_model)
-                || self.model_alias(requested_model).is_some()
-            {
+            if explicitly_mapped {
                 UpstreamModelId::new(mapped_model)
             } else {
                 UpstreamModelId::from_client_wire(mapped_model)
             }
             .map_err(|_| RoutingError::InvalidIdentifier)?
         };
+        if !explicitly_mapped
+            && enforce_routing_policy
+            && direct_model.is_none()
+            && operation.is_native_web_search()
+            && let Some(search) = self.native_web_search_candidates(
+                &upstream_model,
+                operation.protocol(),
+                &account_scope,
+                context,
+                requirements.requested_output_tokens(),
+            )
+        {
+            return Ok(self.model_plan(operation, account_scope, search?));
+        }
         let grouped = self.providers.iter().any(|provider| {
             self.model_group(provider, upstream_model.as_str())
                 .is_some()
@@ -1871,17 +1885,12 @@ impl RuntimeSnapshot {
                                 candidate_scope.groups_deny_model(Some(target.as_str()));
                             continue;
                         }
-                        let limit = self
-                            .provider_models
-                            .get(provider)
-                            .and_then(|models| models.get(target))
-                            .and_then(|model| model.account_metadata.get(account))
-                            .and_then(|meta| meta.max_output_tokens);
-                        if requirements
-                            .requested_output_tokens()
-                            .zip(limit)
-                            .is_some_and(|(requested, limit)| requested > limit)
-                        {
+                        if !self.search_target_fits(
+                            provider,
+                            account,
+                            target,
+                            requirements.requested_output_tokens(),
+                        ) {
                             continue;
                         }
                         targets
@@ -1949,7 +1958,103 @@ impl RuntimeSnapshot {
             });
         }
 
-        Ok(RoutingPlan {
+        Ok(self.model_plan(operation, account_scope, candidates))
+    }
+
+    fn search_target_fits(
+        &self,
+        provider: &ProviderKind,
+        account: &ProviderAccountId,
+        target: &UpstreamModelId,
+        requested_tokens: Option<u64>,
+    ) -> bool {
+        let limit = self
+            .provider_models
+            .get(provider)
+            .and_then(|models| models.get(target))
+            .and_then(|model| model.account_metadata.get(account))
+            .and_then(|meta| meta.max_output_tokens);
+        requested_tokens
+            .zip(limit)
+            .is_none_or(|(requested, limit)| requested <= limit)
+    }
+
+    /// 辅助型号只标识搜索操作，账号与分组的模型权限按实际搜索目标判断
+    fn native_web_search_candidates(
+        &self,
+        requested_model: &UpstreamModelId,
+        protocol: &str,
+        scope: &FrozenAccountScope,
+        context: &RoutingContext,
+        requested_tokens: Option<u64>,
+    ) -> Option<Result<Vec<ProviderCandidate>, RoutingError>> {
+        let mut candidates = None;
+        let mut group_denied = false;
+        for provider in self.available_provider_kinds(scope, context) {
+            let Some(models) = self.provider_models.get(provider) else {
+                continue;
+            };
+            // 当前范围已有原生型号时仍走普通路由，其他协议的同名模型不能接管 GenAI
+            if models
+                .get(requested_model)
+                .is_some_and(|model| model.native_generation_protocols.contains(protocol))
+            {
+                return None;
+            }
+            let Some(targets) = models.values().find_map(|model| {
+                model
+                    .dedicated_web_search
+                    .as_deref()
+                    .filter(|_| model.native_web_search_helper == Some(requested_model.as_str()))
+            }) else {
+                continue;
+            };
+            let candidates = candidates.get_or_insert_with(Vec::new);
+            let mut accounts_by_target = BTreeMap::<_, BTreeSet<_>>::new();
+            for (account, target) in targets {
+                if scope.account_provider(account) != Some(provider) || !scope.allows(account) {
+                    continue;
+                }
+                if !scope.allows_model(account, target.as_str()) {
+                    group_denied |= scope.groups_deny_model(Some(target.as_str()));
+                    continue;
+                }
+                if self.search_target_fits(provider, account, target, requested_tokens) {
+                    accounts_by_target
+                        .entry(target)
+                        .or_default()
+                        .insert(account.clone());
+                }
+            }
+            for (target, accounts) in accounts_by_target {
+                candidates.push(ProviderCandidate {
+                    dedicated_web_search: true,
+                    requires_direct_authentication: false,
+                    provider: provider.clone(),
+                    upstream_model: Some(target.clone()),
+                    emulated_features: BTreeSet::new(),
+                    account_scope: Arc::new(scope.restricted_to(&Default::default(), &accounts)),
+                });
+            }
+        }
+        candidates.map(|candidates| {
+            if !candidates.is_empty() {
+                Ok(candidates)
+            } else if group_denied {
+                Err(RoutingError::GroupModelDenied)
+            } else {
+                Err(RoutingError::WebSearchUnavailable)
+            }
+        })
+    }
+
+    fn model_plan(
+        &self,
+        operation: &Operation,
+        account_scope: Arc<FrozenAccountScope>,
+        candidates: Vec<ProviderCandidate>,
+    ) -> RoutingPlan {
+        RoutingPlan {
             request_body_limit: self.responses_max_decompressed_body_bytes(),
             max_retry_after: std::time::Duration::from_secs(u64::from(
                 self.settings.values.max_retry_after_seconds,
@@ -1971,7 +2076,7 @@ impl RuntimeSnapshot {
                 .expect("constant request attempt limit is non-zero"),
             account_scope,
             candidates: Arc::from(candidates),
-        })
+        }
     }
 
     /// 为 Provider 自有端点冻结请求计划

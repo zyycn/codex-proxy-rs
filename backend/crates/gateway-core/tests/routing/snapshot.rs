@@ -27,6 +27,144 @@ use gateway_core::routing::{
 use gateway_core::settings::SettingsValues;
 
 #[test]
+fn native_search_helper_routes_only_to_each_authorized_accounts_own_target() {
+    use gateway_core::{
+        account::{AccountModelAccess, AccountModelAccessMode, ProviderAccountId},
+        operation::{GenerateRequest, Operation, ProtocolPayload},
+        routing::{
+            AccountGroupId, ClientRoutingScope, FrozenAccountScope, ProviderModel, RoutingContext,
+            RoutingGroupSnapshot, RuntimeAccount, RuntimeAccountDirectory, RuntimeSnapshot,
+        },
+        validation::RoutingError,
+    };
+    let provider = ProviderKind::new("alpha").unwrap();
+    let helper = PublicModelId::new("search-helper").unwrap();
+    let group = AccountGroupId::new(format!("grp_{:032x}", 1)).unwrap();
+    let allow = |ids: &[&str]| {
+        AccountModelAccess::new(
+            AccountModelAccessMode::Allowlist,
+            ids.iter().map(|id| (*id).to_owned()).collect(),
+        )
+        .unwrap()
+    };
+    let mut accounts = BTreeMap::new();
+    let mut targets = BTreeMap::new();
+    for (id, declared, allowed) in [
+        ("acct_first", "search-a", "search-a"),
+        ("acct_second", "search-b", "search-b"),
+        ("acct_filtered", "search-a", "search-b"),
+        ("acct_unlisted", "search-c", "search-c"),
+    ] {
+        let id = ProviderAccountId::new(id).unwrap();
+        accounts.insert(
+            id.clone(),
+            RuntimeAccount::new(provider.clone(), [group.clone()].into())
+                .with_model_access(allow(&[allowed])),
+        );
+        targets.insert(id, UpstreamModelId::new(declared).unwrap());
+    }
+    let scope = Arc::new(FrozenAccountScope::new(
+        Arc::new(
+            RuntimeAccountDirectory::new(accounts).with_group_model_access(
+                [(group.clone(), allow(&["search-a", "search-b"]))].into(),
+            ),
+        ),
+        ClientRoutingScope::restricted(
+            vec![RoutingGroupSnapshot::new(group.clone(), "Group".into())],
+            [group].into(),
+            [provider.clone()].into(),
+        )
+        .unwrap(),
+    ));
+    let operation = Operation::Generate(
+        GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object(
+                "genai",
+                serde_json::json!({"tools":[{"googleSearch":{}}]})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .unwrap()
+            .with_context(
+                serde_json::json!({"stream":false})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .requiring_native_protocol(),
+    );
+    let route = |same_name_protocol, targets, scope| {
+        let caps = || {
+            ModelCapabilities::new([OperationKind::Generate].into(), None)
+                .with_upstream_feature_validation()
+        };
+        let snapshot = RuntimeSnapshot::new(
+            revision(1),
+            SettingsValues::new(1, "smart", BTreeMap::new(), None, None),
+            vec![provider.clone()],
+            vec![
+                ProviderModel::new(
+                    provider.clone(),
+                    UpstreamModelId::new("main").unwrap(),
+                    caps()
+                        .with_generation_protocol("genai")
+                        .with_native_web_search_helper("search-helper", targets),
+                ),
+                ProviderModel::new(
+                    provider.clone(),
+                    UpstreamModelId::new("search-helper").unwrap(),
+                    caps().with_generation_protocol(same_name_protocol),
+                ),
+            ],
+            vec![],
+        )
+        .unwrap();
+        snapshot.plan(&helper, &operation, scope, &RoutingContext::default())
+    };
+    let plan = route("openai", targets.clone(), scope.clone()).unwrap();
+    let assignments: Vec<_> = plan
+        .candidates()
+        .iter()
+        .map(|candidate| {
+            assert!(candidate.uses_dedicated_web_search());
+            (
+                candidate.upstream_model().unwrap().as_str(),
+                candidate
+                    .account_scope()
+                    .allowed_account_ids()
+                    .map(ProviderAccountId::as_str)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        assignments,
+        [
+            ("search-a", vec!["acct_first"]),
+            ("search-b", vec!["acct_second"])
+        ]
+    );
+    let denied = Arc::new(scope.restricted_to(
+        &Default::default(),
+        &[ProviderAccountId::new("acct_unlisted").unwrap()].into(),
+    ));
+    assert!(matches!(
+        route("openai", targets.clone(), denied),
+        Err(RoutingError::GroupModelDenied)
+    ));
+    assert!(matches!(
+        route("openai", BTreeMap::new(), scope.clone()),
+        Err(RoutingError::WebSearchUnavailable)
+    ));
+    assert!(matches!(
+        route("genai", targets, scope),
+        Err(RoutingError::GroupModelDenied)
+    ));
+}
+
+#[test]
 fn reasoning_groups_resolve_before_account_and_group_model_policies() {
     use gateway_core::{
         account::{AccountModelAccess, AccountModelAccessMode, ProviderAccountId},
