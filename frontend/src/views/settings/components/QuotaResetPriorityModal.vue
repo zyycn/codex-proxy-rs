@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import type { ResetWindowWeights } from '@/api'
-import { ZButton, ZDialog } from '@codex-proxy/ui'
-import { ref, shallowRef, useId, watch } from 'vue'
+import { ZButton, ZDialog, ZForm } from '@codex-proxy/ui'
+import { ref, shallowRef, useId, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { validSchedulingWeight } from '../utils/scheduling'
 import ResetWindowWeightsFields from './ResetWindowWeightsFields.vue'
 
 const props = defineProps<{
@@ -14,6 +13,7 @@ const emit = defineEmits<{ confirm: [config: ResetWindowWeights] }>()
 const open = defineModel<boolean>({ required: true })
 const { t } = useI18n({ useScope: 'global' })
 const formId = useId()
+const formRef = useTemplateRef<InstanceType<typeof ZForm>>('formElement')
 const draft = ref({ fiveHour: '', weekly: '', monthly: '' })
 const submitted = shallowRef(false)
 
@@ -21,6 +21,7 @@ function replaceDraft(config: ResetWindowWeights) {
   for (const key of Object.keys(draft.value) as (keyof ResetWindowWeights)[])
     draft.value[key] = String(config[key])
   submitted.value = false
+  formRef.value?.clearValidate()
 }
 
 watch(open, (value) => {
@@ -28,9 +29,9 @@ watch(open, (value) => {
     replaceDraft(props.config)
 }, { immediate: true })
 
-function confirm() {
+async function confirm() {
   submitted.value = true
-  if (!Object.values(draft.value).every(validSchedulingWeight))
+  if (!await formRef.value?.validate().catch(() => false))
     return
   emit('confirm', {
     fiveHour: Number(draft.value.fiveHour),
@@ -43,9 +44,9 @@ function confirm() {
 
 <template>
   <ZDialog v-model="open" :title="t('settings.rotation.quotaResetPrioritySettings')" :description="t('settings.resetPriority.description')" width="36rem">
-    <form :id="formId" class="grid gap-5" novalidate @submit.prevent="confirm">
+    <ZForm :id="formId" ref="formElement" class="gap-5" :model="{ resetWindowWeights: draft }" novalidate @submit="confirm">
       <ResetWindowWeightsFields v-model="draft" :submitted="submitted" :help="t('settings.resetPriority.windowHelp')" />
-    </form>
+    </ZForm>
     <template #footer>
       <ZButton class="mr-auto" @click="replaceDraft(defaults)">
         {{ t('common.actions.reset') }}

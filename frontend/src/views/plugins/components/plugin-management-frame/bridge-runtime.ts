@@ -182,7 +182,7 @@ export default function installPluginBridge(initial: PluginBridgeInitial) {
     queueMicrotask(() => {
       if (!form.isConnected || !submitter.isConnected)
         return
-      if (!submitter.formNoValidate && !form.reportValidity())
+      if (!form.noValidate && !submitter.formNoValidate && !form.reportValidity())
         return
       form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter }))
     })

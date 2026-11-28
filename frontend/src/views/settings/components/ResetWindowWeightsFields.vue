@@ -4,11 +4,12 @@ import { ZFormItem, ZIconButton, ZInput, ZPopover } from '@codex-proxy/ui'
 import { CircleHelp } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { validSchedulingWeight } from '../utils/scheduling'
+import { schedulingWeightRule } from '../utils/scheduling'
 
 defineProps<{ submitted: boolean, help: string }>()
 const model = defineModel<Record<keyof ResetWindowWeights, string>>({ required: true })
 const { t } = useI18n({ useScope: 'global' })
+const weightRule = computed(() => schedulingWeightRule(t('settings.scheduling.enterValueFromToUpToOne')))
 const periods = computed(() => [
   {
     key: 'fiveHour',
@@ -43,8 +44,8 @@ const periods = computed(() => [
       </ZPopover>
     </div>
     <div class="grid grid-cols-3 gap-3">
-      <ZFormItem v-for="period in periods" :key="period.key" class="min-w-0" :label="period.label" :error="submitted && !validSchedulingWeight(model[period.key]) ? t('settings.scheduling.enterValueFromToUpToOne') : undefined">
-        <ZInput v-model="model[period.key]" type="number" min="0" max="10" step="0.1" :aria-label="period.label" :aria-invalid="submitted && !validSchedulingWeight(model[period.key])" />
+      <ZFormItem v-for="period in periods" :key="period.key" class="min-w-0" :label="period.label" :prop="`resetWindowWeights.${period.key}`" :rules="weightRule">
+        <ZInput v-model="model[period.key]" type="number" min="0" max="10" step="0.1" :aria-label="period.label" :validate-event="submitted" />
       </ZFormItem>
     </div>
   </section>

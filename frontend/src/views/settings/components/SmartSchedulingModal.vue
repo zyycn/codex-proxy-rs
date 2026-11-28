@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import type { SmartSchedulingConfig } from '@/api'
-import { ZButton, ZDialog, ZFormItem, ZIconButton, ZInput, ZPopover } from '@codex-proxy/ui'
+import { ZButton, ZDialog, ZForm, ZFormItem, ZIconButton, ZInput, ZPopover } from '@codex-proxy/ui'
 import { CircleHelp } from '@lucide/vue'
 
-import { computed, reactive, ref, shallowRef, useId, watch } from 'vue'
+import { computed, reactive, ref, shallowRef, useId, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { validSchedulingWeight as validWeight } from '../utils/scheduling'
+import { schedulingWeightRule } from '../utils/scheduling'
 import ResetWindowWeightsFields from './ResetWindowWeightsFields.vue'
 
 const props = defineProps<{
@@ -19,6 +19,7 @@ const { t } = useI18n({ useScope: 'global' })
 
 const open = defineModel<boolean>({ required: true })
 const formId = useId()
+const formRef = useTemplateRef<InstanceType<typeof ZForm>>('formElement')
 interface WeightGroup {
   id: 'runtime' | 'quota' | 'queue'
   title: string
@@ -85,15 +86,7 @@ const draft = reactive({
   queueWeight: '',
 })
 const submitted = shallowRef(false)
-const errors = computed(() => Object.fromEntries(fields.value.map(({ key }) => {
-  const valid = validWeight(draft[key])
-  return [
-    key,
-    valid
-      ? undefined
-      : t('settings.scheduling.enterValueFromToUpToOne'),
-  ]
-})))
+const weightRule = computed(() => schedulingWeightRule(t('settings.scheduling.enterValueFromToUpToOne')))
 const emptyWeights = computed(() => fields.value.every(({ key }) => Number(draft[key]) === 0))
 
 function replaceDraft(config: SmartSchedulingConfig) {
@@ -102,6 +95,7 @@ function replaceDraft(config: SmartSchedulingConfig) {
   for (const key of Object.keys(windows.value) as (keyof typeof windows.value)[])
     windows.value[key] = String(config.resetWindowWeights[key])
   submitted.value = false
+  formRef.value?.clearValidate()
 }
 
 watch(open, (value) => {
@@ -109,9 +103,9 @@ watch(open, (value) => {
     replaceDraft(props.config)
 }, { immediate: true })
 
-function confirm() {
+async function confirm() {
   submitted.value = true
-  if (Object.values(errors.value).some(Boolean) || emptyWeights.value || !Object.values(windows.value).every(validWeight))
+  if (!await formRef.value?.validate().catch(() => false) || emptyWeights.value)
     return
   emit('confirm', {
     resetWindowWeights: {
@@ -132,13 +126,13 @@ function confirm() {
 
 <template>
   <ZDialog v-model="open" :title="t('settings.rotation.smartSchedulingSettings')" :description="t('settings.scheduling.description')" width="36rem">
-    <form :id="formId" class="grid gap-5" novalidate @submit.prevent="confirm">
+    <ZForm :id="formId" ref="formElement" class="gap-5" :model="{ ...draft, resetWindowWeights: windows }" novalidate @submit="confirm">
       <section v-for="group in groups" :key="group.id" class="grid gap-3">
         <h3 class="m-0 text-z font-emphasis">
           {{ group.title }}
         </h3>
         <div class="grid gap-4" :class="group.id === 'runtime' ? 'sm:grid-cols-3' : 'sm:grid-cols-2'">
-          <ZFormItem v-for="field in group.fields" :key="field.key" :label="field.label" :error="submitted ? errors[field.key] : undefined">
+          <ZFormItem v-for="field in group.fields" :key="field.key" :label="field.label" :prop="field.key" :rules="weightRule">
             <template #label-extra>
               <ZPopover class="-my-1" trigger="hover-click" placement="top-start">
                 <template #reference="{ open: helpOpen }">
@@ -151,7 +145,7 @@ function confirm() {
                 </p>
               </ZPopover>
             </template>
-            <ZInput v-model="draft[field.key]" type="number" min="0" max="10" step="0.1" :placeholder="t('settings.scheduling.zeroWeightHelp')" :aria-label="field.label" />
+            <ZInput v-model="draft[field.key]" :validate-event="submitted" type="number" min="0" max="10" step="0.1" :placeholder="t('settings.scheduling.zeroWeightHelp')" :aria-label="field.label" />
           </ZFormItem>
         </div>
       </section>
@@ -159,7 +153,7 @@ function confirm() {
       <p v-if="submitted && emptyWeights" role="alert" class="m-0 text-z-sm text-z-danger">
         {{ t('settings.scheduling.weightsRequired') }}
       </p>
-    </form>
+    </ZForm>
     <template #footer>
       <ZButton class="mr-auto" @click="replaceDraft(defaults)">
         {{ t('common.actions.reset') }}
