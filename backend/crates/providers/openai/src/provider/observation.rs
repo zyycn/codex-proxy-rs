@@ -864,15 +864,10 @@ fn selection_failure(error: &CredentialSelectionError) -> ProviderError {
             UpstreamSendState::NotSent,
         ),
         CredentialSelectionError::QuotaExhausted => provider_error(
-            ProviderErrorKind::QuotaExhausted,
+            ProviderErrorKind::AccountPoolQuotaExhausted,
             UpstreamSendState::NotSent,
         )
-        .with_diagnostic(ProviderDiagnostic::new("网关可选账号的额度均已用完"))
-        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
-            "All eligible accounts in the gateway are out of quota.",
-            Some("usage_limit_reached".to_owned()),
-            Some("usage_limit_reached".to_owned()),
-        )),
+        .with_diagnostic(ProviderDiagnostic::new("网关可选账号的额度均已用完")),
         CredentialSelectionError::AccountSnapshotChanged => provider_error(
             ProviderErrorKind::ProviderInfrastructureUnavailable,
             UpstreamSendState::NotSent,

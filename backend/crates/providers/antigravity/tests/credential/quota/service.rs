@@ -459,7 +459,7 @@ async fn peer_model_facts_keep_membership_quota_and_revision_separate() {
             ),
         )
         .await;
-    assert!(matches!(result, Err(e) if e.kind() == ProviderErrorKind::QuotaExhausted));
+    assert!(matches!(result, Err(e) if e.kind() == ProviderErrorKind::AccountPoolQuotaExhausted));
     f.store
         .primary()
         .quota

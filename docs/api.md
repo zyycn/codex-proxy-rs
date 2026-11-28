@@ -3073,8 +3073,10 @@ Dashboard 返回原始 `asOf` 及 `asOfDisplay`，作为当前数据的查询锚
 HTTP SSE 请求可能在返回 HTTP 200 后流内失败；WebSocket 已升级时，客户端错误状态码不代表 HTTP 握手状态或 WebSocket 关闭码。
 两侧状态码不互相替代，也不覆盖 `logicalOutcome`
 
-请求列表与详情的 `errorKind` 保留网关分类，`websocketCloseCode` 只提取已保存关闭帧的数字码，
-与原始上游 `errorCode` 分开。`continuationUnavailableReason` 和 `upstreamConnectionExitReason`
+请求列表与详情的 `errorKind` 记录失败原因，使用小写蛇形命名。网关选号时额度耗尽为 `account_pool_quota_exhausted`，Provider 账号额度耗尽为 `quota_exhausted`，请求频率受限为 `rate_limited`。
+Client Key 的频率、并发和费用预算限制分别为 `key_rate_limited`、`key_concurrency_limited` 和 `budget_exhausted`。历史记录保留原分类。
+
+`websocketCloseCode` 只提取已保存关闭帧的数字码，与原始上游 `errorCode` 分开。`continuationUnavailableReason` 和 `upstreamConnectionExitReason`
 保留已记录的续接及连接退出原因，缺失字段为 `null`，不根据错误文案推断。
 `recovered` 表示已关联到后续成功请求，原请求的 `logicalOutcome` 保持不变。
 `errorOrigin` 由管理用例统一推导，可取 `proxy`、`upstream`、`connection`、`unknown`。

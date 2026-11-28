@@ -24,6 +24,10 @@ pub(super) fn gateway(error: GatewayError) -> PluginFault {
         | GatewayErrorKind::ConcurrencyQueueFull
         | GatewayErrorKind::ConcurrencyQueueTimeout
         | GatewayErrorKind::RateLimited
+        | GatewayErrorKind::QuotaExhausted
+        | GatewayErrorKind::AccountPoolQuotaExhausted
+        | GatewayErrorKind::KeyRateLimited
+        | GatewayErrorKind::KeyConcurrencyLimited
         | GatewayErrorKind::BudgetExhausted
         | GatewayErrorKind::NoAvailableProvider => ErrorCode::Capacity,
         GatewayErrorKind::Timeout => ErrorCode::Timeout,

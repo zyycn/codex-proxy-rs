@@ -1488,6 +1488,7 @@ where
             ProviderErrorKind::NoEligibleAccount
                 | ProviderErrorKind::AccountCapacityUnavailable
                 | ProviderErrorKind::QuotaExhausted
+                | ProviderErrorKind::AccountPoolQuotaExhausted
                 | ProviderErrorKind::ConcurrencyQueueFull
                 | ProviderErrorKind::ConcurrencyQueueTimeout
         );
@@ -2360,7 +2361,8 @@ where
             }
             ProviderErrorKind::NoEligibleAccount
             | ProviderErrorKind::AccountCapacityUnavailable
-            | ProviderErrorKind::QuotaExhausted => ContinuationAttempt::ReplayAny,
+            | ProviderErrorKind::QuotaExhausted
+            | ProviderErrorKind::AccountPoolQuotaExhausted => ContinuationAttempt::ReplayAny,
             _ => return false,
         };
         self.excluded_accounts.insert(pin.account().clone());

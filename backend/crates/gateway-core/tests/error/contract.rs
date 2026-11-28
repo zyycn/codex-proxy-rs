@@ -186,10 +186,7 @@ fn gateway_error_should_keep_client_visible_upstream_fields_out_of_safe_diagnost
         ));
     let gateway = GatewayError::from_provider(&error);
 
-    assert_eq!(
-        gateway.safe_message(),
-        "Upstream capacity is temporarily unavailable."
-    );
+    assert_eq!(gateway.safe_message(), "Account quota is exhausted.");
     assert_eq!(gateway.client_message(), message);
     assert_eq!(gateway.client_error_code(), Some("quota_exhausted"));
     assert_eq!(gateway.client_error_type(), Some("rate_limit_error"));

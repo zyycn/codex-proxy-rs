@@ -5091,7 +5091,26 @@ fn queue_timeout_and_rpm_rejection_leave_no_new_admission() {
             .await
             .err()
             .unwrap();
-        assert_eq!(limited.kind(), GatewayErrorKind::RateLimited);
+        assert_eq!(limited.kind(), GatewayErrorKind::KeyRateLimited);
+        assert_eq!(admissions.granted.load(Ordering::SeqCst), 1);
+        drop(running);
+    });
+}
+
+#[test]
+fn disabled_key_queue_reports_the_concurrency_limit() {
+    block_on(async {
+        let (service, admissions) = queue_service(1, 0, Duration::from_secs(1));
+        let running = service
+            .start(request(&service, ClientTransport::HttpJson))
+            .await
+            .unwrap();
+        let rejected = service
+            .start(request(&service, ClientTransport::HttpJson))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(rejected.kind(), GatewayErrorKind::KeyConcurrencyLimited);
         assert_eq!(admissions.granted.load(Ordering::SeqCst), 1);
         drop(running);
     });

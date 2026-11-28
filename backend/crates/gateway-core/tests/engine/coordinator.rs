@@ -2840,6 +2840,7 @@ fn native_continuation_exact_retry_keeps_scope_and_account() {
 fn unavailable_native_continuation_uses_provider_recovery_with_the_configured_account_policy() {
     for kind in [
         ProviderErrorKind::NoEligibleAccount,
+        ProviderErrorKind::AccountPoolQuotaExhausted,
         ProviderErrorKind::QuotaExhausted,
     ] {
         let Operation::Generate(generate) = generate_operation() else {
@@ -5570,9 +5571,9 @@ fn no_eligible_account_before_stream_records_failure_without_fabricating_an_atte
             GatewayErrorKind::NoAvailableProvider,
         ),
         (
-            ProviderErrorKind::QuotaExhausted,
+            ProviderErrorKind::AccountPoolQuotaExhausted,
             429,
-            GatewayErrorKind::RateLimited,
+            GatewayErrorKind::AccountPoolQuotaExhausted,
         ),
     ] {
         let operation = generate_operation();
@@ -6623,6 +6624,7 @@ fn connection_recovery_keeps_one_account_and_http_transport_until_success() {
     let cases = [
         ProviderErrorKind::NoEligibleAccount,
         ProviderErrorKind::AccountCapacityUnavailable,
+        ProviderErrorKind::AccountPoolQuotaExhausted,
         ProviderErrorKind::QuotaExhausted,
         ProviderErrorKind::ConcurrencyQueueFull,
         ProviderErrorKind::ConcurrencyQueueTimeout,
