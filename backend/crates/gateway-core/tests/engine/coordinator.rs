@@ -26,9 +26,10 @@ use gateway_core::engine::provider::{
     Provider, ProviderCallMetadata, ProviderRegistry, ProviderRequest, ProviderStream,
 };
 use gateway_core::engine::{
-    AttemptContext, AttemptCoordinator, AttemptRecord, AttemptTransport, CommitRequirement,
-    ContinuationAttempt, EngineError, ExecutionOutcome, ExecutionStore, GatewayEngine,
-    IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest, RecoveryReport,
+    AttemptContext, AttemptCoordinator, AttemptRecord, AttemptTransport, ClientReplayTrigger,
+    CommitRequirement, ContinuationAttempt, EngineError, ExecutionOutcome, ExecutionStore,
+    GatewayEngine, IntermediateFailure, ModelRequestFinalization, ModelRequestId, NewModelRequest,
+    RecoveryReport,
 };
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, ContinuationFailure,
@@ -2606,7 +2607,7 @@ fn native_capacity_above_wait_limit_rotates_before_requesting_client_replay() {
         if contexts.len() == 2 {
             assert_eq!(
                 contexts[1].continuation_attempt(),
-                ContinuationAttempt::RotateForClientReplay
+                ContinuationAttempt::RotateForClientReplay(ClientReplayTrigger::UpstreamCapacity)
             );
             assert!(
                 contexts[1]
@@ -2625,6 +2626,85 @@ fn native_capacity_above_wait_limit_rotates_before_requesting_client_replay() {
             } else {
                 ExecutionOutcome::Failed
             }
+        );
+    }
+}
+
+#[test]
+fn native_queue_timeout_requests_full_history_only_after_replacement_admission() {
+    use ProviderErrorKind::{ConcurrencyQueueFull, ConcurrencyQueueTimeout, NoEligibleAccount};
+    for (kind, replay_allowed, rotations, spare, expected_selections) in [
+        (ConcurrencyQueueTimeout, true, 1, true, 2),
+        (ConcurrencyQueueTimeout, true, 1, false, 2),
+        (ConcurrencyQueueTimeout, true, 0, true, 1),
+        (ConcurrencyQueueTimeout, false, 1, true, 1),
+        (ConcurrencyQueueFull, true, 1, true, 1),
+    ] {
+        let Operation::Generate(generate) = generate_operation() else {
+            unreachable!()
+        };
+        let operation =
+            Operation::Generate(generate.with_provider_session_state(
+                ProviderSessionState::new("openai", Map::new()).unwrap(),
+            ));
+        let plan = plan_with_policy(
+            &operation,
+            AccountSelectionPolicy::new(RotationStrategy::Smart, NonZeroU32::MIN)
+                .with_max_account_rotations(rotations),
+        );
+        let mut original = ProviderError::new(kind, UpstreamSendState::NotSent);
+        if replay_allowed {
+            original = original.with_continuation_recovery_disposition(
+                ContinuationRecoveryDisposition::ClientReplayRequired,
+            );
+        }
+        let replacement = if spare {
+            ProviderError::responses_replay_required("account_rotated", UpstreamSendState::NotSent)
+        } else {
+            ProviderError::new(NoEligibleAccount, UpstreamSendState::NotSent)
+        };
+        let (coordinator, store, provider) =
+            coordinator(vec![Script::Error(original), Script::Error(replacement)]);
+        let owner = ProviderAccountId::new("acct_one").unwrap();
+        let pin = NativeContinuationPin::new(
+            PreviousResponseId::new("client-previous"),
+            PreviousResponseId::new("upstream-previous"),
+            ClientApiKeyId::new("key_client_1").unwrap(),
+            ProviderKind::new("openai").unwrap(),
+            owner.clone(),
+        );
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            plan,
+            None,
+            Some(ContinuationBinding::Pinned(pin)),
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        let Err(EngineError::Provider(error)) = block_on(session.collect_uncommitted()) else {
+            panic!("expected a local selection error");
+        };
+        assert_eq!(error.kind(), kind);
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+        assert_eq!(
+            error.client_visible_upstream_error().and_then(|e| e.code()),
+            (spare && expected_selections == 2).then_some("previous_response_not_found")
+        );
+        let contexts = provider.contexts.lock().unwrap();
+        assert_eq!(contexts.len(), expected_selections);
+        if let Some(probe) = contexts.get(1) {
+            assert_eq!(
+                probe.continuation_attempt(),
+                ContinuationAttempt::RotateForClientReplay(
+                    ClientReplayTrigger::AccountQueueTimeout
+                )
+            );
+            assert!(probe.excluded_accounts().contains(&owner));
+        }
+        assert_eq!(
+            store.state.lock().unwrap().finalizations[0].attempt_count,
+            0
         );
     }
 }

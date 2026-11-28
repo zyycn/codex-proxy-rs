@@ -22,10 +22,10 @@ use crate::engine::probe::AccountProbeTarget;
 use crate::engine::provider::{Provider, ProviderCallMetadata, ProviderRequest, ProviderStream};
 use crate::engine::{
     AccountAttemptContext, AttemptContext, AttemptRecord, AttemptTransport, AttemptTrigger,
-    CommitRequirement, ContinuationAttempt, CoordinatedEvent, EngineError, ExecutionOutcome,
-    ExecutionStore, GatewayEngine, IntermediateFailure, ModelRequestFailureObservation,
-    ModelRequestFinalization, ModelRequestId, NewModelRequest, ProviderAccountStateOwner,
-    RequestAttemptContext, UpstreamSendState,
+    ClientReplayTrigger, CommitRequirement, ContinuationAttempt, CoordinatedEvent, EngineError,
+    ExecutionOutcome, ExecutionStore, GatewayEngine, IntermediateFailure,
+    ModelRequestFailureObservation, ModelRequestFinalization, ModelRequestId, NewModelRequest,
+    ProviderAccountStateOwner, RequestAttemptContext, UpstreamSendState,
 };
 use crate::error::{
     ContinuationRecoveryDisposition, GatewayError, GatewayErrorKind, ProviderError,
@@ -1474,9 +1474,11 @@ where
         attempt_trace: &TraceContext,
     ) -> Result<PullOutcome, EngineError> {
         attempt_trace.record_provider_failure(&error);
-        if self.continuation_attempt == ContinuationAttempt::RotateForClientReplay
-            && error.continuation_recovery_disposition()
-                == Some(ContinuationRecoveryDisposition::ClientReplayRequired)
+        if matches!(
+            self.continuation_attempt,
+            ContinuationAttempt::RotateForClientReplay(_)
+        ) && error.continuation_recovery_disposition()
+            == Some(ContinuationRecoveryDisposition::ClientReplayRequired)
             && let Some(original) = self.last_retryable_failure.take()
         {
             // 迁移只改变客户端恢复指令；失败分类、发送事实与运维正文仍属于原请求
@@ -1563,6 +1565,15 @@ where
                     .expect("pending connection rotation");
                 self.excluded_accounts.remove(&recovery.account);
                 self.pending_retry = Some(recovery);
+            } else if continuation_retry
+                && matches!(
+                    self.continuation_attempt,
+                    ContinuationAttempt::RotateForClientReplay(_)
+                )
+            {
+                // 只有替代账号准入成功后才投影重放信号，空池仍返回原排队错误
+                self.last_retryable_failure_events.clear();
+                self.last_retryable_failure = Some(error);
             } else if candidate_retry {
                 // 原账号只属于原 Provider，跨候选后不能拿旧钉选作恢复兜底
                 self.connection_rotation = None;
@@ -2261,7 +2272,9 @@ where
                     && !error.retry_is_prohibited()
                     && self.has_account_rotation_budget() =>
             {
-                self.continuation_attempt = ContinuationAttempt::RotateForClientReplay;
+                self.continuation_attempt = ContinuationAttempt::RotateForClientReplay(
+                    ClientReplayTrigger::UpstreamCapacity,
+                );
                 self.excluded_accounts
                     .insert(current.metadata.provider_account_id().clone());
             }
@@ -2301,27 +2314,23 @@ where
                 self.excluded_accounts
                     .insert(current.metadata.provider_account_id().clone());
             }
-            ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay => return false,
+            ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay(_) => {
+                return false;
+            }
         }
         true
     }
 
     /// 原生续写的原账号在本地调度阶段已不可用时，交给 Provider 执行跨账号恢复
     ///
-    /// 这不是强制 Smart：下一次 attempt 仍使用请求配置的调度策略
-    /// 只有网关持有
-    /// 对应 Provider 的会话状态时才进入恢复；是否保留 native handle、执行 probe
-    /// 或使用完整 transcript，由 Provider 自己的协议边界决定
+    /// 仅恢复网关持有的会话状态，沿用冻结的调度策略和换号预算
+    /// Provider 决定能否恢复原生状态，或仅允许客户端带完整历史重发
     fn prepare_unavailable_native_continuation_replay(&mut self, error: &ProviderError) -> bool {
         if self.account_selection.required_account().is_some()
             || self.continuation_attempt != ContinuationAttempt::Native
             || self.current_send_state() != UpstreamSendState::NotSent
-            || !matches!(
-                error.kind(),
-                ProviderErrorKind::NoEligibleAccount
-                    | ProviderErrorKind::AccountCapacityUnavailable
-                    | ProviderErrorKind::QuotaExhausted
-            )
+            || self.replay_barrier_reached
+            || self.delivery_pending
         {
             return false;
         }
@@ -2344,7 +2353,19 @@ where
             return false;
         }
 
-        self.continuation_attempt = ContinuationAttempt::ReplayAny;
+        self.continuation_attempt = match error.kind() {
+            ProviderErrorKind::ConcurrencyQueueTimeout
+                if error.send_state() == UpstreamSendState::NotSent
+                    && error.continuation_recovery_disposition()
+                        == Some(ContinuationRecoveryDisposition::ClientReplayRequired) =>
+            {
+                ContinuationAttempt::RotateForClientReplay(ClientReplayTrigger::AccountQueueTimeout)
+            }
+            ProviderErrorKind::NoEligibleAccount
+            | ProviderErrorKind::AccountCapacityUnavailable
+            | ProviderErrorKind::QuotaExhausted => ContinuationAttempt::ReplayAny,
+            _ => return false,
+        };
         self.excluded_accounts.insert(pin.account().clone());
         true
     }

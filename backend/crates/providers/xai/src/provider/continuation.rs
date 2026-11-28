@@ -91,7 +91,7 @@ pub(super) fn continuation_account(
                 .map_err(|_| invalid_continuation())
         }
         (ContinuationAttempt::ReplayAny, _) => Ok(None),
-        (ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay, _) => {
+        (ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay(_), _) => {
             Err(invalid_continuation())
         }
     }
@@ -137,7 +137,7 @@ pub(super) fn apply_continuation(
             }
             apply_replay(request, previous, account, current_input)
         }
-        ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay => {
+        ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay(_) => {
             Err(invalid_continuation())
         }
     }

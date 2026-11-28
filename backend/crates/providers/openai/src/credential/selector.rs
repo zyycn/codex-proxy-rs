@@ -21,7 +21,7 @@ use gateway_core::concurrency::{
     CapacityWait, ConcurrencyQueuePolicy, ConcurrencyWaitQueue, QueueRejection, WaitPriority,
 };
 use gateway_core::engine::{
-    AttemptContext, ContinuationAttempt,
+    AttemptContext, ClientReplayTrigger, ContinuationAttempt,
     policy::{AccountPolicyError, AccountScheduleOwnership},
 };
 use gateway_core::provider_ports::{
@@ -522,6 +522,17 @@ impl CodexCredentialSelector {
             )
         };
         let selection = async {
+            if request.attempt.continuation_attempt()
+                == ContinuationAttempt::RotateForClientReplay(
+                    ClientReplayTrigger::AccountQueueTimeout,
+                )
+            {
+                let queue = ConcurrencyQueuePolicy {
+                    max_waiting: 0,
+                    ..policy.queue_policy()
+                };
+                return select(queue, Some(QueueRejection::Timeout)).await;
+            }
             let rejection = match select(policy.queue_policy(), None).await {
                 Err(CredentialSelectionError::QueueRejected(reason))
                     if !follow_only
@@ -530,7 +541,7 @@ impl CodexCredentialSelector {
                             request.attempt.continuation_attempt(),
                             ContinuationAttempt::None
                                 | ContinuationAttempt::ReplayAny
-                                | ContinuationAttempt::RotateForClientReplay
+                                | ContinuationAttempt::RotateForClientReplay(_)
                         ) =>
                 {
                     reason
@@ -761,7 +772,7 @@ impl CodexCredentialSelector {
                 .map(|owner| owner.account().clone()),
             ContinuationAttempt::None
             | ContinuationAttempt::ReplayAny
-            | ContinuationAttempt::RotateForClientReplay => None,
+            | ContinuationAttempt::RotateForClientReplay(_) => None,
         };
         let required_account = request.attempt.required_account().cloned();
         if required_account
@@ -1654,7 +1665,7 @@ impl CodexCredentialSelector {
                     affinity_telemetry,
                     admitted_session: binding_key.filter(|_| !cache_preference).cloned(),
                     capacity: capacity.map(AccountCapacitySnapshot::with_acquired_request),
-                    _guard: guard,
+                    guard,
                 });
             }
         }
@@ -2324,10 +2335,14 @@ pub struct CodexCredentialLease {
     // 已准入请求允许完成；只有中间件改变会话身份时才需要再次认领
     admitted_session: Option<ProviderSessionAffinityKey>,
     capacity: Option<AccountCapacitySnapshot>,
-    _guard: Box<dyn ProviderLeaseGuard>,
+    guard: Box<dyn ProviderLeaseGuard>,
 }
 
 impl CodexCredentialLease {
+    pub(crate) async fn release(self) -> Result<(), CredentialSelectionError> {
+        Ok(self.guard.release().await?)
+    }
+
     pub(crate) const fn transport(&self) -> super::ResponsesTransport {
         self.transport
     }

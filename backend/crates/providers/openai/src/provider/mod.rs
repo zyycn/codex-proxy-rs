@@ -17,7 +17,9 @@ use gateway_core::engine::provider::{
     ProviderRequestObservation, ProviderSelectionObservation, ProviderStream,
 };
 use gateway_core::engine::upstream_adapter::UpstreamAdapterSelection;
-use gateway_core::engine::{AttemptContext, AttemptTransport, ContinuationAttempt};
+use gateway_core::engine::{
+    AttemptContext, AttemptTransport, ClientReplayTrigger, ContinuationAttempt,
+};
 use gateway_core::error::{
     ClientVisibleUpstreamError, ClientVisibleUpstreamResponse, ContinuationFailure,
     ContinuationRecoveryDisposition, OpaqueUpstreamValue, ProviderConnectionObservation,
@@ -750,12 +752,13 @@ impl Provider for CodexProvider {
             &[],
             context.client_api_key_ref(),
         );
-        if context.continuation_attempt() == ContinuationAttempt::RotateForClientReplay
+        if let ContinuationAttempt::RotateForClientReplay(trigger) = context.continuation_attempt()
             && (selection_session_affinity.is_none()
-                || context.account_selection_policy().account_affinity()
-                    == AccountAffinity::Relaxed)
+                || (trigger == ClientReplayTrigger::UpstreamCapacity
+                    && context.account_selection_policy().account_affinity()
+                        == AccountAffinity::Relaxed))
         {
-            // 没有可持续的会话绑定就无法保证完整历史使用替代账号，交回原始容量错误
+            // 上游过载时宽松亲和无法固定替代账号；本地排队超时则可按实时空位调度完整请求
             return Err(provider_error(
                 ProviderErrorKind::NoEligibleAccount,
                 UpstreamSendState::NotSent,
@@ -783,7 +786,25 @@ impl Provider for CodexProvider {
                     guardian,
                 )
                 .await
-                .map_err(map_selection_error)
+                .map_err(|error| {
+                    let can_request_replay = matches!(
+                        error,
+                        CredentialSelectionError::QueueRejected(
+                            gateway_core::concurrency::QueueRejection::Timeout
+                        )
+                    ) && context.continuation_attempt()
+                        == ContinuationAttempt::Native
+                        && !adapted
+                        && selection_session_affinity.is_some();
+                    let error = map_selection_error(error);
+                    if can_request_replay {
+                        error.with_continuation_recovery_disposition(
+                            ContinuationRecoveryDisposition::ClientReplayRequired,
+                        )
+                    } else {
+                        error
+                    }
+                })
         };
         // 恢复期间排队也消耗启动窗口；只包住选账号，不限制业务响应时长
         let lease = if let Some(remaining) = context.connection_budget().startup_remaining() {
@@ -805,9 +826,13 @@ impl Provider for CodexProvider {
                 CredentialSelectionError::NoEligibleCredential,
             ));
         }
-        if context.continuation_attempt() == ContinuationAttempt::RotateForClientReplay {
+        if matches!(
+            context.continuation_attempt(),
+            ContinuationAttempt::RotateForClientReplay(_)
+        ) {
             // Core 已确认允许换号；选号器迁移共享绑定后，完整历史仍须由客户端提供
             // 不将旧账号的 previous_response_id 或增量输入发送给替代账号
+            lease.release().await.map_err(map_selection_error)?;
             return Err(continuation_replay_required_error("account_rotated"));
         }
         let adapter = context.upstream_adapter_for_account(
@@ -1034,7 +1059,8 @@ impl CodexProvider {
                         ContinuationAttempt::ReplayOwner | ContinuationAttempt::ReplayAny => {
                             PreviousResponseScope::ExternalUnknown
                         }
-                        ContinuationAttempt::None | ContinuationAttempt::RotateForClientReplay => {
+                        ContinuationAttempt::None
+                        | ContinuationAttempt::RotateForClientReplay(_) => {
                             PreviousResponseScope::ExternalUnknown
                         }
                     };

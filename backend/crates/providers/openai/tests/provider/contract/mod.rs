@@ -55,8 +55,8 @@ use gateway_core::engine::middleware::{
 use gateway_core::engine::probe::AccountProbeTarget;
 use gateway_core::engine::provider::{Provider as _, ProviderRequest};
 use gateway_core::engine::{
-    AccountAttemptContext, AttemptContext, AttemptTransport, ContinuationAttempt, ModelRequestId,
-    ProviderAccountStateOwner, RequestAttemptContext,
+    AccountAttemptContext, AttemptContext, AttemptTransport, ClientReplayTrigger,
+    ContinuationAttempt, ModelRequestId, ProviderAccountStateOwner, RequestAttemptContext,
 };
 use gateway_core::error::{
     ContinuationFailure, ContinuationRecoveryDisposition, PreDeliveryRetry, ProviderErrorKind,
@@ -12821,6 +12821,109 @@ async fn late_quota_continuation_rejection_requires_client_replay_before_output(
 }
 
 #[tokio::test]
+async fn native_queue_recovery_checks_an_immediate_spare_in_each_affinity_mode() {
+    use gateway_core::account::AccountAffinity::{Preferred, Relaxed, Strict};
+    use gateway_core::concurrency::ConcurrencyQueuePolicy;
+    for mode in [Strict, Preferred, Relaxed] {
+        let store = Arc::new(MemoryAccountStore::default());
+        let owner = ProviderAccountId::new("acct_provider_contract").unwrap();
+        create_account(&store, owner.as_str()).await;
+        create_account(&store, "acct_affinity_switch_b").await;
+        let leases = Arc::new(TestLeaseCoordinator::default());
+        leases.busy_accounts.lock().unwrap().insert(owner.clone());
+        let server = MockServer::start().await;
+        let (provider, _) = provider_and_quota_with_affinity_and_base_url_and_leases(
+            &store,
+            Arc::new(MemorySessionAffinity::default()),
+            server.uri(),
+            Arc::clone(&leases),
+            0,
+        );
+        let kind = ProviderKind::new("openai").unwrap();
+        let key = ClientApiKeyId::new("key_openai_contract").unwrap();
+        let pin = NativeContinuationPin::new(
+            PreviousResponseId::new("resp_previous"),
+            PreviousResponseId::new("resp_previous"),
+            key.clone(),
+            kind,
+            owner.clone(),
+        );
+        let select = |attempt, excluded, timeout| {
+            let context = AttemptContext::new(
+                RequestAttemptContext::new(
+                    ModelRequestId::new("req_queue_recovery").unwrap(),
+                    key.clone(),
+                ),
+                NonZeroU32::MIN,
+                SystemTime::now() + Duration::from_secs(10),
+                account_policy()
+                    .with_account_affinity(mode)
+                    .with_queue(ConcurrencyQueuePolicy {
+                        max_waiting: 3,
+                        timeout,
+                    }),
+                AccountAttemptContext::new(excluded, None, None)
+                    .with_account_scope(contract_account_scope()),
+                Some(ContinuationBinding::Pinned(pin.clone())),
+                CancellationToken::new(),
+            )
+            .with_continuation_attempt(attempt);
+            Arc::clone(&provider).execute(
+                planned_request("openai", quota_continuation_operation(true)),
+                context,
+            )
+        };
+        let native = select(
+            ContinuationAttempt::Native,
+            BTreeSet::new(),
+            Duration::from_millis(30),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(native.kind(), ProviderErrorKind::ConcurrencyQueueTimeout);
+        assert_eq!(
+            native.continuation_recovery_disposition(),
+            Some(ContinuationRecoveryDisposition::ClientReplayRequired)
+        );
+        assert!(native.client_visible_upstream_error().is_none());
+
+        for busy in [true, false] {
+            *leases.busy.lock().unwrap() = busy;
+            let replacement = tokio::time::timeout(
+                Duration::from_secs(1),
+                select(
+                    ContinuationAttempt::RotateForClientReplay(
+                        ClientReplayTrigger::AccountQueueTimeout,
+                    ),
+                    BTreeSet::from([owner.clone()]),
+                    Duration::from_secs(5),
+                ),
+            )
+            .await
+            .expect("replacement must not queue")
+            .err()
+            .unwrap();
+            assert_eq!(replacement.send_state(), UpstreamSendState::NotSent);
+            assert_eq!(
+                replacement
+                    .client_visible_upstream_error()
+                    .and_then(|e| e.code()),
+                (!busy).then_some("previous_response_not_found")
+            );
+        }
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .all(|r| !r.url.path().ends_with("/responses"))
+        );
+    }
+}
+
+#[tokio::test]
 async fn client_replay_rotation_without_session_identity_does_not_select_or_send() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_provider_contract").await;
@@ -12834,7 +12937,7 @@ async fn client_replay_rotation_without_session_identity_does_not_select_or_send
                 "client-previous",
                 "upstream-previous",
                 2,
-                ContinuationAttempt::RotateForClientReplay,
+                ContinuationAttempt::RotateForClientReplay(ClientReplayTrigger::UpstreamCapacity),
             ),
         )
         .await
@@ -12976,7 +13079,9 @@ async fn continuation_full_client_replay_selects_another_account() {
                 Some(ContinuationBinding::Pinned(pin)),
                 CancellationToken::new(),
             )
-            .with_continuation_attempt(ContinuationAttempt::RotateForClientReplay);
+            .with_continuation_attempt(ContinuationAttempt::RotateForClientReplay(
+                ClientReplayTrigger::UpstreamCapacity,
+            ));
             error = Arc::clone(&provider)
                 .execute(
                     planned_request("openai", quota_continuation_operation(true)),
