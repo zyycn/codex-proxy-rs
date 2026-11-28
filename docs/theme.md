@@ -191,7 +191,9 @@ Preset 的实心色使用 P6，普通 Container、Strong Container 与边界按 
 默认浅色采用中性锚点，默认深色使用 HSL 色调派生；自定义中性色按外观距离平滑过渡到背景和文字 Seed 的 RGB 混色结果。
 Input、阴影与其他 Component Token 从 Fill、Surface、Primary 和 Semantic 派生，不在常量文件维护整套颜色表
 
-正常文字同时检查 Layout、Container、Elevated、文字交互背景、三级 Fill，以及控件透明填充在各宿主上的合成色
+Surface 中的三级 Fill 表示不透明的背景层级，Control Fill 与实际宿主叠加，分别描述控件默认、Hover、Active 与内部条目的底色。内部条目使用文本 Seed 的 6% 透明填充，明暗主题共用规则，组件通过对应 Token 消费
+
+正常文字同时检查 Layout、Container、Elevated、文字交互背景、三级 Fill，以及控件透明填充和内部条目在各宿主上的合成色
 和浅色的选中 / 选中 Hover 背景。正文、标题和 Secondary 至少 7:1，
 Tertiary 至少 5.5:1，Quaternary 至少 4.5:1。
 Disabled 使用独立的弱化颜色，不承担正常信息。控件填充由文字 Seed 和透明度派生，placeholder 使用 Quaternary。主按钮白字与功能色文字遵循各自的容器配对规则
@@ -224,7 +226,7 @@ Token 直接覆盖时不会自动重算同组件的其他状态；需要保持�
 | --- | --- |
 | Button | `--z-button-primary-color / bg / hover-bg / active-bg`、`--z-button-secondary-bg / hover-bg / active-bg` |
 | IconButton | `--z-icon-button-secondary-bg / hover-bg / active-bg` |
-| Input | `--z-input-bg / hover-bg / active-bg / error-active-bg` 与对应 Shadow |
+| Input | `--z-input-bg / hover-bg / active-bg / error-active-bg` 与对应 Shadow，`--z-input-tag-bg` 供 Select、InputTag 和折叠标签使用 |
 | Menu | `--z-menu-item-selected-bg / bg-image / shadow` |
 | Popover | `--z-popover-header-bg`、`--z-popover-shadow` |
 | Table | `--z-table-row-bg / stripe-bg / hover-bg / selected-bg / selected-hover-bg / height` |

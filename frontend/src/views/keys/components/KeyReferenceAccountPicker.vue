@@ -5,6 +5,7 @@ import { computed, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getBudgetReferenceAccounts } from '@/api'
 import { useRequestState } from '@/composables/useRequestState'
+import { accountIdentityLabel } from '@/views/accounts/utils/accountIdentity'
 
 const props = defineProps<{ keyId: string, disabled: boolean }>()
 const accountId = defineModel<string>()
@@ -32,11 +33,17 @@ async function load() {
   try {
     const page = await getBudgetReferenceAccounts(props.keyId, search.value.trim(), cursor.value, { signal: request.signal, silent: true })
     if (request.isCurrent(id)) {
-      items.value = items.value.concat(page.items.map(account => ({
-        value: account.id,
-        label: account.name,
-        description: account.email || account.provider,
-      })))
+      items.value = items.value.concat(page.items.map((account) => {
+        const label = accountIdentityLabel(account)
+        const email = account.email?.trim()
+        return {
+          value: account.id,
+          label,
+          description: email && email !== label
+            ? email
+            : account.provider,
+        }
+      }))
       cursor.value = page.nextCursor ?? undefined
     }
   }
