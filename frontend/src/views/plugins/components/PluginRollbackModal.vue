@@ -38,7 +38,7 @@ watch(() => props.plan, () => {
 </script>
 
 <template>
-  <ZDialog v-model="open" :title="t('plugins.rollback.rollBackPluginVersion')" :description="t('plugins.rollback.description')" width="36rem" :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving">
+  <ZDialog v-model="open" destroy-on-close :title="t('plugins.rollback.rollBackPluginVersion')" :description="t('plugins.rollback.description')" width="36rem" :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving">
     <ZForm class="grid gap-4">
       <ZFormItem :label="t('plugins.catalog.currentVersion')">
         <p class="m-0 break-all text-z-sm text-z-text">

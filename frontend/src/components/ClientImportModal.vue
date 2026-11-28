@@ -10,7 +10,7 @@ import ProviderSelect from '@/components/ProviderSelect.vue'
 const props = defineProps<{ provider?: BuiltinProvider }>()
 const emit = defineEmits<{
   select: [provider: BuiltinProvider]
-  afterLeave: []
+  closed: []
 }>()
 const open = defineModel<boolean>({ default: false })
 const selectedProvider = shallowRef<BuiltinProvider>('openai')
@@ -28,7 +28,7 @@ function select() {
     :title="t('keys.configuration.importTo')"
     :description="t('keys.configuration.selectImportTool')"
     width="24rem"
-    @closed="emit('afterLeave')"
+    @closed="emit('closed')"
   >
     <div class="grid gap-2">
       <ProviderSelect v-if="!provider" v-model="selectedProvider" :aria-label="t('keys.configuration.platform')" />

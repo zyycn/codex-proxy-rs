@@ -15,7 +15,7 @@ import { formatCompactNumber, formatInteger, formatUsd } from '@/utils/format'
 import ApiKeyModelUsageTable from './ApiKeyModelUsageTable.vue'
 
 const props = defineProps<{ apiKey: ApiKey }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ closed: [] }>()
 const { t } = useI18n({ useScope: 'global' })
 const open = shallowRef(true)
 const trend = useTemplateRef<HTMLElement>('trend')
@@ -188,7 +188,7 @@ watch([
 </script>
 
 <template>
-  <ZDialog v-model="open" :title="t('keys.statistics.heading', { name: apiKey.name })" width="70rem" @closed="emit('close')">
+  <ZDialog v-model="open" :title="t('keys.statistics.heading', { name: apiKey.name })" width="70rem" @closed="emit('closed')">
     <div class="grid min-w-0 gap-3">
       <div class="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <ZSegmented v-model="metric" size="small" :options="metrics" :aria-label="t('keys.statistics.metric')" />

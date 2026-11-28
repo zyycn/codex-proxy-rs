@@ -10,7 +10,7 @@ import ProviderSelect from '@/components/ProviderSelect.vue'
 import { buildCcSwitchImportDeeplink, buildClientConfig, resolveServiceRootUrl } from './client'
 
 const props = defineProps<{ title?: string, apiKey: { name?: string, key?: string } | null }>()
-const emit = defineEmits<{ copy: [text: string], afterLeave: [] }>()
+const emit = defineEmits<{ copy: [text: string], closed: [] }>()
 const open = defineModel<boolean>({ default: false })
 const { t } = useI18n({ useScope: 'global' })
 const showImport = shallowRef(false)
@@ -44,7 +44,7 @@ function importToClient() {
 </script>
 
 <template>
-  <ZDialog v-model="open" :title="title ?? t('keys.configuration.title')" width="46rem" @closed="showImport = false; emit('afterLeave')">
+  <ZDialog v-model="open" destroy-on-close :title="title ?? t('keys.configuration.title')" width="46rem" @close="showImport = false" @closed="emit('closed')">
     <div class="grid min-w-0 gap-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <ProviderSelect v-model="provider" :aria-label="t('keys.configuration.platform')" />
@@ -74,5 +74,5 @@ function importToClient() {
       </ZButton>
     </template>
   </ZDialog>
-  <ClientImportModal v-if="open" v-model="showImport" :provider="provider" @select="importToClient" />
+  <ClientImportModal v-model="showImport" :provider="provider" @select="importToClient" />
 </template>

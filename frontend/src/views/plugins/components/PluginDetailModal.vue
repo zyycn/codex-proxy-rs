@@ -39,6 +39,18 @@ const { t } = useI18n({ useScope: 'global' })
 
 const open = defineModel<boolean>({ required: true })
 const section = shallowRef('configurations')
+let navigateAfterClose: (() => void) | undefined
+
+function openPluginPage(navigate: () => void) {
+  navigateAfterClose = navigate
+  open.value = false
+}
+
+function finishClose() {
+  navigateAfterClose?.()
+  navigateAfterClose = undefined
+}
+
 const sections = computed(() => ([
   {
     label: t('navigation.overview'),
@@ -73,14 +85,16 @@ function configurationNotes(instance: PluginInstance) {
   return notes
 }
 watch(open, (value) => {
-  if (value)
+  if (value) {
+    navigateAfterClose = undefined
     section.value = props.initialSection
+  }
 })
 watch(() => props.initialSection, value => section.value = value)
 </script>
 
 <template>
-  <ZDialog v-model="open" :title="plugin?.artifact.metadata.displayName ?? t('plugins.details.pluginDetails')" :description="plugin?.artifact.metadata.description" width="42rem" :show-close="!busy" :close-on-click-modal="!busy" :close-on-press-escape="!busy">
+  <ZDialog v-model="open" :title="plugin?.artifact.metadata.displayName ?? t('plugins.details.pluginDetails')" :description="plugin?.artifact.metadata.description" width="42rem" :show-close="!busy" :close-on-click-modal="!busy" :close-on-press-escape="!busy" @closed="finishClose">
     <div v-if="plugin" class="grid gap-5">
       <div class="flex flex-wrap items-center gap-3">
         <ZSegmented v-model="section" :options="sections" :aria-label="t('plugins.details.pluginDetailsSection')" />
@@ -126,9 +140,11 @@ watch(() => props.initialSection, value => section.value = value)
           <PluginRuntimeLoad v-if="instance.runtime.load" :load="instance.runtime.load" :revision="instance.runtime.actualRevision" />
           <div class="flex flex-wrap items-center gap-2">
             <div v-if="configurationStatus(instance) === 'enabled'" class="mr-auto flex min-w-0 flex-wrap items-center gap-2">
-              <RouterLink v-for="page in viewByInstance.get(instance.id)?.pages ?? []" :key="page.id" :to="pluginPageLocation(viewByInstance.get(instance.id)!, page)" class="inline-flex h-z-control-sm min-w-0 items-center gap-1.5 rounded-z bg-z-primary-container px-2.5 text-z-sm leading-none text-z-primary-on-container no-underline outline-none transition-colors hover:bg-z-primary-container-hover focus-visible:ring-2 focus-visible:ring-z-control-outline motion-reduce:transition-none" @click="open = false">
-                <span class="truncate">{{ page.title }}</span>
-                <ArrowUpRight class="size-3.5 shrink-0" />
+              <RouterLink v-for="page in viewByInstance.get(instance.id)?.pages ?? []" :key="page.id" v-slot="{ href, navigate }" :to="pluginPageLocation(viewByInstance.get(instance.id)!, page)" custom>
+                <a :href="href" class="inline-flex h-z-control-sm min-w-0 items-center gap-1.5 rounded-z bg-z-primary-container px-2.5 text-z-sm leading-none text-z-primary-on-container no-underline outline-none transition-colors hover:bg-z-primary-container-hover focus-visible:ring-2 focus-visible:ring-z-control-outline motion-reduce:transition-none" @click.left.exact.prevent="openPluginPage(navigate)">
+                  <span class="truncate">{{ page.title }}</span>
+                  <ArrowUpRight class="size-3.5 shrink-0" />
+                </a>
               </RouterLink>
             </div>
             <ZIconButton v-if="instance.configurationRequired || (currentArtifact && hasPluginSettings(currentArtifact))" size="small" variant="solid" :aria-label="t('plugins.details.settings')" :disabled="busy" @click="$emit('edit', instance)">

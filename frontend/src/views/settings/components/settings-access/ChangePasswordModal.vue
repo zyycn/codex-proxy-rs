@@ -88,7 +88,7 @@ async function submit() {
 </script>
 
 <template>
-  <ZDialog v-model="open" :title="t('settings.password.changeAdministratorPassword')" :description="t('settings.password.changeDescription')" width="28rem" :show-close="!loading" :close-on-click-modal="!loading" :close-on-press-escape="!loading" @closed="clearForm">
+  <ZDialog v-model="open" destroy-on-close :title="t('settings.password.changeAdministratorPassword')" :description="t('settings.password.changeDescription')" width="28rem" :show-close="!loading" :close-on-click-modal="!loading" :close-on-press-escape="!loading" @closed="clearForm">
     <ZForm :id="formId" ref="formElement" class="gap-5" :model="form" :rules="rules" :validate-on-rule-change="false" focus-on-error novalidate @submit="submit">
       <ZFormItem prop="currentPassword" :label="t('settings.password.currentPassword')">
         <ZInput v-model="form.currentPassword" :validate-event="submitted" type="password" autocomplete="current-password" :placeholder="t('settings.password.enterCurrentPassword')" :disabled="loading" maxlength="4096" @input="revalidateDependentField('newPassword')" />

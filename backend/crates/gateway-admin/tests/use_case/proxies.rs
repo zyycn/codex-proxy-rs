@@ -39,6 +39,20 @@ impl ProxyStore for TestProxies {
         Err(super::unavailable("proxy"))
     }
 
+    async fn test_targets(
+        &self,
+    ) -> gateway_admin::ports::store::AdminStoreResult<
+        gateway_admin::model::proxies::ProxyTestTargets,
+    > {
+        unreachable!()
+    }
+    async fn replace_test_targets(
+        &self,
+        _: &gateway_admin::model::proxies::ProxyTestTargets,
+        _: &gateway_admin::model::MutationContext,
+    ) -> gateway_admin::ports::store::AdminStoreResult<gateway_admin::model::Revision> {
+        unreachable!()
+    }
     async fn reserve_import(
         &self,
         id: &str,
@@ -194,6 +208,14 @@ async fn plugin_proxy_resolution_requires_enabled_configuration_without_account_
 
 #[async_trait]
 impl ProxyProbe for TestProxies {
+    async fn test_target(
+        &self,
+        _: &gateway_core::account::OutboundProxy,
+        _: &str,
+    ) -> gateway_admin::model::proxies::TargetProbeResult {
+        unreachable!()
+    }
+
     async fn test(&self, _: ProbeRoute<'_>, _: bool) -> ProxyTestResult {
         panic!("unexpected proxy probe")
     }
@@ -487,6 +509,14 @@ impl Drop for ActiveProbe<'_> {
 
 #[async_trait]
 impl ProxyProbe for GatedProxyProbe {
+    async fn test_target(
+        &self,
+        _: &gateway_core::account::OutboundProxy,
+        _: &str,
+    ) -> gateway_admin::model::proxies::TargetProbeResult {
+        unreachable!()
+    }
+
     async fn test(&self, _: ProbeRoute<'_>, _: bool) -> ProxyTestResult {
         self.active
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

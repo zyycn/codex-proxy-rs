@@ -40,19 +40,19 @@ const processed = computed(() => result.value
   : '')
 const outcome = computed(() => result.value?.outcomes[0])
 
-watch(open, (value) => {
-  preview.invalidate()
+function initializeEditor() {
+  selectedIndex.value = 0
+  draft.value = cloneDeep(props.rule ?? newRule())
+  fixedValues.value = draft.value.steps.map(step => JSON.stringify(step.value))
+  sample.value = JSON.stringify(exampleRequest(), null, 2)
+}
+
+function clearPreview() {
+  sample.value = ''
   localError.value = ''
-  if (value) {
-    selectedIndex.value = 0
-    draft.value = cloneDeep(props.rule ?? newRule())
-    fixedValues.value = draft.value.steps.map(step => JSON.stringify(step.value))
-    sample.value = JSON.stringify(exampleRequest(), null, 2)
-  }
-  else {
-    sample.value = ''
-  }
-})
+  preview.invalidate()
+}
+
 watch([draft, sample, fixedValues], () => {
   preview.invalidate()
   localError.value = ''
@@ -141,7 +141,15 @@ async function apply() {
 </script>
 
 <template>
-  <ZDialog v-model="open" :title="isNew ? t('settings.privacy.addRule') : t('settings.privacy.rules.editRule')" :description="t('settings.privacy.rules.description')" width="64rem">
+  <ZDialog
+    v-model="open"
+    :title="isNew ? t('settings.privacy.addRule') : t('settings.privacy.rules.editRule')"
+    :description="t('settings.privacy.rules.description')"
+    width="64rem"
+    @open="initializeEditor"
+    @close="preview.cancel"
+    @closed="clearPreview"
+  >
     <div class="grid gap-4">
       <ZFormItem :label="t('settings.privacy.rules.ruleName')" required>
         <ZInput v-model="draft.name" :placeholder="t('settings.privacy.rules.namePlaceholder')" :aria-label="t('settings.privacy.rules.ruleName')" maxlength="64" />

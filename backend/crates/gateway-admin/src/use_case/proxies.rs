@@ -69,6 +69,18 @@ async fn list_proxies(
 
 #[async_trait]
 pub trait ProxiesService: Send + Sync {
+    async fn test_targets(&self) -> Result<ProxyTestTargets, AdminError>;
+    async fn replace_test_targets(
+        &self,
+        settings: ProxyTestTargets,
+        context: &MutationContext,
+    ) -> Result<ProxyTestTargets, AdminError>;
+    async fn test_target(
+        &self,
+        proxy_id: &str,
+        name: &str,
+        revision: Revision,
+    ) -> Result<(String, TargetProbeResult), AdminError>;
     async fn create_batch(
         &self,
         commands: Vec<Result<NewProxy, AdminError>>,
@@ -131,6 +143,12 @@ pub(crate) struct DefaultProxiesService {
 }
 
 impl DefaultProxiesService {
+    fn test_slot(&self) -> Result<tokio::sync::SemaphorePermit<'_>, AdminError> {
+        self.test_slots
+            .try_acquire()
+            .map_err(|_| AdminError::new(AdminErrorKind::RateLimited, "代理测试已达并发上限"))
+    }
+
     pub(crate) fn new(
         store: Arc<dyn ProxyStore>,
         probe: Arc<dyn ProxyProbe>,
@@ -151,6 +169,84 @@ impl DefaultProxiesService {
 
 #[async_trait]
 impl ProxiesService for DefaultProxiesService {
+    async fn test_targets(&self) -> Result<ProxyTestTargets, AdminError> {
+        self.store
+            .test_targets()
+            .await
+            .map_err(|error| map_store_error(error, "proxy test targets"))
+    }
+
+    async fn replace_test_targets(
+        &self,
+        mut settings: ProxyTestTargets,
+        context: &MutationContext,
+    ) -> Result<ProxyTestTargets, AdminError> {
+        if settings.targets.len() > 32 {
+            return Err(AdminError::invalid("最多可配置 32 个测试目标"));
+        }
+        let mut names = std::collections::HashSet::new();
+        for target in &mut settings.targets {
+            target.name = target.name.trim().to_owned();
+            if target.name.is_empty()
+                || target.name.chars().count() > 100
+                || target.name.chars().any(char::is_control)
+            {
+                return Err(AdminError::invalid("目标名称需要 1 至 100 个字符"));
+            }
+            if !names.insert(target.name.as_str()) {
+                return Err(AdminError::invalid("测试目标名称重复"));
+            }
+            let raw = target.url.trim();
+            let url = url::Url::parse(raw)
+                .ok()
+                .filter(|url| {
+                    !raw.chars().any(char::is_control)
+                        && url.scheme() == "https"
+                        && url.has_host()
+                        && url.username().is_empty()
+                        && url.password().is_none()
+                        && url.fragment().is_none()
+                })
+                .ok_or_else(|| AdminError::invalid("请输入不含凭据和片段的 HTTPS 目标地址"))?;
+            if raw.len() > 2048 || url.as_str().len() > 2048 {
+                return Err(AdminError::invalid("目标地址不能超过 2048 字节"));
+            }
+            target.url = url.into();
+        }
+        settings.revision = self
+            .store
+            .replace_test_targets(&settings, context)
+            .await
+            .map_err(|error| map_store_error(error, "proxy test targets"))?;
+        publish_committed(self.snapshot.as_ref(), settings.revision).await?;
+        Ok(settings)
+    }
+
+    async fn test_target(
+        &self,
+        proxy_id: &str,
+        name: &str,
+        revision: Revision,
+    ) -> Result<(String, TargetProbeResult), AdminError> {
+        let _permit = self.test_slot()?;
+        let settings = self.test_targets().await?;
+        if settings.revision != revision {
+            return Err(AdminError::conflict("测试目标已更新，请重新选择"));
+        }
+        let target = settings
+            .targets
+            .iter()
+            .find(|target| target.name == name)
+            .ok_or_else(|| AdminError::not_found("测试目标不存在"))?;
+        let record = self
+            .store
+            .get(proxy_id)
+            .await
+            .map_err(|error| map_store_error(error, "proxy"))?;
+        let result = self.probe.test_target(&record.proxy, &target.url).await;
+        Ok((record.name, result))
+    }
+
     async fn create_batch(
         &self,
         commands: Vec<Result<NewProxy, AdminError>>,
@@ -394,10 +490,7 @@ impl ProxiesService for DefaultProxiesService {
         proxy: ProbeRoute<'_>,
         detect_location: bool,
     ) -> Result<ProxyTestResult, AdminError> {
-        let _permit = self
-            .test_slots
-            .try_acquire()
-            .map_err(|_| AdminError::new(AdminErrorKind::RateLimited, "代理测试已达并发上限"))?;
+        let _permit = self.test_slot()?;
         Ok(self.probe.test(proxy, detect_location).await)
     }
 
@@ -408,10 +501,7 @@ impl ProxiesService for DefaultProxiesService {
         detect_location: bool,
         context: &MutationContext,
     ) -> Result<ProxyRecord, AdminError> {
-        let _permit = self
-            .test_slots
-            .try_acquire()
-            .map_err(|_| AdminError::new(AdminErrorKind::RateLimited, "代理测试已达并发上限"))?;
+        let _permit = self.test_slot()?;
         let record = self
             .store
             .get(id)

@@ -141,7 +141,7 @@ function clearSecrets() {
 </script>
 
 <template>
-  <ZDialog v-model="open" :title="versionChanged ? t('plugins.configuration.switchTo', { version: artifact?.metadata.version }) : t('plugins.configuration.pluginSettings')" :description="artifact ? `${artifact.metadata.displayName} · ${artifact.metadata.version}` : undefined" width="48rem" :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving" @closed="clearSecrets">
+  <ZDialog v-model="open" destroy-on-close :title="versionChanged ? t('plugins.configuration.switchTo', { version: artifact?.metadata.version }) : t('plugins.configuration.pluginSettings')" :description="artifact ? `${artifact.metadata.displayName} · ${artifact.metadata.version}` : undefined" width="48rem" :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving" @closed="clearSecrets">
     <div v-if="artifact && instance" class="grid gap-5">
       <div v-if="error" role="alert" class="grid gap-1 text-z-sm text-z-warning-text">
         <span>{{ error }}</span>

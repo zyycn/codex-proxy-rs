@@ -56,6 +56,41 @@ pub struct ProxyAccountPage {
     pub page_size: u16,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyTestTarget {
+    pub name: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyTestTargets {
+    pub revision: Revision,
+    pub targets: Vec<ProxyTestTarget>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetProbeResult {
+    pub latency_ms: u64,
+    #[serde(flatten)]
+    pub outcome: TargetProbeOutcome,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TargetProbeOutcome {
+    Http {
+        status: u16,
+        #[serde(rename = "exitIp")]
+        exit_ip: Option<std::net::IpAddr>,
+    },
+    Failed {
+        message: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyTestResult {
     pub location: ProxyLocationDetection,

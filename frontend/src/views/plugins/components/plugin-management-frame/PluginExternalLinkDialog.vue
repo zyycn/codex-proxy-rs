@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ZButton, ZDialog } from '@codex-proxy/ui'
-import { onMounted, shallowRef } from 'vue'
+import { shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useCopyText } from '@/composables/useCopyText'
 
@@ -9,12 +9,7 @@ defineEmits<{ closed: [] }>()
 
 const { t } = useI18n({ useScope: 'global' })
 const copyText = useCopyText()
-const open = shallowRef(false)
-
-// 确认框按请求挂载，挂载后打开才会触发入场动画
-onMounted(() => {
-  open.value = true
-})
+const open = shallowRef(true)
 
 function openLink() {
   window.open(props.link.href, '_blank', 'noopener,noreferrer')

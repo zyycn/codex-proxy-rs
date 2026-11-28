@@ -35,7 +35,7 @@ const props = withDefaults(defineProps<{
   account: null,
 })
 
-const emit = defineEmits<{ create: [document?: Record<string, unknown>], generateOauth: [], afterLeave: [] }>()
+const emit = defineEmits<{ create: [document?: Record<string, unknown>], generateOauth: [], closed: [] }>()
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -102,12 +102,13 @@ async function continueToImport() {
 <template>
   <ZDialog
     v-model="open"
+    destroy-on-close
     :title="view.modal.title"
     :description="view.modal.description"
     :type="view.modal.type"
     :width="view.modal.width"
     :show-close="!busy" :close-on-click-modal="!busy" :close-on-press-escape="!busy"
-    @closed="emit('afterLeave')"
+    @closed="emit('closed')"
   >
     <template #icon>
       <Settings2 v-if="view.configuring" class="text-z-text" :size="20" aria-hidden="true" />

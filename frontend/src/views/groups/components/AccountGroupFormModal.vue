@@ -5,7 +5,7 @@ import type { AccountGroupFormValue } from '../composables/useAccountGroups'
 import type { AccountGroup } from '@/api'
 import type { BuiltinProvider } from '@/providers/catalog'
 import { normalizeRgbaHexColor, ZButton, ZColorPicker, ZDialog, ZEmpty, ZForm, ZFormItem, ZInput, ZSegmented, ZTextarea } from '@codex-proxy/ui'
-import { computed, shallowRef, useTemplateRef, watch } from 'vue'
+import { computed, shallowRef, useTemplateRef } from 'vue'
 
 import { useI18n } from 'vue-i18n'
 import AccountModelAccessField from '@/components/account-model-access-field/index.vue'
@@ -51,11 +51,10 @@ const rules = computed<FormRules<AccountGroupFormValue>>(() => ({
     message: t('groups.actions.selectValidGroupingColor'),
   },
 }))
-watch(open, (visible) => {
+function initializeForm() {
+  provider.value = 'openai'
   formRef.value?.clearValidate()
-  if (visible)
-    provider.value = 'openai'
-})
+}
 
 async function requestSave() {
   if (props.saving || !await formRef.value?.validate().catch(() => false))
@@ -83,10 +82,12 @@ const description = computed(() => props.group
 <template>
   <ZDialog
     v-model="open"
+    destroy-on-close
     :title="title"
     :description="description"
     width="42rem"
     :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving"
+    @open="initializeForm"
   >
     <ZForm ref="formElement" :model="form" :rules="rules" class="sm:grid-cols-[minmax(0,1fr)_fit-content(10rem)] sm:gap-x-6 md:grid-cols-[minmax(0,1fr)_fit-content(11rem)]" scroll-to-error focus-on-error novalidate @submit="requestSave">
       <ZFormItem prop="name" :show-message="false" :label="t('groups.editor.groupName')" required>

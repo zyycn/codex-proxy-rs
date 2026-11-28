@@ -125,7 +125,7 @@ async function confirm() {
 </script>
 
 <template>
-  <ZDialog v-model="open" :title="t('settings.rotation.smartSchedulingSettings')" :description="t('settings.scheduling.description')" width="36rem">
+  <ZDialog v-model="open" destroy-on-close :title="t('settings.rotation.smartSchedulingSettings')" :description="t('settings.scheduling.description')" width="36rem">
     <ZForm :id="formId" ref="formElement" class="gap-5" :model="{ ...draft, resetWindowWeights: windows }" novalidate @submit="confirm">
       <section v-for="group in groups" :key="group.id" class="grid gap-3">
         <h3 class="m-0 text-z font-emphasis">

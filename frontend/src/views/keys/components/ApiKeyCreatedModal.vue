@@ -12,7 +12,7 @@ defineProps<{ createdKey: string }>()
 const emit = defineEmits<{
   copy: [text: string]
   importClient: [provider: BuiltinProvider]
-  afterLeave: []
+  closed: []
 }>()
 
 const { t } = useI18n({ useScope: 'global' })
@@ -24,11 +24,12 @@ const showImport = shallowRef(false)
 <template>
   <ZDialog
     v-model="open"
+    destroy-on-close
     :title="t('keys.created.apiKeyCreated')"
     :description="t('keys.created.description')"
     type="success"
     width="36rem"
-    @closed="showImport = false; emit('afterLeave')"
+    @close="showImport = false" @closed="emit('closed')"
   >
     <div class="flex flex-col gap-4">
       <div class="rounded-z bg-z-warning-container px-4 py-3">
@@ -63,5 +64,5 @@ const showImport = shallowRef(false)
       </ZButton>
     </template>
   </ZDialog>
-  <ClientImportModal v-if="open" v-model="showImport" @select="emit('importClient', $event)" />
+  <ClientImportModal v-model="showImport" @select="emit('importClient', $event)" />
 </template>

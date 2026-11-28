@@ -174,6 +174,23 @@
       "enableFirst": "启用此代理后可分配账号",
       "assignAction": "分配 ({count})",
       "assigned": "已将 {count} 个账号分配至“{name}”"
+    },
+    "targets": {
+      "manage": "管理站点",
+      "name": "站点名称",
+      "address": "HTTPS 地址",
+      "remove": "移除站点",
+      "add": "添加站点",
+      "skipped": "已跳过",
+      "custom": "自定义测试",
+      "site": "测试站点",
+      "run": "开始测试",
+      "empty": "还没有测试站点",
+      "shared": "所有代理共用这份站点列表",
+      "accessDenied": "拒绝访问",
+      "redirect": "重定向",
+      "detectedRegion": "已识别地区",
+      "includeSelected": "测试勾选的 {count} 个代理"
     }
   }
 }

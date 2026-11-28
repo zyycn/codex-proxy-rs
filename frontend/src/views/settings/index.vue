@@ -161,7 +161,7 @@ function resetForm() {
 }
 const backupSection = useTemplateRef<InstanceType<typeof SettingsBackupSection>>('backupSection')
 const hasUnsavedChanges = computed(() => hasChanges.value || !!backupSection.value?.hasChanges)
-const { showLeaveConfirm, confirmLeave } = useSettingsLeaveGuard(hasUnsavedChanges)
+const { showLeaveConfirm, confirmLeave, finishLeave } = useSettingsLeaveGuard(hasUnsavedChanges)
 
 watch(section, (value) => {
   visited.add(value)
@@ -342,7 +342,8 @@ watch(() => !loading.value && route.hash === '#reset-credits', async (ready) => 
       :description="t('settings.page.unsavedChanges.description')"
       :confirm-text="t('settings.page.unsavedChanges.leave')"
       :cancel-text="t('settings.page.unsavedChanges.stay')"
-      @confirm="confirmLeave()"
+      @confirm="confirmLeave"
+      @closed="finishLeave"
     />
   </div>
 </template>

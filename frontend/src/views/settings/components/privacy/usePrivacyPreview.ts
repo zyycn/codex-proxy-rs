@@ -27,6 +27,7 @@ export function usePrivacyPreview() {
     loading: state.loading,
     result,
     run,
+    cancel: () => state.invalidate({ resetLoading: false }),
     invalidate,
   }
 }

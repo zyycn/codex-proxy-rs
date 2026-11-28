@@ -78,6 +78,7 @@ function handleExplanationKeydown(event: KeyboardEvent) {
 <template>
   <ZDialog
     v-model="open"
+    destroy-on-close
     :title="t('accounts.quotaForecast.quotaForecast')"
     :description="t('accounts.quotaForecast.periodHelp')"
     width="36rem"

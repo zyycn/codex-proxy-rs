@@ -8,7 +8,8 @@ use crate::model::{
     AdminError, MutationContext, Revision,
     proxies::{
         ImportProxyBinding, NewProxy, ProxyAccountListQuery, ProxyAccountPage, ProxyListQuery,
-        ProxyMutation, ProxyPage, ProxyRecord, ProxyTestResult, UpdateProxy,
+        ProxyMutation, ProxyPage, ProxyRecord, ProxyTestResult, ProxyTestTargets,
+        TargetProbeResult, UpdateProxy,
     },
 };
 
@@ -21,6 +22,12 @@ pub trait PluginProxyAccess: Send + Sync {
 
 #[async_trait]
 pub trait ProxyStore: Send + Sync {
+    async fn test_targets(&self) -> AdminStoreResult<ProxyTestTargets>;
+    async fn replace_test_targets(
+        &self,
+        settings: &ProxyTestTargets,
+        context: &MutationContext,
+    ) -> AdminStoreResult<Revision>;
     /// 在凭据交换到提交期间保护选定代理的连接配置和测试结果
     async fn reserve_import(&self, id: &str) -> AdminStoreResult<ProxyImportReservation>;
     async fn list(&self, query: ProxyListQuery) -> AdminStoreResult<ProxyPage>;
@@ -78,5 +85,6 @@ pub enum ProbeRoute<'a> {
 
 #[async_trait]
 pub trait ProxyProbe: Send + Sync {
+    async fn test_target(&self, proxy: &OutboundProxy, endpoint: &str) -> TargetProbeResult;
     async fn test(&self, proxy: ProbeRoute<'_>, detect_location: bool) -> ProxyTestResult;
 }

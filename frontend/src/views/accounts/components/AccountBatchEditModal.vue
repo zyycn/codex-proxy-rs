@@ -3,7 +3,7 @@ import type { AccountGroupRef, AccountModelAccess } from '@/api'
 
 import { ZButton, ZDialog, ZForm, ZFormItem, ZSegmented } from '@codex-proxy/ui'
 
-import { computed, useTemplateRef, watch } from 'vue'
+import { computed, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAccountSettingsFormRules } from '../composables/useAccountSettingsFormRules'
 import AccountSettingsFields from './AccountSettingsFields.vue'
@@ -44,8 +44,6 @@ const rules = useAccountSettingsFormRules(() => form.value, {
   editedFields: () => props.editedFields,
 })
 
-watch(open, () => formRef.value?.clearValidate())
-
 async function requestSave() {
   if (props.saving || !props.selectedCount || props.groupsLoading || !await formRef.value?.validate().catch(() => false))
     return
@@ -81,10 +79,12 @@ const schedulingMode = computed({
 <template>
   <ZDialog
     v-model="open"
+    destroy-on-close
     :title="t('accounts.batchEdit.title')"
     :description="t('accounts.batchEdit.selectionTitle', { count: selectedCount })"
     width="48rem"
     :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving"
+    @open="formRef?.clearValidate()"
   >
     <ZForm ref="formElement" :model="form" :rules="rules" :validate-on-rule-change="false" scroll-to-error focus-on-error novalidate @submit="requestSave">
       <AccountSettingsFields

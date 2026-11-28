@@ -76,7 +76,7 @@ const {
   errorOrigin,
 })
 
-const { showDetailModal, selectedUsageRecord, detailIsError, detailLoading, detailError, handleViewDetail, reloadDetail } = useUsageRecordDetail()
+const { showDetailModal, selectedUsageRecord, detailIsError, detailLoading, detailError, handleViewDetail, reloadDetail, cancelDetail } = useUsageRecordDetail()
 const detailComponent = computed(() => detailIsError.value
   ? UsageErrorDetailModal
   : UsageRecordDetailModal)
@@ -198,6 +198,6 @@ watch(timeRange, () => {
       </template>
     </ZCard>
 
-    <component :is="detailComponent" v-model="showDetailModal" :record="selectedUsageRecord" :loading="detailLoading" :error="detailError" @retry="reloadDetail" />
+    <component :is="detailComponent" v-model="showDetailModal" :record="selectedUsageRecord" :loading="detailLoading" :error="detailError" @retry="reloadDetail" @close="cancelDetail" />
   </div>
 </template>

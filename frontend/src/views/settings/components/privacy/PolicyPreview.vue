@@ -19,13 +19,12 @@ const { loading, result } = preview
 const output = computed(() => result.value
   ? JSON.stringify({ body: result.value.body, headers: result.value.headers, turnMetadata: result.value.turnMetadata }, null, 2)
   : '')
-watch(open, (value) => {
-  preview.invalidate()
+function resetPreview(value: string) {
   sample.value = value
-    ? JSON.stringify(exampleRequest(), null, 2)
-    : ''
   localError.value = ''
-})
+  preview.invalidate()
+}
+
 watch([
   sample,
   () => props.policy,
@@ -41,7 +40,15 @@ async function test() {
 </script>
 
 <template>
-  <ZDialog v-model="open" :title="t('settings.privacy.preview.testRules')" :description="t('settings.privacy.preview.description')" width="48rem">
+  <ZDialog
+    v-model="open"
+    :title="t('settings.privacy.preview.testRules')"
+    :description="t('settings.privacy.preview.description')"
+    width="48rem"
+    @open="resetPreview(JSON.stringify(exampleRequest(), null, 2))"
+    @close="preview.cancel"
+    @closed="resetPreview('')"
+  >
     <div class="grid gap-3">
       <div class="grid min-w-0 gap-3 sm:grid-cols-2">
         <ZFormItem :label="t('settings.privacy.preview.requestSample')">

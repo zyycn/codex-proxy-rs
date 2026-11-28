@@ -403,6 +403,59 @@ async fn audit(
 
 #[async_trait]
 impl ProxyStore for PgProxyRepository {
+    async fn test_targets(&self) -> AdminStoreResult<ProxyTestTargets> {
+        let (revision, targets) = sqlx::query_as::<_, (i64, sqlx::types::Json<Vec<ProxyTestTarget>>)>(
+            "select proxy_test_targets_revision, proxy_test_targets from runtime_settings where id = 1"
+        ).fetch_one(&self.pool).await.map_err(|source| store_error(unavailable(source)))?;
+        Ok(ProxyTestTargets {
+            revision: AdminRevision::new(revision.try_into().map_err(|_| store_error(invalid()))?)
+                .map_err(|_| store_error(invalid()))?,
+            targets: targets.0,
+        })
+    }
+
+    async fn replace_test_targets(
+        &self,
+        settings: &ProxyTestTargets,
+        context: &MutationContext,
+    ) -> AdminStoreResult<AdminRevision> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|source| store_error(unavailable(source)))?;
+        let revision = bump_config_revision_in_transaction(&mut transaction)
+            .await
+            .map_err(store_error)?;
+        let updated = sqlx::query("update runtime_settings set proxy_test_targets = $1, proxy_test_targets_revision = $2 where id = 1 and proxy_test_targets_revision = $3")
+            .bind(sqlx::types::Json(&settings.targets))
+            .bind(i64::try_from(revision.get()).map_err(|_| store_error(invalid()))?)
+            .bind(i64::try_from(settings.revision.get()).map_err(|_| store_error(invalid()))?)
+            .execute(&mut *transaction).await.map_err(|source| store_error(unavailable(source)))?;
+        if updated.rows_affected() == 0 {
+            return Err(AdminStoreError::new(
+                gateway_admin::ports::store::AdminStoreErrorKind::StaleRevision,
+                "proxy test targets",
+                "stale revision",
+            ));
+        }
+        audit(
+            &mut transaction,
+            context,
+            MutationAuditOperation::ProxyTestTargetsUpdate,
+            "1",
+            &["targets"],
+            revision,
+        )
+        .await
+        .map_err(store_error)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|source| store_error(unavailable(source)))?;
+        admin_revision(revision)
+    }
+
     async fn remove_account(
         &self,
         proxy_id: &str,

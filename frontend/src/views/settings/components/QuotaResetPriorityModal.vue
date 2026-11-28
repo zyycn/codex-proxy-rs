@@ -43,7 +43,7 @@ async function confirm() {
 </script>
 
 <template>
-  <ZDialog v-model="open" :title="t('settings.rotation.quotaResetPrioritySettings')" :description="t('settings.resetPriority.description')" width="36rem">
+  <ZDialog v-model="open" destroy-on-close :title="t('settings.rotation.quotaResetPrioritySettings')" :description="t('settings.resetPriority.description')" width="36rem">
     <ZForm :id="formId" ref="formElement" class="gap-5" :model="{ resetWindowWeights: draft }" novalidate @submit="confirm">
       <ResetWindowWeightsFields v-model="draft" :submitted="submitted" :help="t('settings.resetPriority.windowHelp')" />
     </ZForm>

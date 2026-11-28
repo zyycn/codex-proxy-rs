@@ -35,7 +35,7 @@ const props = defineProps<{
   error?: string
 }>()
 
-const emit = defineEmits<{ retry: [] }>()
+const emit = defineEmits<{ retry: [], close: [] }>()
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -562,10 +562,12 @@ const tokenDonutOption = computed<EChartsOption>(() => {
 <template>
   <ZDialog
     v-model="open"
+    destroy-on-close
     :title="t('usage.request.usageRecordDetails')"
     :description="t('usage.request.description')"
     type="info"
     width="64rem"
+    @close="emit('close')"
   >
     <UsageDetailState v-if="loading || error" :loading="!!loading" :error="error" @retry="emit('retry')" />
     <div v-else-if="record" class="grid min-w-0 gap-3">

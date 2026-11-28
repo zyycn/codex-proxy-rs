@@ -13,7 +13,7 @@ use gateway_admin::model::{
     AdminError as ServiceError, PageSize, Revision,
     proxies::{
         NewProxy, ProxyAccountListQuery, ProxyBatchResult, ProxyListQuery, ProxyMutation,
-        ProxyRecord, ProxyTestResult, TestProxy, UpdateProxy,
+        ProxyRecord, ProxyTestResult, ProxyTestTargets, TestProxy, UpdateProxy,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -260,6 +260,11 @@ where
         .route("/api/admin/proxies/delete", post(delete::<S>))
         .route("/api/admin/proxies/test", post(test::<S>))
         .route("/api/admin/proxies/probe", post(probe::<S>))
+        .route(
+            "/api/admin/proxies/targets",
+            get(test_targets::<S>).post(replace_test_targets::<S>),
+        )
+        .route("/api/admin/proxies/targets/test", post(test_target::<S>))
 }
 
 fn revision(value: u64) -> Result<Revision, AdminError> {
@@ -543,6 +548,75 @@ where
     Ok(AdminResponse::new(
         StatusCode::OK,
         AdminEnvelope::ok(serde_json::json!({"configRevision": result.get()})),
+    ))
+}
+
+async fn test_targets<S>(
+    _: AdminAuth,
+    State(state): State<S>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let targets = state
+        .admin_services()
+        .proxies()
+        .test_targets()
+        .await
+        .map_err(map_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(targets),
+    ))
+}
+
+async fn replace_test_targets<S>(
+    auth: AdminAuth,
+    State(state): State<S>,
+    AdminJson(settings): AdminJson<ProxyTestTargets>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let targets = state
+        .admin_services()
+        .proxies()
+        .replace_test_targets(settings, &auth.context().mutation_context())
+        .await
+        .map_err(map_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(targets),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TargetTestRequest {
+    proxy_id: String,
+    target_name: String,
+    revision: Revision,
+}
+
+async fn test_target<S>(
+    _: AdminAuth,
+    State(state): State<S>,
+    AdminJson(request): AdminJson<TargetTestRequest>,
+) -> Result<impl IntoResponse, AdminError>
+where
+    S: SessionState + Send + Sync,
+{
+    let (proxy_name, result) = state
+        .admin_services()
+        .proxies()
+        .test_target(&request.proxy_id, &request.target_name, request.revision)
+        .await
+        .map_err(map_error)?;
+    Ok(AdminResponse::new(
+        StatusCode::OK,
+        AdminEnvelope::ok(serde_json::json!({
+            "proxyName": proxy_name, "result": result,
+        })),
     ))
 }
 

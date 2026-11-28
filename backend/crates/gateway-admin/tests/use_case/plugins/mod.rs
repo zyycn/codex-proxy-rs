@@ -39,6 +39,20 @@ pub(super) struct TestPluginPorts;
 
 #[async_trait]
 impl gateway_admin::ports::proxy::ProxyStore for TestPluginPorts {
+    async fn test_targets(
+        &self,
+    ) -> gateway_admin::ports::store::AdminStoreResult<
+        gateway_admin::model::proxies::ProxyTestTargets,
+    > {
+        unreachable!()
+    }
+    async fn replace_test_targets(
+        &self,
+        _: &gateway_admin::model::proxies::ProxyTestTargets,
+        _: &gateway_admin::model::MutationContext,
+    ) -> gateway_admin::ports::store::AdminStoreResult<gateway_admin::model::Revision> {
+        unreachable!()
+    }
     async fn reserve_import(
         &self,
         _: &str,

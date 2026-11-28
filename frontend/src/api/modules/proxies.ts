@@ -197,3 +197,47 @@ export function probeProxy(data: ProxyProbeParam, options: RequestOptions = {}) 
     ...options,
   })
 }
+
+export interface ProxyTestTarget {
+  name: string
+  url: string
+}
+
+export interface ProxyTestTargets {
+  revision: number
+  targets: ProxyTestTarget[]
+}
+
+export type TargetProbeResult = { latencyMs: number } & (
+  | { kind: 'http', status: number, exitIp: string | null }
+  | { kind: 'failed', message: string }
+)
+
+export function getProxyTestTargets(options: RequestOptions = {}) {
+  return request<ProxyTestTargets>({
+    url: '/api/admin/proxies/targets',
+    method: 'GET',
+    ...options,
+  })
+}
+
+export function saveProxyTestTargets(data: ProxyTestTargets, options: RequestOptions = {}) {
+  return request<ProxyTestTargets>({
+    url: '/api/admin/proxies/targets',
+    method: 'POST',
+    data,
+    retry: false,
+    ...options,
+  })
+}
+
+export function testProxyTarget(data: { proxyId: string, targetName: string, revision: number }, options: RequestOptions = {}) {
+  return request<{ proxyName: string, result: TargetProbeResult }>({
+    url: '/api/admin/proxies/targets/test',
+    method: 'POST',
+    data,
+    timeout: 20000,
+    retry: false,
+    ...options,
+  })
+}

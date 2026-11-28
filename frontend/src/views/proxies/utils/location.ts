@@ -3,7 +3,7 @@ import { numberLocale } from '@/utils/format'
 
 const flags = import.meta.glob<string>('/node_modules/circle-flags/flags/??.svg', { eager: true, import: 'default', query: '?url&no-inline' })
 
-export function proxyExitLocation(proxy: OutboundProxyRecord) {
+export function proxyExitLocation(proxy: Partial<Pick<OutboundProxyRecord, 'detectedLocation' | 'lastTest'>>) {
   const detected = proxy.detectedLocation
   const test = proxy.lastTest
   if (!detected || !test?.success || test.location.status === 'failed' || test.location.status === 'conflict')

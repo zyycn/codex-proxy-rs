@@ -195,7 +195,9 @@ async function applyChanges() {
 
 <template>
   <ZDialog
-    v-model="open" :title="t('keys.batch.edit')" :description="t('keys.batch.description', { count: keys.length })" width="48rem" type="info"
+    v-model="open"
+    destroy-on-close
+    :title="t('keys.batch.edit')" :description="t('keys.batch.description', { count: keys.length })" width="48rem" type="info"
     :show-close="!loading" :close-on-click-modal="!loading" :close-on-press-escape="!loading"
   >
     <template #icon>

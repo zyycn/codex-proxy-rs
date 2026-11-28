@@ -4,7 +4,7 @@ import type { Account, AccountConnectionUpdate, AccountGroupRef, AccountModelAcc
 import type { AccountConnectionForm } from '@/providers/accounts'
 
 import { ZButton, ZDialog, ZForm } from '@codex-proxy/ui'
-import { computed, useTemplateRef, watch } from 'vue'
+import { computed, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AccountPlanBadge from '@/components/account-plan-badge/index.vue'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
@@ -53,8 +53,6 @@ const rules = useAccountSettingsFormRules(() => form.value, {
 })
 const saveDisabled = computed(() => !props.account || props.groupsLoading || (!!connectionComponent.value && !connection.value?.canSave))
 
-watch(open, () => formRef.value?.clearValidate())
-
 async function requestSave() {
   if (props.saving || saveDisabled.value || !await formRef.value?.validate().catch(() => false))
     return
@@ -65,9 +63,11 @@ async function requestSave() {
 <template>
   <ZDialog
     v-model="open"
+    destroy-on-close
     :title="t('accounts.editor.title')"
     width="52rem"
     :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving"
+    @open="formRef?.clearValidate()"
   >
     <ZForm v-if="account" ref="formElement" :model="form" :rules="rules" :validate-on-rule-change="false" scroll-to-error focus-on-error novalidate @submit="requestSave">
       <div

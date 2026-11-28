@@ -1,5 +1,5 @@
 import type { UsageListRecord, UsageRecordDetail } from '@/api'
-import { computed, shallowRef, watch } from 'vue'
+import { computed, shallowRef } from 'vue'
 import { getUsageRecordDetail } from '@/api'
 import { useRequestState } from '@/composables/useRequestState'
 import { isErrorUsageRecord } from '../utils/detail'
@@ -35,11 +35,6 @@ export function useUsageRecordDetail() {
     void loadDetail()
   }
 
-  watch(showDetailModal, (open) => {
-    if (!open)
-      request.invalidate({ resetLoading: false })
-  }, { flush: 'sync' })
-
   return {
     showDetailModal,
     selectedUsageRecord,
@@ -48,5 +43,6 @@ export function useUsageRecordDetail() {
     detailError: request.error,
     handleViewDetail,
     reloadDetail: loadDetail,
+    cancelDetail: () => request.invalidate({ resetLoading: false }),
   }
 }

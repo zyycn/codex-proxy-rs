@@ -19,6 +19,36 @@ use gateway_store::postgres::{
 use super::{TestDatabase, admin_account_store, provider_accounts::account};
 
 #[tokio::test]
+async fn proxy_test_targets_survive_reload_and_reject_stale_replacements() {
+    let Some(database) = TestDatabase::create("proxy_targets").await else {
+        return;
+    };
+    let repository = PgProxyRepository::new(database.pool.clone());
+    let mut settings = repository.test_targets().await.unwrap();
+    assert!(settings.targets.is_empty());
+    settings.targets.push(ProxyTestTarget {
+        name: "ChatGPT".into(),
+        url: "https://chatgpt.com/cdn-cgi/trace".into(),
+    });
+    let revision = repository
+        .replace_test_targets(&settings, &context())
+        .await
+        .unwrap();
+    let stale = repository
+        .replace_test_targets(&settings, &context())
+        .await
+        .unwrap_err();
+    assert_eq!(stale.kind(), AdminStoreErrorKind::StaleRevision);
+    let saved = PgProxyRepository::new(database.pool.clone())
+        .test_targets()
+        .await
+        .unwrap();
+    assert_eq!(saved.revision, revision);
+    assert_eq!(saved.targets, settings.targets);
+    database.close().await;
+}
+
+#[tokio::test]
 async fn proxy_location_is_shared_preserved_cleared_and_removed_with_binding() {
     use gateway_core::account::{ProviderAccountStore, RequestLocation};
     let Some(database) = TestDatabase::create("proxy_location").await else {

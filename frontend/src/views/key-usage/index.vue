@@ -49,6 +49,6 @@ const { showConfig, configKey, configuring, openConfig, copyConfig } = useKeyCon
         <KeyUsageRecords v-model:kind="kind" :rows="items" :pagination="{ currentPage, pageSize, total }" :loading="recordsLoading" @page-change="changePage" @page-size-change="changePageSize" />
       </div>
     </ZScrollbar>
-    <ApiKeyConfigModal v-model="showConfig" :title="t('usage.header.keyConfiguration')" :api-key="configKey" @copy="copyConfig" @after-leave="configKey = null" />
+    <ApiKeyConfigModal v-model="showConfig" :title="t('usage.header.keyConfiguration')" :api-key="configKey" @copy="copyConfig" @closed="configKey = null" />
   </main>
 </template>

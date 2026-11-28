@@ -17,7 +17,7 @@ import UsageStatusCodeBadge from './UsageStatusCodeBadge.vue'
 
 const props = defineProps<{ record: UsageRecordDetail | null, loading?: boolean, error?: string }>()
 
-const emit = defineEmits<{ retry: [] }>()
+const emit = defineEmits<{ retry: [], close: [] }>()
 
 const { t } = useI18n({ useScope: 'global' })
 
@@ -177,7 +177,7 @@ const attempts = computed(() => (props.record?.attempts ?? []).map(attempt => ({
 </script>
 
 <template>
-  <ZDialog v-model="open" :title="t('usage.error.errorDetails')" :description="t('usage.error.description')" type="danger" width="64rem">
+  <ZDialog v-model="open" destroy-on-close :title="t('usage.error.errorDetails')" :description="t('usage.error.description')" type="danger" width="64rem" @close="emit('close')">
     <UsageDetailState v-if="loading || error" variant="error" :loading="!!loading" :error="error" @retry="emit('retry')" />
     <div v-else-if="record" class="grid min-w-0 gap-3">
       <UsageErrorDiagnosis :record="record" />

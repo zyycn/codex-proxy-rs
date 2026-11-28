@@ -5,7 +5,7 @@ import type { ProxyTestExecutor } from '../../composables/useProxyBatchTest'
 import type { OutboundProxyRecord, OutboundProxyTest, RequestLocation } from '@/api'
 import { ZButton, ZCheckbox, ZDialog, ZForm, ZFormItem, ZInput, ZSegmented, ZSwitch } from '@codex-proxy/ui'
 import { Save, Square, Wifi } from '@lucide/vue'
-import { computed, shallowRef, useTemplateRef, watch } from 'vue'
+import { computed, shallowRef, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import RequestLocationDetectButton from '@/components/RequestLocationDetectButton.vue'
 import RequestLocationFields from '@/components/RequestLocationFields.vue'
@@ -27,7 +27,7 @@ const emit = defineEmits<{
   save: []
   test: []
   detectLocation: []
-  afterLeave: []
+  closed: []
 }>()
 
 const { t } = useI18n({ useScope: 'global' })
@@ -132,23 +132,21 @@ async function requestProbe(detect = false) {
     emit('test')
 }
 
-watch(open, (value) => {
+function initializeForm() {
+  mode.value = 'single'
+  testAfterCreate.value = true
+  batch.clear()
   formRef.value?.clearValidate()
-  if (value) {
-    mode.value = 'single'
-    testAfterCreate.value = true
-    batch.clear()
-  }
-})
+}
 
 function clearForm() {
   batch.clear()
-  emit('afterLeave')
+  emit('closed')
 }
 </script>
 
 <template>
-  <ZDialog v-model="open" :title="title" :description="proxy ? undefined : t('proxies.editor.createDescription')" width="42rem" :show-close="!busy" :close-on-click-modal="!busy" :close-on-press-escape="!busy" @closed="clearForm">
+  <ZDialog v-model="open" destroy-on-close :title="title" :description="proxy ? undefined : t('proxies.editor.createDescription')" width="42rem" :show-close="!busy" :close-on-click-modal="!busy" :close-on-press-escape="!busy" @open="initializeForm" @closed="clearForm">
     <ZSegmented v-if="!proxy" v-model="mode" :options="modeOptions" :disabled="busy" :aria-label="t('proxies.editor.methodLabel')" class="mb-5 w-full" />
     <ZForm v-if="single" ref="formElement" :model="form" :rules="rules" scroll-to-error focus-on-error novalidate @submit="requestSave">
       <ZFormItem prop="name" :show-message="false" :label="t('proxies.editor.nameLabel')" required>

@@ -1497,6 +1497,8 @@ Search 的选号限制不约束插件在选号后主动改写正文。
 | `POST` | `/api/admin/proxies/update` | `{ id, revision, name, enabled?, proxyUrl?, location?, autoLocation?, maxWebsocketConnections? }` | `{ record, configRevision }` |
 | `POST` | `/api/admin/proxies/probe` | `{ proxyUrl, useDeploymentProxy?, detectLocation? }` | 测试未保存的地址、部署默认出口或服务器直连出口，返回连通性及可选位置结果，不创建代理 |
 | `POST` | `/api/admin/proxies/test` | `[{ id, revision, detectLocation? }]` | 逐项结果数组，成功项的 `data` 为最新代理记录 |
+| `GET` / `POST` | `/api/admin/proxies/targets` | GET 读取；POST 用 `{ revision, targets: [{ name, url }] }` 替换 | 返回当前目标列表及其版本，版本冲突返回 409 |
+| `POST` | `/api/admin/proxies/targets/test` | `{ proxyId, targetName, revision }`，版本取自目标列表 | `{ proxyName, result }`，仅返回本次站点诊断 |
 | `POST` | `/api/admin/proxies/delete` | `{ id, revision }` | `{ configRevision }` |
 
 `probe` 的 `proxyUrl` 必填，空字符串默认测试服务器直连，同时传 `useDeploymentProxy: true` 则测试部署默认出口。指定代理地址时不能同时传 `useDeploymentProxy: true`；非空值须为合法代理 URL，`null`、省略或非法地址均拒绝。
@@ -1571,6 +1573,10 @@ API 的 `autoLocation` 默认为 `false`；开启时使用已检测位置，测�
 显式标为 `user.text` 或其他分类的内容、普通聊天中引用的示例、工具结果及无法解析的上下文保持原样。
 客户端实际本机时区不受影响，工具读取本机时区后的输出仍可包含真实值；排查见
 [时区与客户端环境信息](../deploy/README.md#时区与客户端环境信息)
+
+站点测试目标在部署内共享，最多 32 项。名称去除首尾空白后唯一，长度为 1–100 个字符；地址为最多 2048 字节的 HTTPS URL，不含用户凭据或片段。测试只接受已保存的代理和目标名称，目标配置变化后重新读取列表。管理端可选择多条代理测试同一目标，同时发起最多两条请求，与出口探测共用后端并发额度
+
+站点测试发起 GET 并保留首个 HTTP 状态。收到响应时 `result` 包含 `kind: "http"`、`status`、`latencyMs` 和可空的 `exitIp`；只有成功的 `/cdn-cgi/trace` 响应才尝试读取 `ip=`。连接失败时返回 `kind: "failed"`、`latencyMs` 和 `message`。结果只在当次请求返回，代理的 `lastTest` 和检测位置仍由出口探测维护
 
 测试经代理并发访问 IPv4 专用端点 `https://api.ipify.org?format=json` 与 IPv6 专用端点 `https://api6.ipify.org?format=json`，
 分别验证并记录双栈出口（IPv4 与 IPv6 地址），在任一地址族可用时即判定连接成功。超时 15 秒，每进程最多同时测试 4 条。

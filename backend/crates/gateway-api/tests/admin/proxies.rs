@@ -91,8 +91,71 @@ async fn proxy_location_rejects_invalid_and_incomplete_input() {
     assert!(created["data"][0]["data"]["record"]["location"].is_null());
 }
 
+#[tokio::test]
+async fn site_tests_use_saved_targets_and_preserve_the_exit_test() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let path = "/api/admin/proxies/targets";
+    assert_eq!(
+        request(&fixture, path, None, false).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (_, initial) = request(&fixture, path, None, true).await;
+    let revision = &initial["data"]["revision"];
+    let target = json!({"name":"ChatGPT","url":"https://chatgpt.com/cdn-cgi/trace"});
+    for targets in [
+        json!([{"name":"A","url":"http://example.org"}]),
+        json!([{"name":"A","url":"https://user:pass@example.org"}]),
+        json!([target, target]),
+    ] {
+        let (status, _) = request(
+            &fixture,
+            path,
+            Some(json!({"revision":revision,"targets":targets})),
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    let settings = json!({"revision":revision,"targets":[target]});
+    let (status, saved) = request(&fixture, path, Some(settings.clone()), true).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        request(&fixture, path, Some(settings), true).await.0,
+        StatusCode::CONFLICT
+    );
+    let (status, _) = request(
+        &fixture,
+        "/api/admin/proxies/create",
+        Some(json!([{"name":"Office","proxyUrl":"http://proxy.example:8080"}])),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let run_path = "/api/admin/proxies/targets/test";
+    let mut run = json!({"proxyId":"proxy_test","targetName":"ChatGPT","revision":revision});
+    assert_eq!(
+        request(&fixture, run_path, Some(run.clone()), true).await.0,
+        StatusCode::CONFLICT
+    );
+    run["revision"] = saved["data"]["revision"].clone();
+    let (status, response) = request(&fixture, run_path, Some(run.clone()), true).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        response["data"],
+        json!({"proxyName":"Office","result":{"kind":"http","status":403,"exitIp":null,"latencyMs":18}})
+    );
+    let (_, page) = request(&fixture, "/api/admin/proxies", None, true).await;
+    assert!(page["data"]["items"][0]["lastTest"].is_null());
+    run["targetName"] = json!("https://another.example");
+    assert_eq!(
+        request(&fixture, run_path, Some(run), true).await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
 #[derive(Default)]
-pub(super) struct MemoryProxies(Mutex<Vec<ProxyRecord>>);
+pub(super) struct MemoryProxies(Mutex<Vec<ProxyRecord>>, Mutex<Option<ProxyTestTargets>>);
 
 #[tokio::test]
 async fn proxy_enabled_updates_preserve_connection_and_omitted_state() {
@@ -153,6 +216,38 @@ impl ProxyStore for MemoryProxies {
         Ok(Revision::new(4).unwrap())
     }
 
+    async fn test_targets(&self) -> AdminStoreResult<ProxyTestTargets> {
+        Ok(self
+            .1
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| ProxyTestTargets {
+                revision: Revision::new(1).unwrap(),
+                targets: vec![],
+            }))
+    }
+    async fn replace_test_targets(
+        &self,
+        settings: &ProxyTestTargets,
+        _: &MutationContext,
+    ) -> AdminStoreResult<Revision> {
+        let mut saved = self.1.lock().unwrap();
+        let current = saved.as_ref().map_or(1, |value| value.revision.get());
+        if current != settings.revision.get() {
+            return Err(AdminStoreError::new(
+                AdminStoreErrorKind::StaleRevision,
+                "proxy test targets",
+                "stale revision",
+            ));
+        }
+        let revision = Revision::new(current + 1).unwrap();
+        *saved = Some(ProxyTestTargets {
+            revision,
+            targets: settings.targets.clone(),
+        });
+        Ok(revision)
+    }
     async fn reserve_import(
         &self,
         _: &str,
@@ -348,6 +443,22 @@ pub(super) struct SuccessfulProbe;
 
 #[async_trait]
 impl ProxyProbe for SuccessfulProbe {
+    async fn test_target(
+        &self,
+        proxy: &gateway_core::account::OutboundProxy,
+        endpoint: &str,
+    ) -> gateway_admin::model::proxies::TargetProbeResult {
+        assert_eq!(proxy.expose_url(), "http://proxy.example:8080/");
+        assert_eq!(endpoint, "https://chatgpt.com/cdn-cgi/trace");
+        TargetProbeResult {
+            latency_ms: 18,
+            outcome: TargetProbeOutcome::Http {
+                status: 403,
+                exit_ip: None,
+            },
+        }
+    }
+
     async fn test(&self, proxy: ProbeRoute<'_>, detect_location: bool) -> ProxyTestResult {
         if let ProbeRoute::Proxy(proxy) = proxy {
             assert_eq!(

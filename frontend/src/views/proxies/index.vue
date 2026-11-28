@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { TargetTestProxy } from './composables/useProxyTargetTest'
 import type { OutboundProxyRecord } from '@/api'
 
 import { ZButton, ZCard, ZCheckbox, ZConfirmDialog, ZInput, ZPageHeader, ZPagination, ZTable, ZTag } from '@codex-proxy/ui'
@@ -10,6 +11,7 @@ import ProxyAccountsModal from './components/proxy-accounts-modal/index.vue'
 import ProxyFormModal from './components/proxy-form-modal/index.vue'
 import ProxyActions from './components/ProxyActions.vue'
 import ProxyRegion from './components/ProxyRegion.vue'
+import ProxyTargetDialog from './components/ProxyTargetDialog.vue'
 import { useProxies } from './composables/useProxies'
 import { useProxyBatchTesting } from './composables/useProxyBatchTesting'
 import { proxyColumns } from './constants'
@@ -59,6 +61,16 @@ const { busy: batchTesting, start: testSelectedProxies } = useProxyBatchTesting(
   test: testSavedProxies,
   reload: () => loadProxies({ silent: true }),
 })
+
+const targetTest = shallowRef<{ proxy: OutboundProxyRecord, selectedProxies: TargetTestProxy[] }>()
+
+function openTargetTest(proxy: OutboundProxyRecord) {
+  const byId = new Map(proxies.value.map(row => [row.id, row]))
+  const selectedProxies = selectedIds.value.has(proxy.id) && selectedIds.value.size > 1
+    ? selectedRowKeys.value.map(id => byId.get(id) ?? { id, name: id })
+    : []
+  targetTest.value = { proxy, selectedProxies }
+}
 
 watch(search, () => {
   selectedIds.value = new Set()
@@ -155,7 +167,7 @@ watch(search, () => {
               {{ row.lastTestAtDisplay ?? '-' }}
             </template>
             <template #actions="{ row }">
-              <ProxyActions :proxy="row" :testing="testingIds.has(row.id)" :batch-testing="batchTesting" :updating="updatingIds.has(row.id)" @test="checkProxy" @edit="openForm" @toggle="toggleEnabled" @delete="requestDelete" />
+              <ProxyActions :proxy="row" :testing="testingIds.has(row.id)" :batch-testing="batchTesting" :updating="updatingIds.has(row.id)" @test-target="openTargetTest(row)" @test="checkProxy" @edit="openForm" @toggle="toggleEnabled" @delete="requestDelete" />
             </template>
           </ZTable>
           <ZPagination v-bind="pagination" :disabled="loading" @current-change="setPage" @size-change="setPageSize" />
@@ -163,6 +175,7 @@ watch(search, () => {
       </template>
     </ZCard>
 
+    <ProxyTargetDialog v-if="targetTest" v-bind="targetTest" @closed="targetTest = undefined" />
     <ProxyFormModal
       v-model="showForm"
       v-model:name="form.name"
@@ -180,7 +193,7 @@ watch(search, () => {
       @save="save"
       @test="testConnection"
       @detect-location="detectLocation"
-      @after-leave="clearCredentials"
+      @closed="clearCredentials"
     />
     <ZConfirmDialog v-model="showDisable" :title="t('proxies.actions.disableProxy')" :confirm-text="t('proxies.actions.disableProxy')" :loading="disabling" @confirm="confirmDisable">
       <p class="m-0">

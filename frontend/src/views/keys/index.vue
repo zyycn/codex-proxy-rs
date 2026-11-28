@@ -275,7 +275,7 @@ watch([showFormModal, showBatchEdit], ([editor, batch]) => {
       :editing="Boolean(editingKey)"
       :saving="savingKey"
       @save="requestSave"
-      @after-leave="clearCustomKey"
+      @closed="clearCustomKey"
     />
 
     <ApiKeyCreatedModal
@@ -283,10 +283,10 @@ watch([showFormModal, showBatchEdit], ([editor, batch]) => {
       :created-key="createdKey"
       @copy="copyToClipboard"
       @import-client="importCreatedKey"
-      @after-leave="clearCreatedKey"
+      @closed="clearCreatedKey"
     />
 
-    <ApiKeyStatisticsModal v-if="statisticsKey" :api-key="statisticsKey" @close="statisticsKey = null" />
+    <ApiKeyStatisticsModal v-if="statisticsKey" :api-key="statisticsKey" @closed="statisticsKey = null" />
 
     <ApiKeyBudgetResetModal
       v-model="showBudgetResetModal"
@@ -298,13 +298,13 @@ watch([showFormModal, showBatchEdit], ([editor, batch]) => {
       v-model="showUseKeyModal"
       :api-key="selectedUseKey"
       @copy="copyToClipboard"
-      @after-leave="selectedUseKey = null"
+      @closed="selectedUseKey = null"
     />
 
     <ClientImportModal
       v-model="showImportKeyModal"
       @select="importSelectedKey"
-      @after-leave="selectedImportKey = null"
+      @closed="selectedImportKey = null"
     />
 
     <ZConfirmDialog

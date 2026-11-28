@@ -2,7 +2,7 @@
 import type { OutboundProxyRecord } from '@/api'
 
 import { ZIconButton, ZMenuItem } from '@codex-proxy/ui'
-import { Pencil, Power, Trash2, Wifi } from '@lucide/vue'
+import { Globe, Pencil, Power, Trash2, Wifi } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 import RowActionMenu from '@/components/RowActionMenu.vue'
 
@@ -15,6 +15,7 @@ defineProps<{
 
 const emit = defineEmits<{
   test: [proxy: OutboundProxyRecord]
+  testTarget: []
   edit: [proxy: OutboundProxyRecord]
   toggle: [proxy: OutboundProxyRecord]
   delete: [proxy: OutboundProxyRecord]
@@ -32,6 +33,12 @@ const { t } = useI18n({ useScope: 'global' })
       <Pencil class="size-3.5 text-z-link" />
     </ZIconButton>
     <RowActionMenu :label="t('proxies.actions.moreActionsFor', { name: proxy.name })" menu-class="w-36 p-1.5" :disabled="testing || updating" :loading="updating">
+      <ZMenuItem :disabled="batchTesting || testing || updating" @click="emit('testTarget')">
+        <template #icon>
+          <Globe class="size-3.5 text-z-text-quaternary" />
+        </template>
+        {{ t('proxies.targets.custom') }}
+      </ZMenuItem>
       <ZMenuItem :disabled="testing || updating" @click="emit('toggle', proxy)">
         <template #icon>
           <Power class="size-3.5" :class="proxy.enabled ? 'text-z-warning' : 'text-z-success'" />

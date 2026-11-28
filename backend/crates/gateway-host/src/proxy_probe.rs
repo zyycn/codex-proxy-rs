@@ -8,7 +8,9 @@ use std::{
 
 use async_trait::async_trait;
 use gateway_admin::{
-    model::proxies::{ProxyLocationDetection, ProxyTestResult},
+    model::proxies::{
+        ProxyLocationDetection, ProxyTestResult, TargetProbeOutcome, TargetProbeResult,
+    },
     ports::proxy::{ProbeRoute, ProxyProbe},
 };
 use gateway_core::account::RequestLocation;
@@ -50,6 +52,17 @@ impl Default for HttpProxyProbe {
     }
 }
 
+async fn read_probe_body(mut response: reqwest::Response) -> Result<Vec<u8>, &'static str> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "出口检测响应读取失败")? {
+        if body.len() + chunk.len() > 1024 {
+            return Err("出口检测响应过大");
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 impl HttpProxyProbe {
     #[must_use]
     pub fn new(endpoint: impl Into<String>) -> Self {
@@ -82,23 +95,31 @@ impl HttpProxyProbe {
         self
     }
 
-    async fn exit_ip_at(
+    async fn request(
         &self,
         proxy: ProbeRoute<'_>,
         endpoint: &str,
-    ) -> Result<IpAddr, &'static str> {
+    ) -> Result<reqwest::Response, &'static str> {
         let builder = probe_client(proxy)?
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(12))
             .redirect(reqwest::redirect::Policy::none());
         let client = (self.build_client)(builder)?;
-        let mut response = client.get(endpoint).send().await.map_err(|error| {
+        client.get(endpoint).send().await.map_err(|error| {
             if error.is_timeout() {
                 "出口连接超时"
             } else {
                 "出口连接失败"
             }
-        })?;
+        })
+    }
+
+    async fn exit_ip_at(
+        &self,
+        proxy: ProbeRoute<'_>,
+        endpoint: &str,
+    ) -> Result<IpAddr, &'static str> {
+        let response = self.request(proxy, endpoint).await?;
         if !response.status().is_success() {
             return Err(
                 if response.status() == reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED {
@@ -108,14 +129,7 @@ impl HttpProxyProbe {
                 },
             );
         }
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| "出口检测响应读取失败")?
-        {
-            if body.len() + chunk.len() > 1024 {
-                return Err("出口检测响应过大");
-            }
-            body.extend_from_slice(&chunk);
-        }
+        let body = read_probe_body(response).await?;
         #[derive(Deserialize)]
         struct Response {
             ip: IpAddr,
@@ -396,6 +410,45 @@ impl HttpProxyProbe {
 
 #[async_trait]
 impl ProxyProbe for HttpProxyProbe {
+    async fn test_target(
+        &self,
+        proxy: &gateway_core::account::OutboundProxy,
+        endpoint: &str,
+    ) -> TargetProbeResult {
+        let started = Instant::now();
+        let response = self.request(ProbeRoute::Proxy(proxy), endpoint).await;
+        // 耗时截至收到响应头，可选的 trace 正文不影响站点状态与延迟
+        let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let outcome = match response {
+            Ok(response) => {
+                let status = response.status();
+                let exit_ip = if status.is_success() && response.url().path() == "/cdn-cgi/trace" {
+                    read_probe_body(response).await.ok().and_then(|body| {
+                        std::str::from_utf8(&body)
+                            .ok()?
+                            .lines()
+                            .find_map(|line| line.strip_prefix("ip="))?
+                            .parse()
+                            .ok()
+                    })
+                } else {
+                    None
+                };
+                TargetProbeOutcome::Http {
+                    status: status.as_u16(),
+                    exit_ip,
+                }
+            }
+            Err(message) => TargetProbeOutcome::Failed {
+                message: message.to_owned(),
+            },
+        };
+        TargetProbeResult {
+            latency_ms,
+            outcome,
+        }
+    }
+
     async fn test(&self, proxy: ProbeRoute<'_>, detect_location: bool) -> ProxyTestResult {
         let mut result = self.test_connection(proxy).await;
         if detect_location {

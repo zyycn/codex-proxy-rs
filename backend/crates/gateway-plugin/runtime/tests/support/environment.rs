@@ -951,6 +951,14 @@ impl PricingSource for UnusedAdminRuntime {
 
 #[async_trait]
 impl ProxyProbe for UnusedAdminRuntime {
+    async fn test_target(
+        &self,
+        _: &gateway_core::account::OutboundProxy,
+        _: &str,
+    ) -> gateway_admin::model::proxies::TargetProbeResult {
+        unreachable!()
+    }
+
     async fn test(
         &self,
         _: gateway_admin::ports::proxy::ProbeRoute<'_>,

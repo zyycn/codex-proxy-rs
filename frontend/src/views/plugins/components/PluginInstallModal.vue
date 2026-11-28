@@ -441,15 +441,6 @@ function githubQueryKey() {
   })
 }
 
-watch(open, (isOpen) => {
-  if (isOpen) {
-    reset()
-  }
-  else {
-    rememberDraft()
-  }
-})
-
 function clearCredentials() {
   credentialDraft.value = null
 }
@@ -493,10 +484,13 @@ watch(
 <template>
   <ZDialog
     v-model="open"
+    destroy-on-close
     :title="updateSource ? t('plugins.installation.updatePlugin') : t('plugins.installation.installPlugin')"
     :description="acceptanceArtifact ? t('plugins.installation.installDescription') : updateSource ? t('plugins.installation.switchDescription') : t('plugins.installation.sourceHelp')"
     width="36rem"
     :show-close="!busy" :close-on-click-modal="!busy" :close-on-press-escape="!busy"
+    @open="reset"
+    @close="rememberDraft"
     @closed="clearCredentials"
   >
     <ZSegmented

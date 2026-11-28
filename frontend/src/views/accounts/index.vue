@@ -417,7 +417,7 @@ const {
       :error="importTaskError"
       @select="importTasks.select"
       @stop="importTasks.stop"
-      @after-leave="importTasks.refresh(true)"
+      @closed="importTasks.refresh(true)"
       @view-accounts="showImportTasks = false; loadAccounts()"
     />
 
@@ -433,7 +433,7 @@ const {
       :saving="creatingAccount"
       @create="handleCreate"
       @generate-oauth="handleAuthorizeOAuth"
-      @after-leave="clearCreate"
+      @closed="clearCreate"
     />
 
     <AccountEditModal

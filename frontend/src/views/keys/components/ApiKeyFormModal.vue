@@ -6,7 +6,7 @@ import type { BuiltinProvider } from '@/providers/catalog'
 import { ZButton, ZDialog, ZForm, ZFormItem, ZInput } from '@codex-proxy/ui'
 import { KeyRound } from '@lucide/vue'
 
-import { computed, nextTick, shallowRef, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, shallowRef, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AccountGroupCheckboxGrid from '@/components/AccountGroupCheckboxGrid.vue'
 import ProviderSettingsSection from '@/components/ProviderSettingsSection.vue'
@@ -28,7 +28,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   save: []
-  afterLeave: []
+  closed: []
 }>()
 
 const { t } = useI18n({ useScope: 'global' })
@@ -47,11 +47,10 @@ const installationSeedError = computed(() => isValidInstallationSeed(form.value.
   ? ''
   : t('settings.clientProfile.invalidInstallationSeed'))
 
-watch(open, (visible) => {
+function initializeForm() {
+  provider.value = 'openai'
   formRef.value?.clearValidate()
-  if (visible)
-    provider.value = 'openai'
-})
+}
 
 async function requestSave() {
   if (props.saving)
@@ -82,12 +81,14 @@ function updatePeerSharing(key: keyof ApiKeyPeerSharing, value: boolean) {
 <template>
   <ZDialog
     v-model="open"
+    destroy-on-close
     :title="title"
     :description="t('keys.editor.description')"
     type="info"
     width="48rem"
     :show-close="!saving" :close-on-click-modal="!saving" :close-on-press-escape="!saving"
-    @closed="emit('afterLeave')"
+    @open="initializeForm"
+    @closed="emit('closed')"
   >
     <template #icon>
       <KeyRound class="text-z-text" :size="20" aria-hidden="true" />

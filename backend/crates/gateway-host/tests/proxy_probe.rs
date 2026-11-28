@@ -10,6 +10,52 @@ use wiremock::{
 };
 
 #[tokio::test]
+async fn site_probe_reports_the_first_http_status_and_only_parses_bounded_trace_responses() {
+    use gateway_admin::model::proxies::TargetProbeOutcome;
+    for (endpoint, status, body, ip) in [
+        ("/", 403, "ip=192.0.2.1".to_owned(), None),
+        ("/", 302, String::new(), None),
+        (
+            "/cdn-cgi/trace",
+            200,
+            "ip=2001:db8::1\nloc=US\n".to_owned(),
+            Some("2001:db8::1"),
+        ),
+        (
+            "/cdn-cgi/trace",
+            200,
+            format!("ip=192.0.2.1\n{}", "x".repeat(1024)),
+            None,
+        ),
+        ("/cdn-cgi/trace", 200, "ip=invalid".to_owned(), None),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(path(endpoint))
+            .respond_with(
+                ResponseTemplate::new(status)
+                    .insert_header("Location", "http://other.invalid/")
+                    .set_body_string(body),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let proxy = OutboundProxy::parse(&server.uri()).unwrap();
+        let result = HttpProxyProbe::default()
+            .test_target(&proxy, &format!("http://target.invalid{endpoint}"))
+            .await;
+        let TargetProbeOutcome::Http {
+            status: actual,
+            exit_ip,
+        } = result.outcome
+        else {
+            panic!("expected HTTP response")
+        };
+        assert_eq!(actual, status);
+        assert_eq!(exit_ip, ip.map(|ip| ip.parse().unwrap()));
+    }
+}
+
+#[tokio::test]
 async fn proxy_probe_supports_ipv4_and_ipv6_proxies_and_exit_addresses() {
     for (listen_address, exit_ip) in [
         ("127.0.0.1:0", "203.0.113.8"),
