@@ -57,11 +57,11 @@ const summary = computed(() => usageErrorSummary(props.record))
           :aria-describedby="open ? id : undefined"
           translate="no"
         >
-          <span>{{ summary }}</span>
           <template v-if="errorType && errorType !== summary">
-            <span class="mx-1 text-z-text-secondary" aria-hidden="true">·</span>
             <code class="font-mono text-z-xs text-z-text-secondary">{{ errorType }}</code>
+            <span class="mx-1 text-z-text-secondary" aria-hidden="true">·</span>
           </template>
+          <span>{{ summary }}</span>
         </button>
       </template>
       <ZScrollbar class="w-max max-w-[min(26rem,calc(100vw-2rem))]" max-height="min(18rem, 60dvh)">
