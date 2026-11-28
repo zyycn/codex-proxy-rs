@@ -408,14 +408,8 @@ impl QueueRejection {
     #[must_use]
     pub fn gateway_error(self) -> crate::error::GatewayError {
         match self {
-            Self::Full => crate::error::GatewayError::new(
-                crate::error::GatewayErrorKind::ConcurrencyQueueFull,
-                "The gateway request queue is full.",
-            ),
-            Self::Timeout => crate::error::GatewayError::new(
-                crate::error::GatewayErrorKind::ConcurrencyQueueTimeout,
-                "The request timed out in the gateway queue.",
-            ),
+            Self::Full => crate::error::GatewayError::concurrency_queue_full(),
+            Self::Timeout => crate::error::GatewayError::concurrency_queue_timeout(),
         }
     }
 }
