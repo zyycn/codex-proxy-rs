@@ -392,7 +392,10 @@ async fn chat_service_tiers_follow_the_selected_responses_upstream() {
 #[tokio::test]
 async fn custom_messages_count_locally_without_billable_usage() {
     let rules = gateway_core::settings::prompt_rewrite::CompiledPromptRewrite::new(
-        serde_json::from_value(json!([{"pattern":"repeated prefix", "replacement":""}])).unwrap(),
+        serde_json::from_value(
+            json!([{"name":"客户端规则","pattern":"repeated prefix", "replacement":""}]),
+        )
+        .unwrap(),
     )
     .for_provider(&ProviderKind::new("openai").unwrap());
     let mut baseline = None;

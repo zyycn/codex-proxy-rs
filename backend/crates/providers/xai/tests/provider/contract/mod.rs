@@ -2867,8 +2867,10 @@ async fn configured_request_profile_reaches_inference_headers() {
         .with_request_profile(Some(resolved))
         .with_prompt_rewrite_rules(
             gateway_core::settings::prompt_rewrite::CompiledPromptRewrite::new(
-                serde_json::from_value(json!([{"pattern":"Old", "replacement":"Updated"}]))
-                    .unwrap(),
+                serde_json::from_value(
+                    json!([{"name":"客户端规则","pattern":"Old", "replacement":"Updated"}]),
+                )
+                .unwrap(),
             )
             .for_provider(&ProviderKind::new("xai").unwrap()),
         ),

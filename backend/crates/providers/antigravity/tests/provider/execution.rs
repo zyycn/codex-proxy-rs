@@ -732,8 +732,10 @@ async fn chat_direct_genai_keeps_json_sse_usage_and_releases_the_native_lease() 
         .with_request_profile(Some(profile))
         .with_prompt_rewrite_rules(if streaming {
             gateway_core::settings::prompt_rewrite::CompiledPromptRewrite::new(
-                serde_json::from_value(json!([{"pattern":"Preserve","replacement":"Apply"}]))
-                    .unwrap(),
+                serde_json::from_value(
+                    json!([{"name":"客户端规则","pattern":"Preserve","replacement":"Apply"}]),
+                )
+                .unwrap(),
             )
             .for_provider(&ProviderKind::new("antigravity").unwrap())
         } else {

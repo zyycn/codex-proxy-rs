@@ -53,7 +53,7 @@ async fn native_and_provider_count_share_identity_and_never_generate_usage() {
     };
     let rules = CompiledPromptRewrite::new(
         serde_json::from_value(json!([
-            {"pattern":"client", "replacement":"client updated"}
+            {"name":"客户端规则","pattern":"client", "replacement":"client updated"}
         ]))
         .unwrap(),
     )
