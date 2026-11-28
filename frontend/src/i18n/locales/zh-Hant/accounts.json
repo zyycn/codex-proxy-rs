@@ -240,9 +240,9 @@
       "cleanupRemove": "移除",
       "cleanupSelected": "移除 {count} 項"
     },
-    "notes": {
-      "viewAccountNotes": "查看賬號備註",
-      "title": "賬號備註"
+    "identity": {
+      "notes": "賬號備註",
+      "email": "賬號信箱"
     },
     "overview": {
       "totalAccounts": "總賬號",

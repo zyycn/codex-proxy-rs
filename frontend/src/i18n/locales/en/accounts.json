@@ -240,9 +240,9 @@
       "cleanupRemove": "Remove",
       "cleanupSelected": "Remove ({count})"
     },
-    "notes": {
-      "viewAccountNotes": "View account notes",
-      "title": "Account notes"
+    "identity": {
+      "notes": "Account notes",
+      "email": "Account email"
     },
     "overview": {
       "totalAccounts": "Total accounts",

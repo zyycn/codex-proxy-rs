@@ -2,11 +2,12 @@
 import type { Account } from '@/api'
 
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import AccountPlanBadge from '@/components/account-plan-badge/index.vue'
 import { stablePresetVisualToneClass } from '@/utils/color'
 import { accountIdentityLabel } from '../utils/accountIdentity'
-import AccountNotesPopover from './AccountNotesPopover.vue'
+import AccountSecondaryText from './AccountSecondaryText.vue'
 
 type AccountIdentity = Pick<Account, 'id' | 'email' | 'planType' | 'planTypeDisplay'>
   & Partial<Pick<Account, 'accountId' | 'notes' | 'name' | 'authenticationKind' | 'upstream'>>
@@ -29,6 +30,7 @@ const props = withDefaults(
   },
 )
 
+const { t } = useI18n({ useScope: 'global' })
 const emailText = computed(() => props.account.email?.trim())
 const displayTitle = computed(() => {
   const label = accountIdentityLabel(props.account)
@@ -46,13 +48,17 @@ const identityTitle = computed(() => {
     : displayTitle.value
 })
 
-const secondaryText = computed(() => props.account.authenticationKind !== 'api_key' && emailText.value !== displayTitle.value
-  ? emailText.value
-  : undefined)
+const secondaryText = computed(() => {
+  if (visibleNotes.value)
+    return visibleNotes.value
+  if (props.account.authenticationKind !== 'api_key' && emailText.value !== displayTitle.value)
+    return emailText.value
+  return undefined
+})
 
-const secondaryClass = computed(() => props.size === 'lg'
+const secondaryClass = computed(() => props.size === 'lg' && !visibleNotes.value
   ? 'mt-1 text-z-sm text-z-text-secondary'
-  : 'mt-0.5 font-mono text-z-xs text-z-text-quaternary')
+  : 'mt-0.5 font-mono text-z-xs leading-4 text-z-text-quaternary')
 
 const initial = computed(() => displayTitle.value.slice(0, 1).toUpperCase())
 
@@ -102,10 +108,12 @@ const avatarToneClass = computed(() => {
         <slot name="meta" />
         <AccountPlanBadge v-if="showPlan" :upstream="account.upstream" :authentication-kind="account.authenticationKind" :plan-type="account.planType" :plan-type-display="account.planTypeDisplay" :size="metaSize" />
       </div>
-      <AccountNotesPopover v-else-if="visibleNotes" :notes="visibleNotes" class="mt-0.5" />
-      <div v-else-if="secondaryText" class="truncate font-emphasis" :class="secondaryClass">
-        {{ secondaryText }}
-      </div>
+      <AccountSecondaryText
+        v-else-if="secondaryText"
+        :text="secondaryText"
+        :label="visibleNotes ? t('accounts.identity.notes') : t('accounts.identity.email')"
+        :class="secondaryClass"
+      />
     </div>
   </div>
 </template>
