@@ -150,7 +150,9 @@ impl AntigravityProvider {
             });
         }
         if candidates.is_empty() && model_exhausted {
-            return Err(unsent(Kind::QuotaExhausted));
+            return Err(unsent(Kind::AccountPoolQuotaExhausted).with_diagnostic(
+                gateway_core::error::ProviderDiagnostic::new("网关可选账号对此模型的额度均已用完"),
+            ));
         }
         let selection = AccountSelectionContext {
             policy: ctx.account_selection_policy(),

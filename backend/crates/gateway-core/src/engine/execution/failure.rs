@@ -52,7 +52,7 @@ pub(super) fn map_routing_error(error: crate::validation::RoutingError) -> Gatew
         | crate::validation::RoutingError::NoCapableProviderEndpoint { .. }
         | crate::validation::RoutingError::EmptyAccountScope => GatewayError::new(
             GatewayErrorKind::NoAvailableProvider,
-            "No provider can execute this request.",
+            "The gateway has no eligible provider for this request.",
         ),
         crate::validation::RoutingError::UnsupportedProviderEndpoint { .. } => GatewayError::new(
             GatewayErrorKind::Unsupported,
@@ -77,7 +77,7 @@ pub fn gateway_error_from_engine(error: &EngineError) -> GatewayError {
         EngineError::EmptyRoutingPlan | EngineError::ProviderNotRegistered { .. } => {
             GatewayError::new(
                 GatewayErrorKind::NoAvailableProvider,
-                "No provider is available.",
+                "The gateway has no available provider for this request.",
             )
         }
         EngineError::Store(source) => {

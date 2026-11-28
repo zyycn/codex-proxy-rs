@@ -397,7 +397,7 @@ fn local_provider_capacity_exhaustion_should_map_to_service_unavailable() {
     );
     assert_eq!(
         projected.safe_message(),
-        "All eligible upstream accounts are temporarily busy."
+        "The gateway account pool is busy."
     );
 }
 
@@ -429,7 +429,7 @@ fn no_eligible_provider_account_should_preserve_safe_provider_detail() {
     );
     assert_eq!(
         gateway.safe_message(),
-        "No upstream provider is available for this request."
+        "The gateway found no eligible account for this request."
     );
 }
 
@@ -447,7 +447,7 @@ fn provider_infrastructure_failure_should_have_a_distinct_client_contract() {
     );
     assert_eq!(
         projected.safe_message(),
-        "Upstream accounts are temporarily inaccessible."
+        "Gateway account selection is temporarily unavailable."
     );
 }
 
@@ -462,7 +462,7 @@ fn no_eligible_provider_account_should_map_to_service_unavailable() {
     assert_eq!(projected.kind(), GatewayErrorKind::NoAvailableProvider);
     assert_eq!(
         projected.safe_message(),
-        "No upstream provider is available for this request."
+        "The gateway found no eligible account for this request."
     );
 }
 
@@ -525,31 +525,30 @@ fn engine_provider_credential_failures_should_not_impersonate_client_auth_failur
 }
 
 #[test]
-fn engine_provider_quota_exhaustion_should_use_the_retryable_capacity_contract() {
+fn provider_quota_exhaustion_preserves_its_kind_and_retryable_fallback() {
     let error = EngineError::Provider(ProviderError::new(
         ProviderErrorKind::QuotaExhausted,
         UpstreamSendState::Sent,
     ));
 
+    let kind = gateway_error_from_engine(&error).kind();
+    assert_eq!(kind.as_str(), "quota_exhausted");
     assert_eq!(
-        gateway_error_from_engine(&error).kind(),
-        GatewayErrorKind::RateLimited
+        gateway_error_contract(kind),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limit_error",
+            "rate_limit_exceeded"
+        ),
     );
 }
 
 #[tokio::test]
 async fn locally_exhausted_account_pool_returns_official_usage_limit_contract() {
-    let error = EngineError::Provider(
-        ProviderError::new(
-            ProviderErrorKind::QuotaExhausted,
-            UpstreamSendState::NotSent,
-        )
-        .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
-            "All eligible accounts have exhausted their quota.",
-            Some("usage_limit_reached".to_owned()),
-            Some("usage_limit_reached".to_owned()),
-        )),
-    );
+    let error = EngineError::Provider(ProviderError::new(
+        ProviderErrorKind::AccountPoolQuotaExhausted,
+        UpstreamSendState::NotSent,
+    ));
     let response = engine_error_response(&error);
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     let body: serde_json::Value =

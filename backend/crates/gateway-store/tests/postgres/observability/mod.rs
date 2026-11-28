@@ -222,6 +222,11 @@ async fn usage_error_origins_preserve_saved_failure_and_connection_boundaries() 
     for (kind, reason, continuation, status, origin) in [
         ("internal_error", None, None, None, Proxy),
         ("internal_error", None, None, Some(503_i32), Upstream),
+        ("account_pool_quota_exhausted", None, None, None, Proxy),
+        ("key_rate_limited", None, None, None, Proxy),
+        ("key_concurrency_limited", None, None, None, Proxy),
+        ("quota_exhausted", None, None, Some(429), Upstream),
+        ("rate_limited", None, None, None, Unknown),
         ("message_too_big", None, None, None, Upstream),
         (
             "continuation_recovery_required",

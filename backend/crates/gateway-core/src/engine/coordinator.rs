@@ -1064,10 +1064,7 @@ where
             }
         }
         let Some(candidate) = self.plan.candidates().get(self.candidate_index).cloned() else {
-            let error = GatewayError::new(
-                GatewayErrorKind::NoAvailableProvider,
-                "No upstream service is available.",
-            );
+            let error = super::execution::gateway_error_from_engine(&EngineError::EmptyRoutingPlan);
             self.finish_failure(FailureFinalization {
                 outcome: ExecutionOutcome::Failed,
                 send_state: self.current_send_state(),
@@ -1491,6 +1488,7 @@ where
             ProviderErrorKind::NoEligibleAccount
                 | ProviderErrorKind::AccountCapacityUnavailable
                 | ProviderErrorKind::QuotaExhausted
+                | ProviderErrorKind::AccountPoolQuotaExhausted
                 | ProviderErrorKind::ConcurrencyQueueFull
                 | ProviderErrorKind::ConcurrencyQueueTimeout
         );
@@ -2363,7 +2361,8 @@ where
             }
             ProviderErrorKind::NoEligibleAccount
             | ProviderErrorKind::AccountCapacityUnavailable
-            | ProviderErrorKind::QuotaExhausted => ContinuationAttempt::ReplayAny,
+            | ProviderErrorKind::QuotaExhausted
+            | ProviderErrorKind::AccountPoolQuotaExhausted => ContinuationAttempt::ReplayAny,
             _ => return false,
         };
         self.excluded_accounts.insert(pin.account().clone());

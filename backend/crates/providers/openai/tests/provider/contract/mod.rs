@@ -2503,7 +2503,7 @@ async fn snapshot_retry_rechecks_account_availability_without_sending() {
             panic!("{change} account must not produce an upstream stream");
         };
         let expected = if change == "exhausted" {
-            ProviderErrorKind::QuotaExhausted
+            ProviderErrorKind::AccountPoolQuotaExhausted
         } else {
             ProviderErrorKind::NoEligibleAccount
         };
@@ -2726,12 +2726,16 @@ async fn exhausted_account_pool_returns_usage_limit_before_http_or_websocket_net
         else {
             panic!("exhausted pool must fail before opening an upstream stream");
         };
-        assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
+        assert_eq!(error.kind(), ProviderErrorKind::AccountPoolQuotaExhausted);
         assert_eq!(error.send_state(), UpstreamSendState::NotSent);
         assert_eq!(error.upstream_status(), None);
-        let detail = error.client_visible_upstream_error().expect("quota detail");
-        assert_eq!(detail.error_type(), Some("usage_limit_reached"));
-        assert_eq!(detail.code(), Some("usage_limit_reached"));
+        let gateway = gateway_core::error::GatewayError::from_provider(&error);
+        assert_eq!(gateway.kind().as_str(), "account_pool_quota_exhausted");
+        assert_eq!(
+            gateway.diagnostic().map(|diagnostic| diagnostic.as_str()),
+            Some("网关可选账号的额度均已用完")
+        );
+        assert!(error.client_visible_upstream_error().is_none());
     }
     assert!(server.received_requests().await.unwrap().is_empty());
 }
@@ -2813,7 +2817,7 @@ async fn exhausted_pinned_account_keeps_quota_cause_for_native_continuation_reco
     else {
         panic!("native continuation cannot use the other account before recovery");
     };
-    assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
+    assert_eq!(error.kind(), ProviderErrorKind::AccountPoolQuotaExhausted);
     assert_eq!(error.send_state(), UpstreamSendState::NotSent);
 }
 

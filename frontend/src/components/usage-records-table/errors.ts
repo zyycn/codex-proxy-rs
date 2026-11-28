@@ -59,6 +59,8 @@ export function usageSendStateText(state: string) {
 export function usageErrorReason(code: string | null): string | undefined {
   switch (code) {
     case 'no_available_provider': return t('usage.error.noAvailableProvider')
+    case 'account_pool_quota_exhausted':
+    case 'quota_exhausted': return t('accounts.fields.quotaExhausted')
     case 'rate_limited':
     case 'rate_limit_exceeded': return t('common.errors.rateLimited')
     case 'invalid_request': return t('common.errors.invalidParameters')

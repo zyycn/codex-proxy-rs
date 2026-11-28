@@ -1396,11 +1396,20 @@ impl DefaultExecutionService {
                 }
                 ClientAdmissionDecision::Rejected(reason) => {
                     admission.armed = false;
-                    if reason == ClientAdmissionRejection::RateLimited || policy.max_waiting == 0 {
-                        return Err(GatewayError::new(
-                            GatewayErrorKind::RateLimited,
-                            "Request exceeds client API key limits.",
-                        ));
+                    match reason {
+                        ClientAdmissionRejection::RateLimited => {
+                            return Err(GatewayError::new(
+                                GatewayErrorKind::KeyRateLimited,
+                                "The API key's request rate limit was reached.",
+                            ));
+                        }
+                        ClientAdmissionRejection::ConcurrencyLimited if policy.max_waiting == 0 => {
+                            return Err(GatewayError::new(
+                                GatewayErrorKind::KeyConcurrencyLimited,
+                                "The API key's concurrency limit was reached.",
+                            ));
+                        }
+                        ClientAdmissionRejection::ConcurrencyLimited => {}
                     }
                     if waiting.elapsed().is_zero()
                         && let Some(budget) = &self.budget

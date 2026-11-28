@@ -21,7 +21,7 @@ const errorType = computed(() => props.record.errorKind || props.record.errorCod
 const origin = computed(() => usageErrorOrigin(props.record))
 const outcome = computed(() => usageErrorTitle(props.record))
 const summary = computed(() => {
-  const reason = usageErrorReason(code.value) || props.record.errorMessage || code.value
+  const reason = props.record.errorMessage || usageErrorReason(code.value) || code.value
   if (reason)
     return reason
   return props.record.websocketCloseCode != null

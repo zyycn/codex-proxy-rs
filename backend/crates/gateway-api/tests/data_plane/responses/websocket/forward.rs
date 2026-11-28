@@ -745,14 +745,9 @@ async fn initial_continuation_recovery_delivers_the_official_client_replay_signa
 #[tokio::test]
 async fn locally_exhausted_account_pool_sends_one_official_usage_limit_error() {
     let provider = ProviderError::new(
-        ProviderErrorKind::QuotaExhausted,
+        ProviderErrorKind::AccountPoolQuotaExhausted,
         UpstreamSendState::NotSent,
-    )
-    .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
-        "All eligible accounts have exhausted their quota.",
-        Some("usage_limit_reached".to_owned()),
-        Some("usage_limit_reached".to_owned()),
-    ));
+    );
     let error = initial_error(EngineError::Provider(provider), Vec::new()).await;
     assert_eq!(error["status"], 429);
     assert_eq!(error["error"]["type"], "usage_limit_reached");

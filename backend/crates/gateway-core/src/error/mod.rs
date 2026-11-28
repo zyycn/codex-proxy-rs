@@ -40,6 +40,8 @@ pub enum ProviderErrorKind {
     RateLimited,
     /// Credential 配额耗尽
     QuotaExhausted,
+    /// 本地选号确认当前请求的全部可选账号额度耗尽
+    AccountPoolQuotaExhausted,
     /// 仍有符合条件的账号，但它们暂时没有可调度容量
     AccountCapacityUnavailable,
     ConcurrencyQueueFull,
@@ -82,6 +84,7 @@ impl ProviderErrorKind {
             Self::RequestPolicyDenied => "request_policy_denied",
             Self::RateLimited => "rate_limited",
             Self::QuotaExhausted => "quota_exhausted",
+            Self::AccountPoolQuotaExhausted => "account_pool_quota_exhausted",
             Self::AccountCapacityUnavailable => "account_capacity_unavailable",
             Self::ConcurrencyQueueFull => "concurrency_queue_full",
             Self::ConcurrencyQueueTimeout => "concurrency_queue_timeout",
@@ -1266,8 +1269,16 @@ pub enum GatewayErrorKind {
     ConcurrencyQueueTimeout,
     /// Provider 的本地账号基础设施不可用
     ProviderInfrastructureUnavailable,
-    /// 上游限流
+    /// 请求频率受限
     RateLimited,
+    /// Provider 账号额度耗尽
+    QuotaExhausted,
+    /// 本地可选账号池额度耗尽
+    AccountPoolQuotaExhausted,
+    /// Client Key 每分钟请求数达到上限
+    KeyRateLimited,
+    /// Client Key 并发已满且未启用排队
+    KeyConcurrencyLimited,
     /// 当前客户端 Key 的费用预算耗尽
     BudgetExhausted,
     /// 上游暂不可用
@@ -1301,6 +1312,10 @@ impl GatewayErrorKind {
             Self::ConcurrencyQueueTimeout => "concurrency_queue_timeout",
             Self::ProviderInfrastructureUnavailable => "provider_infrastructure_unavailable",
             Self::RateLimited => "rate_limited",
+            Self::QuotaExhausted => "quota_exhausted",
+            Self::AccountPoolQuotaExhausted => "account_pool_quota_exhausted",
+            Self::KeyRateLimited => "key_rate_limited",
+            Self::KeyConcurrencyLimited => "key_concurrency_limited",
             Self::BudgetExhausted => "budget_exhausted",
             Self::UpstreamUnavailable => "upstream_unavailable",
             Self::MessageTooBig => "message_too_big",
@@ -1425,7 +1440,7 @@ impl GatewayError {
             ),
             ProviderErrorKind::SessionPolicyRestricted => Self::new(
                 GatewayErrorKind::InvalidRequest,
-                "No accounts are available under this conversation's restrictions.",
+                "Gateway session restrictions exclude all eligible accounts.",
             ),
             ProviderErrorKind::ContinuationRecoveryRequired => Self::new(
                 GatewayErrorKind::InvalidRequest,
@@ -1443,29 +1458,34 @@ impl GatewayError {
                 || Self::new(GatewayErrorKind::PolicyDenied, "Request blocked by policy."),
                 Self::from,
             ),
-            ProviderErrorKind::RateLimited | ProviderErrorKind::QuotaExhausted => Self::new(
-                GatewayErrorKind::RateLimited,
-                "Upstream capacity is temporarily unavailable.",
+            ProviderErrorKind::RateLimited => {
+                Self::new(GatewayErrorKind::RateLimited, "Request rate limit reached.")
+            }
+            ProviderErrorKind::QuotaExhausted => Self::new(
+                GatewayErrorKind::QuotaExhausted,
+                "Account quota is exhausted.",
             ),
-            ProviderErrorKind::ConcurrencyQueueFull => Self::new(
-                GatewayErrorKind::ConcurrencyQueueFull,
-                "Request queue is full.",
+            ProviderErrorKind::AccountPoolQuotaExhausted => Self::new(
+                GatewayErrorKind::AccountPoolQuotaExhausted,
+                "No eligible gateway account has quota for this request.",
             ),
-            ProviderErrorKind::ConcurrencyQueueTimeout => Self::new(
-                GatewayErrorKind::ConcurrencyQueueTimeout,
-                "Request queue wait timed out.",
-            ),
+            ProviderErrorKind::ConcurrencyQueueFull => {
+                crate::concurrency::QueueRejection::Full.gateway_error()
+            }
+            ProviderErrorKind::ConcurrencyQueueTimeout => {
+                crate::concurrency::QueueRejection::Timeout.gateway_error()
+            }
             ProviderErrorKind::AccountCapacityUnavailable => Self::new(
                 GatewayErrorKind::AccountCapacityUnavailable,
-                "All eligible upstream accounts are temporarily busy.",
+                "The gateway account pool is busy.",
             ),
             ProviderErrorKind::NoEligibleAccount => Self::new(
                 GatewayErrorKind::NoAvailableProvider,
-                "No upstream provider is available for this request.",
+                "The gateway found no eligible account for this request.",
             ),
             ProviderErrorKind::ProviderInfrastructureUnavailable => Self::new(
                 GatewayErrorKind::ProviderInfrastructureUnavailable,
-                "Upstream accounts are temporarily inaccessible.",
+                "Gateway account selection is temporarily unavailable.",
             ),
             ProviderErrorKind::Timeout => {
                 Self::new(GatewayErrorKind::Timeout, "Upstream request timed out.")

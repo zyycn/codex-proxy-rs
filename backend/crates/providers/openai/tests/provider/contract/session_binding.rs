@@ -131,7 +131,7 @@ async fn cyber_policy_session_exclusion_has_actionable_non_retryable_error() {
     assert_eq!(visible.code(), Some("cyber_policy"));
     assert_eq!(
         visible.message(),
-        "No account is available for this session after an upstream cyber policy rejection."
+        "The gateway found no eligible account for this session after an upstream cyber policy rejection."
     );
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
     // 可见但不属于固定账号范围的候选不能掩盖会话限制
@@ -855,7 +855,7 @@ async fn child_queue_timeout_does_not_rebind_or_allow_provider_fallback() {
     assert_eq!(error.kind(), ProviderErrorKind::ConcurrencyQueueTimeout);
     assert_eq!(
         gateway_core::error::GatewayError::from_provider(&error).client_message(),
-        "Request queue wait timed out."
+        "The request timed out in the gateway queue."
     );
     assert!(error.retry_is_prohibited());
     assert_eq!(affinity.binding_count(), 1);

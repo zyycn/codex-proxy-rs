@@ -2175,7 +2175,7 @@ async fn selection_failures_carry_a_distinguishable_client_error_code() {
         assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
         if expected_code == "account_cooling_down" {
             assert!(
-                detail.message().contains("retry in 13 seconds."),
+                detail.message().contains("Retry in 13 seconds."),
                 "{}",
                 detail.message()
             );
