@@ -425,19 +425,19 @@ fn selection_failure(error: &GrokSessionSelectorError) -> ProviderError {
         GrokSessionSelectorError::CapacityUnavailable { retry_after } => (
             ProviderErrorKind::AccountCapacityUnavailable,
             *retry_after,
-            "The available accounts are busy.".to_owned(),
+            "The gateway account pool is busy.".to_owned(),
             "account_capacity_busy",
         ),
         GrokSessionSelectorError::NoEligibleSession => (
             ProviderErrorKind::NoEligibleAccount,
             None,
-            "No account is available for the requested model.".to_owned(),
+            "The gateway found no eligible account for this model.".to_owned(),
             "no_eligible_account",
         ),
         GrokSessionSelectorError::Unavailable(_) => (
             ProviderErrorKind::ProviderInfrastructureUnavailable,
             None,
-            "Account selection is temporarily unavailable.".to_owned(),
+            "Gateway account selection is temporarily unavailable.".to_owned(),
             "account_selector_unavailable",
         ),
         GrokSessionSelectorError::PolicyRejected => {
@@ -480,20 +480,20 @@ fn selection_failure(error: &GrokSessionSelectorError) -> ProviderError {
 pub(super) fn cooling_down_message(retry_after: Option<Duration>) -> String {
     match retry_after {
         Some(retry_after) => format!(
-            "The account is temporarily unavailable after an upstream failure; retry in {} seconds.",
+            "The gateway is cooling down the account after an upstream failure. Retry in {} seconds.",
             retry_after.as_secs().saturating_add(1)
         ),
-        None => "The account is temporarily unavailable after an upstream failure.".to_owned(),
+        None => "The gateway is cooling down the account after an upstream failure.".to_owned(),
     }
 }
 
 pub(super) fn model_cooling_down_message(retry_after: Option<Duration>) -> String {
     match retry_after {
         Some(retry_after) => format!(
-            "All eligible accounts are temporarily unavailable for this model; retry in {} seconds.",
+            "A gateway account is cooling down for this model. Retry in {} seconds.",
             retry_after.as_secs().saturating_add(1)
         ),
-        None => "All eligible accounts are temporarily unavailable for this model.".to_owned(),
+        None => "A gateway account is cooling down for this model.".to_owned(),
     }
 }
 

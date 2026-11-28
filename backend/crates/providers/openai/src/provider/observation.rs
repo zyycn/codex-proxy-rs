@@ -855,7 +855,7 @@ fn selection_failure(error: &CredentialSelectionError) -> ProviderError {
         )
         .with_retry_prohibited()
         .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
-            "No account is available for this session after an upstream cyber policy rejection.",
+            "The gateway found no eligible account for this session after an upstream cyber policy rejection.",
             Some("cyber_policy".to_owned()),
             Some("invalid_request_error".to_owned()),
         )),
@@ -867,8 +867,9 @@ fn selection_failure(error: &CredentialSelectionError) -> ProviderError {
             ProviderErrorKind::QuotaExhausted,
             UpstreamSendState::NotSent,
         )
+        .with_diagnostic(ProviderDiagnostic::new("网关可选账号的额度均已用完"))
         .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
-            "All eligible accounts have exhausted their quota.",
+            "All eligible accounts in the gateway are out of quota.",
             Some("usage_limit_reached".to_owned()),
             Some("usage_limit_reached".to_owned()),
         )),

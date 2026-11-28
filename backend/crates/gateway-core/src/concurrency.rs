@@ -410,11 +410,11 @@ impl QueueRejection {
         match self {
             Self::Full => crate::error::GatewayError::new(
                 crate::error::GatewayErrorKind::ConcurrencyQueueFull,
-                "Request queue is full.",
+                "The gateway request queue is full.",
             ),
             Self::Timeout => crate::error::GatewayError::new(
                 crate::error::GatewayErrorKind::ConcurrencyQueueTimeout,
-                "Request queue wait timed out.",
+                "The request timed out in the gateway queue.",
             ),
         }
     }

@@ -397,7 +397,7 @@ fn local_provider_capacity_exhaustion_should_map_to_service_unavailable() {
     );
     assert_eq!(
         projected.safe_message(),
-        "All eligible upstream accounts are temporarily busy."
+        "The gateway account pool is busy."
     );
 }
 
@@ -429,7 +429,7 @@ fn no_eligible_provider_account_should_preserve_safe_provider_detail() {
     );
     assert_eq!(
         gateway.safe_message(),
-        "No upstream provider is available for this request."
+        "The gateway found no eligible account for this request."
     );
 }
 
@@ -447,7 +447,7 @@ fn provider_infrastructure_failure_should_have_a_distinct_client_contract() {
     );
     assert_eq!(
         projected.safe_message(),
-        "Upstream accounts are temporarily inaccessible."
+        "Gateway account selection is temporarily unavailable."
     );
 }
 
@@ -462,7 +462,7 @@ fn no_eligible_provider_account_should_map_to_service_unavailable() {
     assert_eq!(projected.kind(), GatewayErrorKind::NoAvailableProvider);
     assert_eq!(
         projected.safe_message(),
-        "No upstream provider is available for this request."
+        "The gateway found no eligible account for this request."
     );
 }
 
@@ -545,7 +545,7 @@ async fn locally_exhausted_account_pool_returns_official_usage_limit_contract() 
             UpstreamSendState::NotSent,
         )
         .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
-            "All eligible accounts have exhausted their quota.",
+            "All eligible accounts in the gateway are out of quota.",
             Some("usage_limit_reached".to_owned()),
             Some("usage_limit_reached".to_owned()),
         )),

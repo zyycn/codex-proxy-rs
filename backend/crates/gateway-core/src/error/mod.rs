@@ -1425,7 +1425,7 @@ impl GatewayError {
             ),
             ProviderErrorKind::SessionPolicyRestricted => Self::new(
                 GatewayErrorKind::InvalidRequest,
-                "No accounts are available under this conversation's restrictions.",
+                "Gateway session restrictions exclude all eligible accounts.",
             ),
             ProviderErrorKind::ContinuationRecoveryRequired => Self::new(
                 GatewayErrorKind::InvalidRequest,
@@ -1449,23 +1449,23 @@ impl GatewayError {
             ),
             ProviderErrorKind::ConcurrencyQueueFull => Self::new(
                 GatewayErrorKind::ConcurrencyQueueFull,
-                "Request queue is full.",
+                "The gateway request queue is full.",
             ),
             ProviderErrorKind::ConcurrencyQueueTimeout => Self::new(
                 GatewayErrorKind::ConcurrencyQueueTimeout,
-                "Request queue wait timed out.",
+                "The request timed out in the gateway queue.",
             ),
             ProviderErrorKind::AccountCapacityUnavailable => Self::new(
                 GatewayErrorKind::AccountCapacityUnavailable,
-                "All eligible upstream accounts are temporarily busy.",
+                "The gateway account pool is busy.",
             ),
             ProviderErrorKind::NoEligibleAccount => Self::new(
                 GatewayErrorKind::NoAvailableProvider,
-                "No upstream provider is available for this request.",
+                "The gateway found no eligible account for this request.",
             ),
             ProviderErrorKind::ProviderInfrastructureUnavailable => Self::new(
                 GatewayErrorKind::ProviderInfrastructureUnavailable,
-                "Upstream accounts are temporarily inaccessible.",
+                "Gateway account selection is temporarily unavailable.",
             ),
             ProviderErrorKind::Timeout => {
                 Self::new(GatewayErrorKind::Timeout, "Upstream request timed out.")

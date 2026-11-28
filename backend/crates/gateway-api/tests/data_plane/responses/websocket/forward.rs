@@ -749,7 +749,7 @@ async fn locally_exhausted_account_pool_sends_one_official_usage_limit_error() {
         UpstreamSendState::NotSent,
     )
     .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
-        "All eligible accounts have exhausted their quota.",
+        "All eligible accounts in the gateway are out of quota.",
         Some("usage_limit_reached".to_owned()),
         Some("usage_limit_reached".to_owned()),
     ));

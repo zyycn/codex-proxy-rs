@@ -2729,6 +2729,12 @@ async fn exhausted_account_pool_returns_usage_limit_before_http_or_websocket_net
         assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
         assert_eq!(error.send_state(), UpstreamSendState::NotSent);
         assert_eq!(error.upstream_status(), None);
+        assert_eq!(
+            gateway_core::error::GatewayError::from_provider(&error)
+                .diagnostic()
+                .map(|diagnostic| diagnostic.as_str()),
+            Some("网关可选账号的额度均已用完")
+        );
         let detail = error.client_visible_upstream_error().expect("quota detail");
         assert_eq!(detail.error_type(), Some("usage_limit_reached"));
         assert_eq!(detail.code(), Some("usage_limit_reached"));
