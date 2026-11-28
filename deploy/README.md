@@ -625,11 +625,28 @@ Caddy 与应用同在容器网络时，将回源地址改为 `codex-proxy-rs:808
 
 直接发送 HTTP 请求时，参见 [Messages 示例](../docs/api.md#messages-请求)和 [GenAI 接口与鉴权](../docs/api.md#antigravity-客户端原生生成)
 
-使用 Codex 时，打开「使用密钥」，按操作系统复制 `config.toml`。
+在密钥列表点「使用密钥」，或在密钥用量页点「配置」，按平台切换 Codex（OpenAI）、Grok Build（xAI）和 Antigravity，再选择操作系统复制配置。Codex 和 Grok Build 模板使用固定模型，可在复制后改为密钥可用的型号
+
+Antigravity 桌面版与 CLI 共用 `~/.gemini/config/config.json`（Windows 为 `%USERPROFILE%\.gemini\config\config.json`）：
+
+1. 如 CLI 仍登录旧 Google 账号，在 `agy` 中输入 `/logout`，回到登录选择页后按 Ctrl+C 退出
+2. 在 macOS／Linux 用以下命令准备文件。将弹窗中的 JSON 写入空文件；已有配置只合并或更新顶层 `gateway`，保留 `plugins`、`sidecars`、`userSettings` 等字段
+
+   ```sh
+   mkdir -p ~/.gemini/config
+   touch ~/.gemini/config/config.json
+   chmod 600 ~/.gemini/config/config.json
+   ```
+
+3. `gateway.url` 填网关根地址，子路径部署保留部署前缀。使用 `genai` 时客户端会追加 `/v1beta/models`
+4. 完全退出并重新打开桌面版。CLI 可用 `agy models` 查看目录，运行 `agy` 后输入 `/model` 选择模型
+
+使用 Codex 时，按操作系统复制 `config.toml`。
 已有配置先备份，合并后完全退出并重启 Codex。代理密钥由 Provider 配置提供，
 不需要另写 `auth.json`，已有官方登录文件可以保留
 
-管理端生成的 CC Switch 一键导入包含连接信息和当前 Key 的日／周额度查询，默认每 30 分钟刷新。
+点「导入到」后选择 CC Switch，导入当前平台的客户端配置和日／周额度查询，默认每 30 分钟刷新。密钥列表的更多菜单和密钥创建成功弹窗也支持直接导入，可在工具选择框切换平台。
+Antigravity 导入为 CC Switch 的 CLI 供应商卡片，模型使用显示名 `Gemini 4 Neon (High)`，从卡片打开终端即可使用。桌面版和独立启动的 CLI 使用上面的共享网关配置。
 查询地址和凭据随导入生成，在 CC Switch 中修改 Provider 的地址或 Key 后，需重新导入以同步用量查询。
 导入不包含下方模板的远程压缩、异步压缩、原生生图、WebSocket 和语音设置。需要这些设置时，使用下方配置直连 CPR，
 避免 CC Switch 切换或接管后重写 Provider 配置
@@ -644,8 +661,8 @@ Linux/macOS 默认目录为 `~/.codex/`，Windows 为 `%USERPROFILE%\.codex\`；
 
 ```toml
 model_provider = "OpenAI"
-model = "gpt-5.6-terra"
-review_model = "gpt-5.6-terra"
+model = "gpt-6-luna"
+review_model = "gpt-6-luna"
 model_reasoning_effort = "max"
 service_tier = "default"
 # 语音通话控制地址

@@ -95,6 +95,7 @@ function connectionLogClass(tone: string) {
           </div>
           <ZSelect
             v-model="selectedModel"
+            filterable
             :aria-label="t('accounts.connectionTest.model')"
             :options="modelOptions"
             :disabled="status === 'running' || loadingModels || refreshingModels"

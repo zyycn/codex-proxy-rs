@@ -1,18 +1,23 @@
 <script setup lang="ts">
+import type { BuiltinProvider } from '@/providers/catalog'
 import { Github } from '@boxicons/vue'
 import { ZDialog, ZMenuItem } from '@codex-proxy/ui'
 import { AppWindow } from '@lucide/vue'
+import { shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
+import ProviderSelect from '@/components/ProviderSelect.vue'
 
+const props = defineProps<{ provider?: BuiltinProvider }>()
 const emit = defineEmits<{
-  select: []
+  select: [provider: BuiltinProvider]
   afterLeave: []
 }>()
 const open = defineModel<boolean>({ default: false })
+const selectedProvider = shallowRef<BuiltinProvider>('openai')
 const { t } = useI18n({ useScope: 'global' })
 
 function select() {
-  emit('select')
+  emit('select', props.provider ?? selectedProvider.value)
   open.value = false
 }
 </script>
@@ -26,6 +31,7 @@ function select() {
     @closed="emit('afterLeave')"
   >
     <div class="grid gap-2">
+      <ProviderSelect v-if="!provider" v-model="selectedProvider" :aria-label="t('keys.configuration.platform')" />
       <div
         class="flex items-center gap-1 rounded-z-sm pr-1 transition-colors hover:bg-z-bg-text-hover has-focus-visible:bg-z-bg-text-hover motion-reduce:transition-none"
       >

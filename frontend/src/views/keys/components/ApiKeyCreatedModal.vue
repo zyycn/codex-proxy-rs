@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { BuiltinProvider } from '@/providers/catalog'
 import { ZButton, ZDialog, ZIconButton } from '@codex-proxy/ui'
 
 import { Copy, Upload } from '@lucide/vue'
@@ -10,7 +11,7 @@ defineProps<{ createdKey: string }>()
 
 const emit = defineEmits<{
   copy: [text: string]
-  importClient: []
+  importClient: [provider: BuiltinProvider]
   afterLeave: []
 }>()
 
@@ -62,5 +63,5 @@ const showImport = shallowRef(false)
       </ZButton>
     </template>
   </ZDialog>
-  <ClientImportModal v-if="open" v-model="showImport" @select="emit('importClient')" />
+  <ClientImportModal v-if="open" v-model="showImport" @select="emit('importClient', $event)" />
 </template>

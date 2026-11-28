@@ -1,120 +1,78 @@
 <script setup lang="ts">
+import type { BuiltinProvider } from '@/providers/catalog'
+import { Apple, MicrosoftWindows, Tux } from '@boxicons/vue'
 import { ZButton, ZDialog, ZIconButton, ZScrollbar, ZSegmented, ZSwitch } from '@codex-proxy/ui'
-
-import { Apple, Copy, Monitor, Upload } from '@lucide/vue'
-
+import { Copy, Upload } from '@lucide/vue'
 import { computed, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
-import ClientImportModal from '../ClientImportModal.vue'
-import { buildCodexCcSwitchImportDeeplink, buildCodexConfig, CODEX_WEBSOCKET_ENABLED_BY_DEFAULT } from './client'
+import ClientImportModal from '@/components/ClientImportModal.vue'
+import ProviderSelect from '@/components/ProviderSelect.vue'
+import { buildCcSwitchImportDeeplink, buildClientConfig, resolveServiceRootUrl } from './client'
 
-const props = defineProps<{
-  title?: string
-  apiKey: {
-    name?: string
-    key?: string
-  } | null
-  apiBaseUrl: string
-}>()
-
-const emit = defineEmits<{
-  copy: [text: string]
-  afterLeave: []
-}>()
-
-const { t } = useI18n({ useScope: 'global' })
-
+const props = defineProps<{ title?: string, apiKey: { name?: string, key?: string } | null }>()
+const emit = defineEmits<{ copy: [text: string], afterLeave: [] }>()
 const open = defineModel<boolean>({ default: false })
+const { t } = useI18n({ useScope: 'global' })
 const showImport = shallowRef(false)
-
-const activePlatform = shallowRef('unix')
-const websocketEnabled = shallowRef(CODEX_WEBSOCKET_ENABLED_BY_DEFAULT)
-
+const key = computed(() => props.apiKey?.key ?? '')
+const provider = shallowRef<BuiltinProvider>('openai')
+const platform = shallowRef('macos')
+const ws = shallowRef(false)
+const root = resolveServiceRootUrl()
 const platformOptions = [
-  { label: 'macOS / Linux', value: 'unix', icon: Apple },
-  { label: 'Windows', value: 'windows', icon: Monitor },
+  { label: 'macOS', value: 'macos', icon: Apple },
+  { label: 'Linux', value: 'linux', icon: Tux },
+  { label: 'Windows', value: 'windows', icon: MicrosoftWindows },
 ]
-
-const keyValue = computed(() => props.apiKey?.key ?? '')
-const configPath = computed(() =>
-  activePlatform.value === 'windows'
-    ? '%userprofile%\\.codex\\config.toml'
-    : '~/.codex/config.toml',
-)
-const codexConfig = computed(() => buildCodexConfig({
-  apiKey: keyValue.value,
-  baseUrl: props.apiBaseUrl,
-  websocketEnabled: websocketEnabled.value,
+const config = computed(() => buildClientConfig({
+  provider: provider.value,
+  root,
+  apiKey: key.value,
+  windows: platform.value === 'windows',
+  websocketEnabled: ws.value,
 }))
 
 function importToClient() {
-  if (!keyValue.value)
+  if (!key.value)
     return
-  window.location.href = buildCodexCcSwitchImportDeeplink({
-    apiKey: keyValue.value,
-    baseUrl: props.apiBaseUrl,
+  window.location.href = buildCcSwitchImportDeeplink({
+    provider: provider.value,
+    apiKey: key.value,
     providerName: props.apiKey?.name || 'codex-proxy-rs',
   })
 }
 </script>
 
 <template>
-  <ZDialog
-    v-model="open"
-    :title="title ?? t('keys.configuration.title')"
-    :description="t('keys.configuration.description')"
-    width="48rem"
-    @closed="showImport = false; emit('afterLeave')"
-  >
-    <div class="flex flex-col gap-5">
-      <div class="flex flex-wrap items-center justify-between gap-3">
-        <ZSegmented v-model="activePlatform" :aria-label="t('keys.configuration.platform')" :options="platformOptions" />
-        <ZSwitch
-          v-model="websocketEnabled"
-          :aria-label="t('keys.configuration.toggleWebSocket')"
-          active-text="WS"
-          inactive-text="WS"
-          inline-prompt
-          :width="56"
-        />
+  <ZDialog v-model="open" :title="title ?? t('keys.configuration.title')" width="46rem" @closed="showImport = false; emit('afterLeave')">
+    <div class="grid min-w-0 gap-3">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <ProviderSelect v-model="provider" :aria-label="t('keys.configuration.platform')" />
+        <ZSegmented v-model="platform" :aria-label="t('keys.configuration.os')" :options="platformOptions" display="icon" class="w-30 [&_svg]:size-4.5" size="small" />
       </div>
-
-      <section class="overflow-hidden rounded-z-card bg-z-fill-quaternary shadow-z-tertiary">
-        <div class="flex items-center justify-between gap-3 px-4 py-2.5">
-          <span
-            class="min-w-0 truncate font-mono text-z-sm font-emphasis text-z-text-secondary"
-          >
-            {{ configPath }}
-          </span>
-          <ZIconButton
-            variant="solid"
-            size="small"
-            :aria-label="t('common.actions.copy')"
-            @click="emit('copy', codexConfig)"
-          >
-            <Copy class="size-3.5" />
-          </ZIconButton>
-        </div>
-        <ZScrollbar max-height="calc(100dvh - 21rem)">
-          <div class="mx-3 mb-3 rounded-z bg-z-bg-container px-3.5 py-3 shadow-z-tertiary">
-            <pre
-              class="m-0 whitespace-pre-wrap wrap-break-word font-mono text-z-sm leading-[1.65] font-emphasis text-z-text"
-              v-text="codexConfig"
-            />
+      <section class="min-w-0 overflow-hidden rounded-z-card bg-z-fill-quaternary">
+        <ZScrollbar max-height="min(58dvh, 34rem)">
+          <div class="mx-3 mb-3 min-w-0">
+            <div class="flex flex-wrap items-center gap-3 py-2">
+              <code class="min-w-0 flex-1 break-all text-z-sm text-z-text-secondary">{{ config.title }}</code>
+              <ZSwitch v-if="provider === 'openai'" v-model="ws" :aria-label="t('keys.configuration.toggleWebSocket')" active-text="WS" inactive-text="WS" inline-prompt :width="56" />
+              <ZIconButton variant="solid" size="small" :disabled="!key" :aria-label="t('common.actions.copy')" @click="emit('copy', config.text)">
+                <Copy class="size-3.5" />
+              </ZIconButton>
+            </div>
+            <pre class="m-0 rounded-z bg-z-bg-container px-3.5 py-3 font-mono text-z-sm leading-relaxed wrap-anywhere whitespace-pre-wrap text-z-text" v-text="config.text" />
           </div>
         </ZScrollbar>
       </section>
     </div>
-
     <template #footer>
-      <ZButton :disabled="!keyValue" @click="showImport = true">
-        <Upload class="size-4" />
-        {{ t('keys.configuration.importTo') }}
+      <ZButton :disabled="!key" @click="showImport = true">
+        <Upload class="size-4" /> {{ t('keys.configuration.importTo') }}
       </ZButton>
       <ZButton type="primary" @click="open = false">
         {{ t('common.actions.close') }}
       </ZButton>
     </template>
   </ZDialog>
-  <ClientImportModal v-if="open" v-model="showImport" @select="importToClient" />
+  <ClientImportModal v-if="open" v-model="showImport" :provider="provider" @select="importToClient" />
 </template>

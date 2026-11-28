@@ -1,6 +1,5 @@
-import { computed, onScopeDispose, shallowRef } from 'vue'
+import { onScopeDispose, shallowRef } from 'vue'
 import { getKeyUsageConfig } from '@/api'
-import { resolveServiceRootUrl } from '@/components/api-key-config-modal/client'
 import { useCopyText } from '@/composables/useCopyText'
 import { useRequestState } from '@/composables/useRequestState'
 
@@ -9,7 +8,6 @@ export function useKeyConfig() {
   const configKey = shallowRef<{ name: string, key: string } | null>(null)
   const request = useRequestState()
   const copyText = useCopyText()
-  const apiBaseUrl = computed(() => `${resolveServiceRootUrl()}/v1`)
 
   async function openConfig() {
     if (request.loading.value)
@@ -45,7 +43,6 @@ export function useKeyConfig() {
     showConfig,
     configKey,
     configuring: request.loading,
-    apiBaseUrl,
     openConfig,
     copyConfig,
   }

@@ -1,3 +1,4 @@
+import type { SelectOption } from '@codex-proxy/ui'
 import type { Account, AccountModelsResponse } from '@/api'
 import { CheckCircle2, Clock3, Wifi, XCircle } from '@lucide/vue'
 import { useEventSource } from '@vueuse/core'
@@ -13,11 +14,6 @@ import { errorMessage } from '@/utils/operation'
 
 type ConnectionTestStatus = 'idle' | 'running' | 'success' | 'error'
 type ConnectionTestLogTone = 'normal' | 'info' | 'success' | 'danger'
-
-interface ConnectionTestModelOption {
-  label: string
-  value: string
-}
 
 interface ConnectionTestLog {
   key: string
@@ -179,7 +175,7 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
   const loadingConnectionTestModels = computed(() => modelsRequest.loading.value && modelsRequestMode.value === 'load')
   const refreshingConnectionTestModels = computed(() => modelsRequest.loading.value && modelsRequestMode.value === 'refresh')
   const connectionTestSelectedModel = shallowRef('')
-  const connectionTestModelOptions = ref<ConnectionTestModelOption[]>([])
+  const connectionTestModelOptions = ref<SelectOption[]>([])
   const connectionTestStreamUrl = shallowRef<string>()
   const {
     data: connectionTestStreamMessage,
@@ -452,7 +448,13 @@ export function useAccountConnectionTest(options: { reload: () => Promise<unknow
           labels.set(id, id)
       }
     }
-    connectionTestModelOptions.value = Array.from(labels, ([value, label]) => ({ value, label }))
+    connectionTestModelOptions.value = Array.from(labels, ([value, label]) => ({
+      value,
+      label,
+      description: value === label
+        ? undefined
+        : value,
+    }))
     connectionTestSelectedModel.value = labels.has(previousSelection)
       ? previousSelection
       : connectionTestModelOptions.value[0]?.value || ''

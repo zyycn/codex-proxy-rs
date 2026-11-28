@@ -5,8 +5,8 @@ import { t } from '@/i18n'
 
 const providers = {
   openai: { label: 'OpenAI', icon: Openai },
-  xai: { label: 'xAI', icon: Xai },
   antigravity: { label: 'Antigravity', icon: GoogleAntigravity },
+  xai: { label: 'xAI', icon: Xai },
 } as const
 
 export const PROVIDER_IDS = Object.keys(providers) as BuiltinProvider[]

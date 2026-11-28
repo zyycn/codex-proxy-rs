@@ -67,7 +67,6 @@ const {
   showImportKeyModal,
   selectedImportKey,
   revealingKeys,
-  openAiBaseUrl,
   showCreatedKey,
   clearCreatedKey,
   copyToClipboard,
@@ -298,7 +297,6 @@ watch([showFormModal, showBatchEdit], ([editor, batch]) => {
     <ApiKeyConfigModal
       v-model="showUseKeyModal"
       :api-key="selectedUseKey"
-      :api-base-url="openAiBaseUrl"
       @copy="copyToClipboard"
       @after-leave="selectedUseKey = null"
     />

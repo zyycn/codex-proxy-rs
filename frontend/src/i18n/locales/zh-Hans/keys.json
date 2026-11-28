@@ -1,15 +1,15 @@
 {
   "keys": {
     "configuration": {
-      "description": "保存或合并下方配置后重启 Codex",
-      "platform": "配置平台",
+      "platform": "平台",
       "toggleWebSocket": "切换 WebSocket 配置",
+      "fullApiKeyNotAvailable": "完整 API密钥不可用",
+      "title": "使用密钥",
+      "os": "操作系统",
       "importTo": "导入到",
       "selectImportTool": "选择要导入的工具",
       "ccSwitchDescription": "管理和切换 AI 客户端配置",
-      "viewOnGitHub": "在 GitHub 查看 {name}",
-      "fullApiKeyNotAvailable": "完整 API密钥不可用",
-      "title": "使用密钥"
+      "viewOnGitHub": "在 GitHub 查看 {name}"
     },
     "actions": {
       "editKey": "编辑密钥",

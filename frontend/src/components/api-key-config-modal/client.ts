@@ -1,20 +1,25 @@
+import type { BuiltinProvider } from '@/providers/catalog'
 import { API_BASE_URL } from '@/api/constants'
 
-const CODEX_DEFAULT_MODEL = 'gpt-5.6-terra'
-export const CODEX_WEBSOCKET_ENABLED_BY_DEFAULT = false
+const clientPresets = {
+  openai: { app: 'codex', model: 'gpt-6-luna' },
+  xai: { app: 'grokbuild', model: 'grok-4.7' },
+  antigravity: { app: 'agy', model: 'Gemini 4 Neon (High)' },
+} satisfies Record<BuiltinProvider, { app: string, model: string }>
 
-interface CodexConfigInput {
+interface SetupInput {
+  provider: BuiltinProvider
   apiKey: string
-  baseUrl: string
-  websocketEnabled?: boolean
+  root: string
+  windows: boolean
+  websocketEnabled: boolean
 }
 
-export function buildCodexConfig(input: CodexConfigInput): string {
-  const baseUrl = input.baseUrl.replace(/\/+$/, '')
-  const websocketEnabled = input.websocketEnabled ?? CODEX_WEBSOCKET_ENABLED_BY_DEFAULT
+function buildCodexConfig(apiKey: string, baseUrl: string, websocketEnabled: boolean) {
+  const model = JSON.stringify(clientPresets.openai.model)
   return `model_provider = "OpenAI"
-model = "${CODEX_DEFAULT_MODEL}"
-review_model = "${CODEX_DEFAULT_MODEL}"
+model = ${model}
+review_model = ${model}
 model_reasoning_effort = "max"
 service_tier = "default"
 # 语音通话控制地址
@@ -28,7 +33,7 @@ wire_api = "responses"
 supports_websockets = ${websocketEnabled}
 requires_openai_auth = false
 # 代理密钥
-experimental_bearer_token = ${JSON.stringify(input.apiKey)}
+experimental_bearer_token = ${JSON.stringify(apiKey)}
 
 [model_providers.OpenAI.capabilities]
 # V2 远程压缩
@@ -45,9 +50,47 @@ image_generation = true
 goals = true`
 }
 
-interface CodexCcSwitchImportInput {
+export function buildClientConfig({ provider, root, apiKey, windows, websocketEnabled }: SetupInput) {
+  const path = (relative: string) => windows
+    ? `%USERPROFILE%\\${relative.replaceAll('/', '\\')}`
+    : `~/${relative}`
+  const baseUrl = `${root}/v1`
+  if (provider === 'openai') {
+    return {
+      title: path('.codex/config.toml'),
+      text: buildCodexConfig(apiKey, baseUrl, websocketEnabled),
+    }
+  }
+  if (provider === 'xai') {
+    return {
+      title: path('.grok/config.toml'),
+      text: `[models]
+default = "cpr"
+
+[model.cpr]
+model = ${JSON.stringify(clientPresets.xai.model)}
+base_url = ${JSON.stringify(baseUrl)}
+api_key = ${JSON.stringify(apiKey)}
+api_backend = "responses"`,
+    }
+  }
+
+  return {
+    title: path('.gemini/config/config.json'),
+    text: JSON.stringify({
+      gateway: {
+        enabled: true,
+        url: root,
+        wireProtocol: 'genai',
+        apiKey,
+      },
+    }, null, 2),
+  }
+}
+
+interface CcSwitchImportInput {
+  provider: BuiltinProvider
   apiKey: string
-  baseUrl: string
   providerName: string
 }
 
@@ -84,16 +127,20 @@ function buildUsageScript(apiKey: string, baseUrl: string) {
 })`
 }
 
-export function buildCodexCcSwitchImportDeeplink(input: CodexCcSwitchImportInput): string {
-  const baseUrl = input.baseUrl.replace(/\/+$/, '')
+export function buildCcSwitchImportDeeplink(input: CcSwitchImportInput): string {
+  const root = resolveServiceRootUrl()
+  const baseUrl = `${root}/v1`
+  const endpoint = input.provider === 'antigravity'
+    ? root
+    : baseUrl
   // 导入端会重建 Codex 配置，只传连接信息和用量查询，不传无法保留的完整模板
   const entries: [string, string][] = [
     ['resource', 'provider'],
-    ['app', 'codex'],
-    ['model', CODEX_DEFAULT_MODEL],
+    ['app', clientPresets[input.provider].app],
+    ['model', clientPresets[input.provider].model],
     ['name', input.providerName],
-    ['homepage', baseUrl],
-    ['endpoint', baseUrl],
+    ['homepage', root],
+    ['endpoint', endpoint],
     ['apiKey', input.apiKey],
     ['usageEnabled', 'true'],
     [

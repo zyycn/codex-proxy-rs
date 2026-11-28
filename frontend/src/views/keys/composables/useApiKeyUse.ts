@@ -1,7 +1,8 @@
 import type { ApiKey } from '@/api'
+import type { BuiltinProvider } from '@/providers/catalog'
 import { onScopeDispose, shallowRef } from 'vue'
 import { revealApiKey } from '@/api'
-import { buildCodexCcSwitchImportDeeplink, resolveServiceRootUrl } from '@/components/api-key-config-modal/client'
+import { buildCcSwitchImportDeeplink } from '@/components/api-key-config-modal/client'
 import { useCopyText } from '@/composables/useCopyText'
 import { useRequestState } from '@/composables/useRequestState'
 import { t } from '@/i18n'
@@ -28,15 +29,13 @@ export function useApiKeyUse() {
     showCreatedKeyModal.value = true
   }
 
-  const openAiBaseUrl = `${resolveServiceRootUrl()}/v1`
-
-  function importCreatedKey() {
+  function importCreatedKey(provider: BuiltinProvider) {
     if (!createdKey.value)
       return
 
-    window.location.href = buildCodexCcSwitchImportDeeplink({
+    window.location.href = buildCcSwitchImportDeeplink({
       apiKey: createdKey.value,
-      baseUrl: openAiBaseUrl,
+      provider,
       providerName: createdKeyName.value || 'codex-proxy-rs',
     })
   }
@@ -54,14 +53,14 @@ export function useApiKeyUse() {
     showImportKeyModal.value = true
   }
 
-  function importSelectedKey() {
+  function importSelectedKey(provider: BuiltinProvider) {
     const apiKey = selectedImportKey.value
     if (!apiKey)
       return
     return withPlaintextKey(apiKey, 'import', (key) => {
-      window.location.href = buildCodexCcSwitchImportDeeplink({
+      window.location.href = buildCcSwitchImportDeeplink({
         apiKey: key,
-        baseUrl: openAiBaseUrl,
+        provider,
         providerName: apiKey.name || apiKey.prefix || 'codex-proxy-rs',
       })
     })
@@ -125,7 +124,6 @@ export function useApiKeyUse() {
     showImportKeyModal,
     selectedImportKey,
     revealingKeys,
-    openAiBaseUrl,
     showCreatedKey,
     clearCreatedKey,
     copyToClipboard,

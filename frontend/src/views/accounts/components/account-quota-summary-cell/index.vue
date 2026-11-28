@@ -109,7 +109,7 @@ const additionalEntryCount = computed(() => Math.max(summaryEntries.value.length
       </div>
       <span
         v-if="additionalEntryCount > 0"
-        class="grid h-5 min-w-5 shrink-0 place-items-center rounded-z bg-z-fill-quaternary px-1.5 font-mono text-[9px] font-heavy tabular-nums text-z-text-tertiary"
+        class="grid h-5 min-w-5 shrink-0 place-items-center rounded-z bg-current/10 px-1 font-mono text-[9px] font-heavy tabular-nums text-z-text-tertiary"
         :title="t('accounts.quota.moreGroups', { count: additionalEntryCount })"
       >
         +{{ additionalEntryCount }}

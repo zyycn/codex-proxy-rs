@@ -1,15 +1,15 @@
 {
   "keys": {
     "configuration": {
-      "description": "Save or merge the configuration below and then restart Codex",
       "platform": "Platform",
       "toggleWebSocket": "Switch WebSocket configuration",
+      "fullApiKeyNotAvailable": "Full API key not available",
+      "title": "Use API key",
+      "os": "Operating system",
       "importTo": "Import",
       "selectImportTool": "Choose a tool to import into",
       "ccSwitchDescription": "Manage AI client configurations",
-      "viewOnGitHub": "View {name} on GitHub",
-      "fullApiKeyNotAvailable": "Full API key not available",
-      "title": "Use API key"
+      "viewOnGitHub": "View {name} on GitHub"
     },
     "actions": {
       "editKey": "Edit key",
