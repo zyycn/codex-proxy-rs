@@ -1381,6 +1381,20 @@ impl GatewayError {
         }
     }
 
+    pub(crate) const fn concurrency_queue_full() -> Self {
+        Self::new(
+            GatewayErrorKind::ConcurrencyQueueFull,
+            "The gateway request queue is full.",
+        )
+    }
+
+    pub(crate) const fn concurrency_queue_timeout() -> Self {
+        Self::new(
+            GatewayErrorKind::ConcurrencyQueueTimeout,
+            "The request timed out in the gateway queue.",
+        )
+    }
+
     #[must_use]
     pub fn with_source(mut self, source: impl Into<ErrorSource>) -> Self {
         self.source = Some(source.into());
@@ -1469,12 +1483,8 @@ impl GatewayError {
                 GatewayErrorKind::AccountPoolQuotaExhausted,
                 "No eligible gateway account has quota for this request.",
             ),
-            ProviderErrorKind::ConcurrencyQueueFull => {
-                crate::concurrency::QueueRejection::Full.gateway_error()
-            }
-            ProviderErrorKind::ConcurrencyQueueTimeout => {
-                crate::concurrency::QueueRejection::Timeout.gateway_error()
-            }
+            ProviderErrorKind::ConcurrencyQueueFull => Self::concurrency_queue_full(),
+            ProviderErrorKind::ConcurrencyQueueTimeout => Self::concurrency_queue_timeout(),
             ProviderErrorKind::AccountCapacityUnavailable => Self::new(
                 GatewayErrorKind::AccountCapacityUnavailable,
                 "The gateway account pool is busy.",
