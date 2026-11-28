@@ -1838,7 +1838,7 @@ fn prompt_rules_are_selected_once_by_upstream_and_keep_global_order() {
     let xai = ProviderKind::new("xai").unwrap();
     let scoped = |targets, prefix| {
         serde_json::from_value(
-            serde_json::json!({"providers": targets, "pattern": prefix, "replacement": ""}),
+            serde_json::json!({"name": "客户端身份", "providers": targets, "pattern": prefix, "replacement": ""}),
         )
         .unwrap()
     };

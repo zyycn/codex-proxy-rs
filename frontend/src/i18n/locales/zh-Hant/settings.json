@@ -1,6 +1,13 @@
 {
   "settings": {
     "promptRewrite": {
+      "addRule": "添加規則",
+      "editRule": "編輯規則",
+      "editNamedRule": "編輯規則 {name}",
+      "deleteRule": "刪除規則 {name}",
+      "ruleName": "規則名稱",
+      "namePlaceholder": "例如 DSH 提示詞適配",
+      "nameRequired": "請輸入規則名稱",
       "title": "提示詞改寫",
       "description": "依序比對系統指令的前綴，替換首個符合的前綴。替換文字留空可刪除前綴",
       "empty": "暫無改寫規則",

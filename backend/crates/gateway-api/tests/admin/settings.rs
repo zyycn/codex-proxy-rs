@@ -291,11 +291,14 @@ async fn error_protection_rules_round_trip_and_invalid_policy_does_not_replace_t
 }
 
 #[test]
-fn prompt_rewrite_rejects_unknown_scope_fields_and_empty_prefixes() {
+fn prompt_rewrite_requires_names_and_prefixes_and_rejects_unknown_fields() {
     let mut body = update_body();
     for rule in [
-        json!({"pattern":"prefix", "replacement":"", "unknownField":["xai"]}),
-        json!({"pattern":"", "replacement":""}),
+        json!({"name":"规则", "pattern":"prefix", "replacement":"", "unknownField":["xai"]}),
+        json!({"name":"规则", "pattern":"", "replacement":""}),
+        json!({"pattern":"prefix", "replacement":""}),
+        json!({"name":"", "pattern":"prefix", "replacement":""}),
+        json!({"name":"  ", "pattern":"prefix", "replacement":""}),
     ] {
         body["promptRewriteRules"] = json!([rule]);
         assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body.clone()).is_err());

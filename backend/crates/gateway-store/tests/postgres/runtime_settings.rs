@@ -76,8 +76,8 @@ async fn prompt_rewrite_order_and_scope_round_trip_into_the_runtime_snapshot() {
     let before = repository.load_runtime_settings().await.unwrap();
     assert!(before.values.prompt_rewrite_rules.is_empty());
     let expected = serde_json::json!([
-        {"providers":["antigravity","xai"],"pattern":"example","replacement":"first"},
-        {"providers":[],"pattern":"example","replacement":"second"}
+        {"name":"客户端身份","providers":["antigravity","xai"],"pattern":"example","replacement":"first"},
+        {"name":"全局身份","providers":[],"pattern":"example","replacement":"second"}
     ]);
     let mut update = settings_with_margin(300);
     update.values.prompt_rewrite_rules = serde_json::from_value(expected.clone()).unwrap();

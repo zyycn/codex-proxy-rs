@@ -11,6 +11,8 @@ use std::{
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PromptRewriteRule {
+    #[serde(deserialize_with = "nonempty_name")]
+    name: String,
     #[serde(default)]
     providers: BTreeSet<ProviderKind>,
     #[serde(deserialize_with = "nonempty_pattern")]
@@ -24,6 +26,14 @@ impl fmt::Debug for PromptRewriteRule {
             .field("providers", &self.providers)
             .finish_non_exhaustive()
     }
+}
+
+fn nonempty_name<'de, D: serde::Deserializer<'de>>(de: D) -> Result<String, D::Error> {
+    let name = String::deserialize(de)?;
+    if name.trim().is_empty() {
+        return Err(serde::de::Error::custom("规则名称不能为空"));
+    }
+    Ok(name)
 }
 
 fn nonempty_pattern<'de, D: serde::Deserializer<'de>>(de: D) -> Result<String, D::Error> {

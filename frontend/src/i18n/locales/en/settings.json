@@ -1,6 +1,13 @@
 {
   "settings": {
     "promptRewrite": {
+      "addRule": "Add rule",
+      "editRule": "Edit rule",
+      "editNamedRule": "Edit rule {name}",
+      "deleteRule": "Delete rule {name}",
+      "ruleName": "Rule name",
+      "namePlaceholder": "e.g. DSH prompt adaptation",
+      "nameRequired": "Enter a rule name",
       "title": "Prompt rewriting",
       "description": "Replace the first matching system instruction prefix in rule order. Leave the replacement empty to remove the prefix.",
       "empty": "No rewrite rules",

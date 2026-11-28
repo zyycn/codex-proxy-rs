@@ -116,8 +116,12 @@ fn contract_type(mut item: Item, name: &str) -> Item {
     if let Some(fields) = fields {
         for field in fields {
             field.vis = parse_quote!(pub);
-            // 非空前缀由宿主在接收设置时校验，SDK 只描述字符串合同
-            if name == "PromptRewriteRule" && field.ident.as_ref().is_some_and(|id| id == "pattern")
+            // 非空名称与前缀由宿主在接收设置时校验，SDK 只描述字符串合同
+            if name == "PromptRewriteRule"
+                && field
+                    .ident
+                    .as_ref()
+                    .is_some_and(|id| id == "pattern" || id == "name")
             {
                 field.attrs.retain(|attr| !attr.path().is_ident("serde"));
             }

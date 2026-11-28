@@ -53,6 +53,7 @@ export interface OpenAiWebSocketPoolSettings {
 }
 
 export interface PromptRewriteRule {
+  name: string
   providers: string[]
   pattern: string
   replacement: string

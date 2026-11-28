@@ -446,7 +446,7 @@ fn unmatched_prompt_prefixes_do_not_allocate_for_large_histories() {
     let body = body.as_object().unwrap();
     let rules = CompiledPromptRewrite::new(
         serde_json::from_value(json!([{
-            "pattern":"Unknown", "replacement":"Changed"
+            "name":"客户端身份", "pattern":"Unknown", "replacement":"Changed"
         }]))
         .unwrap(),
     )

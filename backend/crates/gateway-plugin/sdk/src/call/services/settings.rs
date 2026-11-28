@@ -60,6 +60,7 @@ pub enum AccountErrorOperator {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PromptRewriteRule {
+    pub name: String,
     #[serde(default)]
     pub providers: BTreeSet<String>,
     pub pattern: String,
