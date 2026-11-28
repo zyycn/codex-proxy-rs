@@ -64,3 +64,36 @@ fn migrated_client_keys_keep_their_exact_value_without_prefix_or_length_limits()
         assert!(PlaintextClientApiKey::new(value).is_err());
     }
 }
+
+#[test]
+fn client_key_validity_includes_the_start_and_excludes_the_end() {
+    use gateway_core::policy::{ClientKeyValidity, ClientKeyValidityStatus};
+    let start = chrono::Utc::now();
+    let end = start + chrono::TimeDelta::days(7);
+    let range = ClientKeyValidity {
+        starts_at: Some(start),
+        expires_at: Some(end),
+    };
+    assert!(range.is_valid());
+    assert_eq!(
+        range.status_at(start - chrono::TimeDelta::milliseconds(1)),
+        ClientKeyValidityStatus::Scheduled
+    );
+    assert_eq!(range.status_at(start), ClientKeyValidityStatus::Active);
+    assert_eq!(range.status_at(end), ClientKeyValidityStatus::Expired);
+    assert!(
+        !ClientKeyValidity {
+            expires_at: Some(start),
+            ..range
+        }
+        .is_valid()
+    );
+    assert!(
+        !ClientKeyValidity {
+            starts_at: None,
+            ..range
+        }
+        .is_valid()
+    );
+    assert!(ClientKeyValidity::default().is_valid());
+}

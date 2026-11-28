@@ -17,6 +17,7 @@ import InstallationSeedField from '@/providers/openai/request-profile/Installati
 import { useApiKeyFormRules } from '../composables/useApiKeyFormRules'
 import ApiKeyLimitFields from './ApiKeyLimitFields.vue'
 import ApiKeyPeerSharingField from './ApiKeyPeerSharingField.vue'
+import ApiKeyValidityFields from './ApiKeyValidityFields.vue'
 
 const props = defineProps<{
   groups: AccountGroupRef[]
@@ -102,26 +103,31 @@ function updatePeerSharing(key: keyof ApiKeyPeerSharing, value: boolean) {
             @update:model-value="updateForm('name', $event)"
           />
         </ZFormItem>
-        <ZFormItem :label="t('keys.editor.labelOptional')">
+        <ZFormItem :label="t('keys.editor.label')">
           <ZInput
-            :model-value="form.label" :aria-label="t('keys.editor.labelOptional')"
+            :model-value="form.label" :aria-label="t('keys.editor.label')"
             :placeholder="t('keys.editor.forExampleBackendService')"
             :disabled="saving"
             @update:model-value="updateForm('label', $event)"
           />
         </ZFormItem>
+        <ApiKeyValidityFields
+          class="col-span-full min-w-0"
+          :model-value="form.validity" :disabled="saving"
+          @update:model-value="updateForm('validity', $event)"
+        />
       </div>
 
       <ZFormItem
         v-if="!editing"
         prop="customKey"
-        :label="t('keys.editor.customKeyOptional')"
+        :label="t('keys.editor.customKey')"
       >
         <ZInput
           :model-value="form.customKey" type="password"
           autocomplete="new-password"
           :spellcheck="false"
-          :aria-label="t('keys.editor.customKeyOptional')"
+          :aria-label="t('keys.editor.customKey')"
           :placeholder="t('keys.editor.keyPlaceholder')"
           :disabled="saving"
           @update:model-value="updateForm('customKey', $event)"

@@ -108,6 +108,7 @@ pub struct ClientKeyListQuery {
 /// 不含完整明文 Key 的管理投影
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientKeyRecord {
+    pub validity: gateway_core::policy::ClientKeyValidity,
     pub peer_sharing: gateway_core::policy::ClientPeerSharing,
     pub request_profile_overrides: ProviderRequestProfileOverrides,
     pub id: ClientApiKeyId,
@@ -122,6 +123,13 @@ pub struct ClientKeyRecord {
     pub last_used_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl ClientKeyRecord {
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.enabled && self.validity.is_active()
+    }
 }
 
 /// Client Key 列表页
@@ -168,6 +176,7 @@ impl fmt::Debug for ClientKeySecret {
 /// API 提交的 Client Key 创建命令
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateClientKey {
+    pub validity: gateway_core::policy::ClientKeyValidity,
     pub peer_sharing: gateway_core::policy::ClientPeerSharing,
     pub request_profile_overrides: ProviderRequestProfileOverrides,
     pub custom_key: Option<PlaintextClientApiKey>,
@@ -181,6 +190,7 @@ pub struct CreateClientKey {
 /// 管理用例生成 ID 与明文后的持久化命令
 #[derive(Clone, PartialEq, Eq)]
 pub struct NewClientKey {
+    pub validity: gateway_core::policy::ClientKeyValidity,
     pub peer_sharing: gateway_core::policy::ClientPeerSharing,
     pub request_profile_overrides: ProviderRequestProfileOverrides,
     pub id: ClientApiKeyId,
@@ -207,6 +217,7 @@ impl fmt::Debug for NewClientKey {
 /// 修改 Client Key 的公开策略字段
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateClientKey {
+    pub validity: Option<gateway_core::policy::ClientKeyValidity>,
     pub peer_sharing: Option<gateway_core::policy::ClientPeerSharing>,
     pub request_profile_override_updates: ProviderRequestProfileOverrideUpdates,
     pub id: ClientApiKeyId,
@@ -293,11 +304,31 @@ pub enum ClientKeyBudgetPeriod {
     All,
 }
 
-/// 清零所选窗口并恢复日历规则，保留限额与历史费用
+/// 清零所选窗口，保留限额与历史费用
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResetClientKeyBudget {
     pub id: ClientApiKeyId,
     pub period: ClientKeyBudgetPeriod,
+}
+
+impl ResetClientKeyBudget {
+    /// 返回所选日、周窗口的终点；插件重置以起止相同表示等待下次使用
+    #[must_use]
+    pub fn window_ends(
+        &self,
+        origin: &ClientKeyBudgetMutationOrigin,
+        start: DateTime<Utc>,
+    ) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+        let end = |days| match origin {
+            ClientKeyBudgetMutationOrigin::Admin => start + chrono::Duration::days(days),
+            ClientKeyBudgetMutationOrigin::Plugin(_) => start,
+        };
+        match self.period {
+            ClientKeyBudgetPeriod::Daily => (Some(end(1)), None),
+            ClientKeyBudgetPeriod::Weekly => (None, Some(end(7))),
+            ClientKeyBudgetPeriod::All => (Some(end(1)), Some(end(7))),
+        }
+    }
 }
 
 /// 显式窗口复用已有日／周金额上限，外部周期的选择归调用方

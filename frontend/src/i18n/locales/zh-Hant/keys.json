@@ -1,5 +1,19 @@
 {
   "keys": {
+    "validity": {
+      "noExpiry": "長期有效",
+      "timeLimited": "限時有效",
+      "label": "密鑰有效期",
+      "startsAt": "生效時間",
+      "expiresAt": "到期時間",
+      "startDate": "開始日期",
+      "endDate": "結束日期",
+      "week": "7 天",
+      "month": "30 天",
+      "invalidRange": "到期時間須晚於生效時間",
+      "scheduled": "待生效",
+      "expired": "已到期"
+    },
     "configuration": {
       "platform": "平台",
       "toggleWebSocket": "切換 WebSocket 配置",
@@ -69,7 +83,7 @@
       "dailyQuota": "日額度",
       "weeklyQuota": "周額度",
       "keyQuotaReset": "已重置密鑰額度",
-      "description": "清零所選週期的已用金額，下次使用時重新確定重置日期",
+      "description": "所選週期的已用金額歸零，新週期從現在開始",
       "targetKey": "目標密鑰",
       "resetScope": "重置範圍",
       "currentlyUsed": "當前已用",
@@ -93,9 +107,9 @@
     "editor": {
       "description": "配置密鑰信息、分組與使用限制",
       "namePlaceholder": "例如：生產環境",
-      "labelOptional": "標籤（可選）",
+      "label": "標籤",
       "forExampleBackendService": "例如：後端服務",
-      "customKeyOptional": "自定義 API密鑰（可選）",
+      "customKey": "自定義 API 密鑰",
       "keyPlaceholder": "留空自動生成",
       "upstreamIdentity": "上游身份",
       "dailyLimit": "日限額",

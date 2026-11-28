@@ -583,7 +583,7 @@ watch(
                 {{ t('plugins.installation.digestHelp') }}
               </PluginHelpPopover>
             </template>
-            <ZInput v-model="connectionForm.sha256" :disabled="busy" maxlength="64" :aria-label="t('plugins.installation.shaChecksum')" :placeholder="t('plugins.installation.optionalSha')" class="font-mono [&_input::placeholder]:font-normal" />
+            <ZInput v-model="connectionForm.sha256" :disabled="busy" maxlength="64" :aria-label="t('plugins.installation.shaChecksum')" :placeholder="t('plugins.installation.digestPlaceholder')" class="font-mono [&_input::placeholder]:font-normal" />
           </ZFormItem>
           <PluginSourceProxyField v-model="connectionForm.outboundProxyId" :disabled="busy" />
         </div>

@@ -54,7 +54,7 @@ const name = computed({
       :preserve-proxy="false"
       :disabled="disabled"
       :name-placeholder="t('accounts.onboarding.namePlaceholder')"
-      :notes-placeholder="t('accounts.onboarding.maximumWordsOptional')"
+      :notes-placeholder="t('accounts.onboarding.notesPlaceholder')"
     />
   </div>
 </template>

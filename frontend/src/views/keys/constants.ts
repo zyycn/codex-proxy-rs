@@ -41,7 +41,7 @@ export const apiKeyColumns = computed(() => (defineTableColumns<ApiKey>([
     key: 'limits',
     label: t('keys.fields.requestLimits'),
     kind: 'text',
-    size: 'xl',
+    size: 'lg',
   },
   {
     key: 'createdAtDisplay',

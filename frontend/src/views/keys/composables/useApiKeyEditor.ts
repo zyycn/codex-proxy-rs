@@ -1,4 +1,4 @@
-import type { ApiKey, ApiKeyPeerSharing, ProviderRequestProfiles } from '@/api'
+import type { ApiKey, ApiKeyPeerSharing, ApiKeyValidity, ProviderRequestProfiles } from '@/api'
 import { cloneDeep } from 'es-toolkit'
 import { ref, shallowRef } from 'vue'
 import { createApiKey, updateApiKey } from '@/api'
@@ -9,6 +9,7 @@ import { notification as ZNotification } from '@/plugins/notification'
 import { decodeKeyProfiles, encodeKeyProfiles } from '@/providers/openai/request-profile/installationSeed'
 
 export interface ApiKeyFormValue {
+  validity: ApiKeyValidity
   peerSharing: ApiKeyPeerSharing
   providerRequestProfileOverrides: ProviderRequestProfiles
   installationSeed: string
@@ -67,6 +68,7 @@ export function useApiKeyEditor(options: {
     await savingKeyAction.run(
       async () => {
         const payload = {
+          validity: { ...form.value.validity },
           peerSharing: { ...form.value.peerSharing },
           name: form.value.name.trim(),
           label: form.value.label.trim() || null,
@@ -138,6 +140,7 @@ export function useApiKeyEditor(options: {
 
 function emptyForm(): ApiKeyFormValue {
   return {
+    validity: { startsAt: null, expiresAt: null },
     peerSharing: {
       enabled: false,
       sharePool: false,
@@ -166,6 +169,7 @@ function limitInputValue(limit: string | number) {
 export function apiKeyFormValue(key: ApiKey): ApiKeyFormValue {
   const { profiles, installationSeed } = decodeKeyProfiles(cloneDeep(key.providerRequestProfileOverrides))
   return {
+    validity: { ...key.validity },
     peerSharing: { ...key.peerSharing },
     providerRequestProfileOverrides: profiles,
     installationSeed,

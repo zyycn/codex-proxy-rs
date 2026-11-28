@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use gateway_admin::model::{
     MutationContext,
-    client_keys::{ClientKeyBudgetMutationOrigin, ClientKeyBudgetPeriod, ResetClientKeyBudget},
+    client_keys::{ClientKeyBudgetMutationOrigin, ResetClientKeyBudget},
 };
 use gateway_admin::ports::store::AdminStoreResult;
 use gateway_core::{
@@ -40,7 +40,7 @@ pub(in crate::postgres) async fn reset_client_key_budget(
             crate::postgres::plugins::begin_plugin_mutation(pool, owner).await?
         }
     };
-    reset_client_key_budget_in_transaction(&mut tx, &command, context)
+    reset_client_key_budget_in_transaction(&mut tx, &command, &origin, context)
         .await
         .map_err(|error| crate::admin_store_error("client API key budget", error))?;
     tx.commit().await.map_err(|source| {
@@ -54,6 +54,7 @@ pub(in crate::postgres) async fn reset_client_key_budget(
 async fn reset_client_key_budget_in_transaction(
     tx: &mut Transaction<'_, Postgres>,
     command: &ResetClientKeyBudget,
+    origin: &ClientKeyBudgetMutationOrigin,
     context: &MutationContext,
 ) -> StoreResult<()> {
     // 与准入、结算共用 Key 行锁，重置边界必须在取得锁之后确定
@@ -70,47 +71,40 @@ async fn reset_client_key_budget_in_transaction(
             id: command.id.as_str().to_owned(),
         });
     }
-    let daily = matches!(
-        command.period,
-        ClientKeyBudgetPeriod::Daily | ClientKeyBudgetPeriod::All
-    );
-    let weekly = matches!(
-        command.period,
-        ClientKeyBudgetPeriod::Weekly | ClientKeyBudgetPeriod::All
-    );
     let reset_at = Utc::now();
-    // 起止时间收拢到重置边界，窗口保持未开启，同时排除重置前完成的迟到费用
+    let (daily_end, weekly_end) = command.window_ends(origin, reset_at);
+    // 首次建账时未选周期保持未开启，已有账本只更新所选周期
     sqlx::query(
         "insert into client_api_key_budget_windows
         (client_api_key_id,daily_start,daily_end,weekly_start,weekly_end,revision)
-        values ($1,$4,$4,$4,$4,1)
+        values ($1,$2,coalesce($3::timestamptz,$2),$2,coalesce($4::timestamptz,$2),1)
         on conflict (client_api_key_id) do update set
-        daily_used_usd = case when $2 then 0 else client_api_key_budget_windows.daily_used_usd end,
-        daily_start = case when $2 then $4 else client_api_key_budget_windows.daily_start end,
-        daily_end = case when $2 then $4 else client_api_key_budget_windows.daily_end end,
-        weekly_used_usd = case when $3 then 0 else client_api_key_budget_windows.weekly_used_usd end,
-        weekly_start = case when $3 then $4 else client_api_key_budget_windows.weekly_start end,
-        weekly_end = case when $3 then $4 else client_api_key_budget_windows.weekly_end end,
-        daily_explicit=case when $2 then false else client_api_key_budget_windows.daily_explicit end,
-        weekly_explicit=case when $3 then false else client_api_key_budget_windows.weekly_explicit end,
+        daily_used_usd = case when $3 is not null then 0 else client_api_key_budget_windows.daily_used_usd end,
+        daily_start = case when $3 is not null then $2 else client_api_key_budget_windows.daily_start end,
+        daily_end = case when $3 is not null then excluded.daily_end else client_api_key_budget_windows.daily_end end,
+        weekly_used_usd = case when $4 is not null then 0 else client_api_key_budget_windows.weekly_used_usd end,
+        weekly_start = case when $4 is not null then $2 else client_api_key_budget_windows.weekly_start end,
+        weekly_end = case when $4 is not null then excluded.weekly_end else client_api_key_budget_windows.weekly_end end,
+        daily_explicit=case when $3 is not null then false else client_api_key_budget_windows.daily_explicit end,
+        weekly_explicit=case when $4 is not null then false else client_api_key_budget_windows.weekly_explicit end,
         revision=client_api_key_budget_windows.revision+1, last_operation_request=null",
     )
     .bind(command.id.as_str())
-    .bind(daily)
-    .bind(weekly)
     .bind(reset_at)
+    .bind(daily_end)
+    .bind(weekly_end)
     .execute(&mut **tx)
     .await
     .map_err(|source| postgres_unavailable("reset client budget", source))?;
     let mut fields = Vec::new();
-    if daily {
+    if daily_end.is_some() {
         fields.extend([
             "daily_used_usd".to_owned(),
             "daily_start".to_owned(),
             "daily_end".to_owned(),
         ]);
     }
-    if weekly {
+    if weekly_end.is_some() {
         fields.extend([
             "weekly_used_usd".to_owned(),
             "weekly_start".to_owned(),
@@ -163,7 +157,7 @@ impl PgClientBudgetStore {
             .map(|charge| charge.request_id.as_str())
             .collect::<Vec<_>>();
         let row = sqlx::query(
-            "select k.enabled, k.daily_limit_usd::text, k.weekly_limit_usd::text,
+            "select k.enabled, k.starts_at, k.expires_at, k.daily_limit_usd::text, k.weekly_limit_usd::text,
                 w.daily_start, w.daily_end, w.weekly_start, w.weekly_end,
                 coalesce(w.daily_explicit,false) as daily_explicit,
                 coalesce(w.weekly_explicit,false) as weekly_explicit,
@@ -182,6 +176,16 @@ impl PgClientBudgetStore {
             return Err(GatewayError::new(
                 GatewayErrorKind::PolicyDenied,
                 "Client API key is disabled.",
+            ));
+        }
+        let validity = gateway_core::policy::ClientKeyValidity {
+            starts_at: row.get("starts_at"),
+            expires_at: row.get("expires_at"),
+        };
+        if !validity.is_active() {
+            return Err(GatewayError::new(
+                GatewayErrorKind::PolicyDenied,
+                "Client API key is outside its validity period.",
             ));
         }
         let parse = |field: &str| -> Result<Decimal, GatewayError> {

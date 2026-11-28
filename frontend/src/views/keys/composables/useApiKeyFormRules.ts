@@ -48,6 +48,15 @@ export function useApiKeyFormRules(form: () => ApiKeyFormValue) {
   const { t } = useI18n({ useScope: 'global' })
   const limitRules = useApiKeyLimitRules()
   return computed<FormRules<ApiKeyFormValue>>(() => ({
+    validity: {
+      type: 'object',
+      validator: () => {
+        const { startsAt, expiresAt } = form().validity
+        return !startsAt || !expiresAt || Date.parse(startsAt) < Date.parse(expiresAt)
+      },
+      message: t('keys.validity.invalidRange'),
+      trigger: ['change'],
+    },
     groupIds: {
       type: 'array',
       validator: (_rule, value) => !form().peerSharing.enabled || (Array.isArray(value) && value.length > 0),

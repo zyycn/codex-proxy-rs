@@ -150,6 +150,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                     )
                     .with_name_snapshot(key.name_snapshot)
                     .with_request_profiles(key.request_profiles)
+                    .with_validity(key.validity)
                     .with_peer_sharing(key.peer_sharing)
                 })
                 .collect();
@@ -331,12 +332,14 @@ async fn load_client_keys(
             sqlx::types::Json<BTreeMap<String, serde_json::Map<String, serde_json::Value>>>,
             String,
             sqlx::types::Json<gateway_core::policy::ClientPeerSharing>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<chrono::DateTime<chrono::Utc>>,
         ),
     >(
         "select k.id, k.key,
                 coalesce(array_agg(kg.account_group_id order by kg.account_group_id)
                   filter (where kg.account_group_id is not null), '{}') as group_ids,
-                k.max_concurrency, k.requests_per_minute, k.provider_request_profiles_json, k.name, k.peer_sharing_json
+                k.max_concurrency, k.requests_per_minute, k.provider_request_profiles_json, k.name, k.peer_sharing_json, k.starts_at, k.expires_at
          from client_api_keys k
          left join client_api_key_groups kg on kg.client_api_key_id = k.id
          where k.enabled
@@ -352,6 +355,10 @@ async fn load_client_keys(
             key.request_profiles = decode_request_profiles(row.5.0)?;
             key.name_snapshot = Some(row.6);
             key.peer_sharing = row.7.0;
+            key.validity = gateway_core::policy::ClientKeyValidity {
+                starts_at: row.8,
+                expires_at: row.9,
+            };
             Ok(key)
         })
         .collect()

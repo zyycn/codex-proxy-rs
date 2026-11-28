@@ -49,7 +49,7 @@ function update(field: typeof fields.value[number], value: string) {
 </script>
 
 <template>
-  <div class="grid gap-6 sm:grid-cols-2">
+  <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
     <ZFormItem v-for="field in fields" :key="field.key" :prop="field.key" :label="field.label">
       <template v-if="mixed?.includes(field.key)" #label-extra>
         <span class="text-z-xs text-z-text-secondary">{{ t('keys.batch.mixed') }}</span>

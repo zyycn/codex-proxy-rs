@@ -104,7 +104,7 @@ impl PeerLinkService for DefaultPeerLinkService {
             .get_client_key(client.policy().key_id())
             .await
             .map_err(|error| map_store_error(error, "client API key"))?
-            .filter(|key| key.enabled)
+            .filter(|key| key.is_active())
             .ok_or(PeerLinkError::Unauthorized)?;
         let budget_observed_at = Utc::now();
         let sharing = intersect_sharing(frozen_sharing, key.peer_sharing);
