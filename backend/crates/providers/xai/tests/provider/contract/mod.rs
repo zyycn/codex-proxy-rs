@@ -2864,7 +2864,14 @@ async fn configured_request_profile_reaches_inference_headers() {
             ModelRequestId::new("req_profile").unwrap(),
             ClientApiKeyId::new("key_profile").unwrap(),
         )
-        .with_request_profile(Some(resolved)),
+        .with_request_profile(Some(resolved))
+        .with_prompt_rewrite_rules(
+            gateway_core::settings::prompt_rewrite::CompiledPromptRewrite::new(
+                serde_json::from_value(json!([{"pattern":"Old", "replacement":"Updated"}]))
+                    .unwrap(),
+            )
+            .for_provider(&ProviderKind::new("xai").unwrap()),
+        ),
         NonZeroU32::new(1).unwrap(),
         SystemTime::now() + Duration::from_secs(30),
         selection_policy(),
@@ -2872,14 +2879,24 @@ async fn configured_request_profile_reaches_inference_headers() {
         None,
         CancellationToken::new(),
     );
+    let payload = ProtocolPayload::from_json_bytes(
+        "openai",
+        bytes::Bytes::from_static(
+            br#"{"model":"client-model","instructions":"Old rule","input":"hello"}"#,
+        ),
+    )
+    .unwrap();
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(payload));
     let events = provider
-        .execute(provider_request("xai"), context)
+        .execute(provider_request_with_operation("xai", operation), context)
         .await
         .unwrap()
         .collect::<Vec<_>>()
         .await;
     assert!(events.iter().all(Result::is_ok));
     let requests = transport.requests.lock().unwrap();
+    let sent: Value = serde_json::from_slice(requests[0].body()).unwrap();
+    assert_eq!(sent["instructions"], "Updated rule");
     let headers = requests[0].headers();
     let header = |name| {
         std::str::from_utf8(

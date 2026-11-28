@@ -57,6 +57,14 @@ pub enum AccountErrorOperator {
     Equals,
     Contains,
 }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PromptRewriteRule {
+    #[serde(default)]
+    pub providers: BTreeSet<String>,
+    pub pattern: String,
+    pub replacement: String,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpenAiWebSocketPoolSettings {
@@ -188,6 +196,7 @@ pub struct RuntimeSettings {
     pub usage_retention_days: u32,
     pub ops_event_retention_days: u32,
     pub audit_retention_days: u32,
+    pub prompt_rewrite_rules: Vec<PromptRewriteRule>,
     pub account_error_protection: AccountErrorProtection,
     pub account_warmup_enabled: bool,
     pub account_warmup_cron: String,
@@ -230,6 +239,7 @@ pub struct ReplaceRuntimeSettings {
     pub usage_retention_days: u32,
     pub ops_event_retention_days: u32,
     pub audit_retention_days: u32,
+    pub prompt_rewrite_rules: Vec<PromptRewriteRule>,
     pub account_error_protection: AccountErrorProtection,
     pub account_warmup_enabled: bool,
     pub account_warmup_cron: String,
@@ -444,6 +454,7 @@ impl From<RuntimeSettings> for ReplaceRuntimeSettings {
             usage_retention_days: settings.usage_retention_days,
             ops_event_retention_days: settings.ops_event_retention_days,
             audit_retention_days: settings.audit_retention_days,
+            prompt_rewrite_rules: settings.prompt_rewrite_rules,
             account_error_protection: settings.account_error_protection,
             account_warmup_enabled: settings.account_warmup_enabled,
             account_warmup_cron: settings.account_warmup_cron,

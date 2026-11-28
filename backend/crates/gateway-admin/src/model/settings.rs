@@ -71,6 +71,7 @@ pub struct RuntimeSettingsValues {
     pub usage_retention_days: u32,
     pub ops_event_retention_days: u32,
     pub audit_retention_days: u32,
+    pub prompt_rewrite_rules: Vec<gateway_core::settings::prompt_rewrite::PromptRewriteRule>,
     pub account_error_protection: gateway_core::account::AccountErrorProtection,
     pub account_warmup_enabled: bool,
     pub account_warmup_cron: String,

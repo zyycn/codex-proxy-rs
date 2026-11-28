@@ -9,6 +9,8 @@ use crate::identity::ProviderKind;
 #[serde(deny_unknown_fields)]
 pub struct SettingsValues {
     #[serde(default)]
+    pub(crate) prompt_rewrite_rules: Arc<[super::prompt_rewrite::PromptRewriteRule]>,
+    #[serde(default)]
     pub(crate) account_error_protection: crate::account::AccountErrorProtection,
     #[serde(skip, default = "initial_protection_revision")]
     pub(crate) account_error_protection_revision: u64,
@@ -45,6 +47,15 @@ fn initial_protection_revision() -> u64 {
 }
 
 impl SettingsValues {
+    #[must_use]
+    pub fn with_prompt_rewrite_rules(
+        mut self,
+        rules: Vec<super::prompt_rewrite::PromptRewriteRule>,
+    ) -> Self {
+        self.prompt_rewrite_rules = rules.into();
+        self
+    }
+
     #[must_use]
     pub const fn with_account_error_protection_revision(mut self, revision: u64) -> Self {
         self.account_error_protection_revision = revision;
@@ -222,6 +233,7 @@ impl SettingsValues {
         min_codex_cli_version: Option<String>,
     ) -> Self {
         Self {
+            prompt_rewrite_rules: Default::default(),
             account_error_protection: Default::default(),
             account_error_protection_revision: 1,
             request_profiles: Arc::default(),

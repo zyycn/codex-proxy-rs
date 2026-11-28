@@ -11,16 +11,19 @@ use gateway_core::error::{ProviderError, ProviderErrorKind};
 
 pub(super) fn request_body(
     body: &[u8],
-    instruction: &RawValue,
+    instruction: Option<&RawValue>,
     count: bool,
 ) -> Result<Box<RawValue>, ProviderError> {
     let rewrite = || {
         let raw: &RawValue = serde_json::from_slice(body)?;
-        let instruction = prepend_system_prompt(raw, instruction)?;
+        let instruction = instruction
+            .map(|prompt| prepend_system_prompt(raw, prompt))
+            .transpose()?;
         edit_object(
             raw,
             |name, value| {
-                if matches!(name, "systemInstruction" | "system_instruction")
+                if (instruction.is_some()
+                    && matches!(name, "systemInstruction" | "system_instruction"))
                     || (count
                         && matches!(
                             name,
@@ -60,7 +63,9 @@ pub(super) fn request_body(
                 }
                 Ok(Edit::Keep)
             },
-            Some(("systemInstruction", &instruction)),
+            instruction
+                .as_deref()
+                .map(|value| ("systemInstruction", value)),
         )
     };
     rewrite().map_err(|error| unsent(ProviderErrorKind::InvalidRequest).with_source(error))

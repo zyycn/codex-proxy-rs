@@ -52,6 +52,12 @@ export interface OpenAiWebSocketPoolSettings {
   streamIdleTimeoutMs: number
 }
 
+export interface PromptRewriteRule {
+  providers: string[]
+  pattern: string
+  replacement: string
+}
+
 export interface RuntimeSettings {
   openaiWebsocketPool: OpenAiWebSocketPoolSettings
   configRevision: number
@@ -91,6 +97,7 @@ export interface RuntimeSettings {
   usageRetentionDays: number
   opsEventRetentionDays: number
   auditRetentionDays: number
+  promptRewriteRules: PromptRewriteRule[]
   accountErrorProtection: AccountErrorProtection
   accountWarmupEnabled: boolean
   accountWarmupCron: string

@@ -156,7 +156,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     rotation_strategy, smart_scheduling_json, quota_reset_window_weights_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
                     min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_request_settings_json, openai_websocket_pool_json, account_affinity, max_account_rotations, session_affinity_ttl_hours,
-                    account_error_protection_json, account_error_protection_revision,
+                    prompt_rewrite_rules_json, account_error_protection_json, account_error_protection_revision,
                     account_warmup_enabled, account_warmup_cron, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent, reset_credit_on_low_weekly_quota
              from runtime_settings where id = 1",
         )
@@ -359,7 +359,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 rotation_strategy, smart_scheduling_json, quota_reset_window_weights_json, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
                 min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, key_queue_timeout_seconds, account_queue_timeout_seconds, switch_account_on_queue_failure, max_retry_after_seconds, openai_guardian_reserved_concurrency, openai_request_settings_json, openai_websocket_pool_json, account_affinity, max_account_rotations, session_affinity_ttl_hours,
-                account_error_protection_json, account_error_protection_revision,
+                prompt_rewrite_rules_json, account_error_protection_json, account_error_protection_revision,
                 account_warmup_enabled, account_warmup_cron, account_warmup_model, reset_credit_lead_minutes, reset_credit_max_weekly_remaining_percent, reset_credit_on_low_weekly_quota
          from runtime_settings where id = 1",
     )
@@ -446,6 +446,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      quota_reset_window_weights_json = $35,
                      openai_request_settings_json = $36,
                      openai_websocket_pool_json = $37,
+                     prompt_rewrite_rules_json = $38,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -495,6 +496,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(sqlx::types::Json(update.values.quota_reset_window_weights))
     .bind(sqlx::types::Json(&update.values.openai_request_settings))
     .bind(sqlx::types::Json(&update.values.openai_websocket_pool))
+    .bind(sqlx::types::Json(&update.values.prompt_rewrite_rules))
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|source| postgres_unavailable("update runtime settings in transaction", source))?
@@ -596,6 +598,8 @@ struct RuntimeSettingsRow {
     session_affinity_ttl_hours: i64,
     responses_max_decompressed_body_bytes: i64,
     account_error_protection_revision: i64,
+    prompt_rewrite_rules_json:
+        sqlx::types::Json<Vec<gateway_core::settings::prompt_rewrite::PromptRewriteRule>>,
     account_error_protection_json: sqlx::types::Json<gateway_core::account::AccountErrorProtection>,
     account_warmup_enabled: bool,
     account_warmup_cron: String,
@@ -667,6 +671,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
             responses_max_decompressed_body_bytes: to_u64(
                 row.responses_max_decompressed_body_bytes,
             )?,
+            prompt_rewrite_rules: row.prompt_rewrite_rules_json.0,
             account_error_protection: row.account_error_protection_json.0,
             account_warmup_enabled: row.account_warmup_enabled,
             account_warmup_cron: row.account_warmup_cron,

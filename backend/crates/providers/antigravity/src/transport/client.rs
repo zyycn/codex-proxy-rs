@@ -100,6 +100,7 @@ pub(crate) enum GenerateMode {
     Json,
     Stream,
     WebSearch,
+    Chat { stream: bool },
 }
 
 impl From<bool> for GenerateMode {
@@ -229,13 +230,16 @@ impl CloudCodeClient {
             enabled_credit_types: Option<[&'static str; 1]>,
             request: &'a RawValue,
         }
-        let instruction = if mode == GenerateMode::WebSearch {
-            *SEARCH_INSTRUCTION
-        } else {
-            &self.system_instruction
+        let instruction = match mode {
+            GenerateMode::WebSearch => Some(*SEARCH_INSTRUCTION),
+            GenerateMode::Chat { .. } => None,
+            GenerateMode::Json | GenerateMode::Stream => Some(self.system_instruction.as_ref()),
         };
         let request = super::request::request_body(body, instruction, false)?;
-        let (send, media) = if mode == GenerateMode::Stream {
+        let (send, media) = if matches!(
+            mode,
+            GenerateMode::Stream | GenerateMode::Chat { stream: true }
+        ) {
             (
                 self.post("streamGenerateContent", token)
                     .query(&[("alt", "sse")]),
@@ -277,7 +281,7 @@ impl CloudCodeClient {
         headers: &[MiddlewareHeader],
     ) -> Result<Response, ProviderError> {
         // Desktop 的计数封套只接受 Vertex CountTokensRequest，没有项目和生成控制字段
-        let request = super::request::request_body(body, &self.system_instruction, true)?;
+        let request = super::request::request_body(body, Some(&self.system_instruction), true)?;
         #[derive(Serialize)]
         struct Envelope<'a> {
             request: &'a RawValue,

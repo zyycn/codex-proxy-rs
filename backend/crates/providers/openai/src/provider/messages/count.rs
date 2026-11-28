@@ -56,6 +56,7 @@ impl CodexProvider {
                         let mut body: Map<String, Value> =
                             serde_json::from_slice(count.payload().body())
                                 .map_err(|_| invalid_request())?;
+                        terminal_context.rewrite_count_prompt(ANTHROPIC_PROTOCOL, &mut body);
                         // 通用 Provider 计数入口的模型来自路径，正文仍使用 Messages 输入合同
                         body.insert("model".to_owned(), Value::String(model.as_str().to_owned()));
                         gateway_protocol::anthropic::validate_count_request(&body)

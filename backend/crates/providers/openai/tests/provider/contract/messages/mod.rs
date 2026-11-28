@@ -391,21 +391,38 @@ async fn chat_service_tiers_follow_the_selected_responses_upstream() {
 
 #[tokio::test]
 async fn custom_messages_count_locally_without_billable_usage() {
-    for (target, source) in [
-        (ApiKeyProtocol::Messages, "anthropic"),
-        (ApiKeyProtocol::Messages, "token-count"),
+    let rules = gateway_core::settings::prompt_rewrite::CompiledPromptRewrite::new(
+        serde_json::from_value(json!([{"pattern":"repeated prefix", "replacement":""}])).unwrap(),
+    )
+    .for_provider(&ProviderKind::new("openai").unwrap());
+    let mut baseline = None;
+    for (source, configured, system) in [
+        ("anthropic", None, "rule"),
+        ("anthropic", rules.clone(), "repeated prefixrule"),
+        ("token-count", rules, "repeated prefixrule"),
     ] {
         let server = MockServer::start().await;
         let store = Arc::new(MemoryAccountStore::default());
-        seed(&store, &server, target).await;
-        let body = Bytes::from_static(br#"{"messages":[{"role":"user","content":"hello world"}]}"#);
+        seed(&store, &server, ApiKeyProtocol::Messages).await;
+        let body = serde_json::to_vec(
+            &json!({"system":system,"messages":[{"role":"user","content":"hello world"}]}),
+        )
+        .unwrap()
+        .into();
         let operation = Operation::CountTokens(TokenCountRequest::from_raw_json(
             RawJsonPayload::new(source, body).unwrap(),
         ));
         let mut stream = provider(&store)
             .execute(
                 planned_request("openai", operation),
-                context("req_messages_count", CancellationToken::new()),
+                context_for_request(
+                    RequestAttemptContext::new(
+                        ModelRequestId::new("req_messages_count").unwrap(),
+                        ClientApiKeyId::new("key_openai_contract").unwrap(),
+                    )
+                    .with_prompt_rewrite_rules(configured),
+                    CancellationToken::new(),
+                ),
             )
             .await
             .unwrap();
@@ -422,7 +439,9 @@ async fn custom_messages_count_locally_without_billable_usage() {
                 count = body.get("input_tokens").and_then(Value::as_u64);
             }
         }
-        assert!(count.is_some_and(|count| count > 0));
+        let count = count.unwrap();
+        assert!(count > 0);
+        assert_eq!(count, *baseline.get_or_insert(count));
         assert!(server.received_requests().await.unwrap().is_empty());
     }
 }

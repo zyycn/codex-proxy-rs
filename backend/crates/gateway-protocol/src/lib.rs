@@ -24,3 +24,6 @@ pub mod peer;
 
 /// Chat Completions 直接转换
 pub mod chat_completions;
+
+/// 原生协议与 Chat 的系统指令定位及局部替换
+pub mod prompt_rewrite;

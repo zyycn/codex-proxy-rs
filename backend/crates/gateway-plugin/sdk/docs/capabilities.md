@@ -349,7 +349,7 @@ HTTP 总入口统一包裹原生路由，`dispatch_http` 复用同一路由与�
 
 `Load` 返回完整运行设置与 `config_revision`。`ReplaceRuntimeSettings::from(settings)` 保留该版本并构造更新命令；
 `Replace` 接收 `(MutationContext, ReplaceRuntimeSettings)`，通过已有校验、事务、审计和快照发布保存设置。
-每次写入都必须提供 `openai_request_settings`、`openai_websocket_pool` 和 `reset_credit_on_low_weekly_quota`。
+每次写入都必须提供 `openai_request_settings`、`openai_websocket_pool`、`reset_credit_on_low_weekly_quota` 和 `prompt_rewrite_rules`。清空提示词改写规则时提交空数组，范围与顺序见[提示词改写](../../../../../docs/api.md#提示词改写)。
 版本过期返回 `ServiceError { kind: "conflict", message }`。读取结果的普通改写不会持久化，也不会回滚已经提交的事务
 
 `accounts::GetResetCreditAutomation` 接收账号 ID，返回 `ResetCreditAutomationStatus`：开关、全局提前分钟数、

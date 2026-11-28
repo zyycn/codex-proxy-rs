@@ -2,16 +2,17 @@
 
 use crate::transport::{sent, unsent};
 use gateway_core::{
-    engine::provider::NativeResponseTranslator,
+    engine::{AttemptContext, provider::NativeResponseTranslator},
     error::{ProviderError, ProviderErrorKind},
     event::ProtocolWireEvent,
     operation::Operation,
 };
-use gateway_protocol::genai::{GENAI_PROTOCOL, count_tokens_request};
+use gateway_protocol::genai::{GENAI_PROTOCOL, into_count_tokens_request};
 use serde_json::{Map, Value};
 
 pub(super) fn prepare(
     operation: Operation,
+    context: &AttemptContext,
 ) -> Result<(Operation, Option<Translator>), ProviderError> {
     let Operation::CountTokens(request) = &operation else {
         return Err(unsent(ProviderErrorKind::Unsupported));
@@ -22,9 +23,10 @@ pub(super) fn prepare(
     }
     let body: Map<String, Value> = serde_json::from_slice(request.payload().body())
         .map_err(|error| unsent(ProviderErrorKind::InvalidRequest).with_source(error))?;
-    let body = count_tokens_request(&body)
+    let mut body = into_count_tokens_request(body)
         .map_err(|error| unsent(ProviderErrorKind::InvalidRequest).with_source(error))?;
-    let bytes = serde_json::to_vec(body).map_err(|_| unsent(ProviderErrorKind::InvalidRequest))?;
+    context.rewrite_count_prompt(GENAI_PROTOCOL, &mut body);
+    let bytes = serde_json::to_vec(&body).map_err(|_| unsent(ProviderErrorKind::InvalidRequest))?;
     let translated = source == "token-count";
     let operation = if translated {
         operation.translate_protocol_wire(GENAI_PROTOCOL, bytes.into())

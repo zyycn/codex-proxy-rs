@@ -94,7 +94,7 @@ impl AntigravityProvider {
                     return Err(ProviderError::invalid_request("Middleware changed the required web search after model selection."));
                 }
                 let (operation, translator, count_translator) = if matches!(operation, Operation::CountTokens(_)) {
-                    let (operation, translator) = super::count::prepare(operation)?;
+                    let (operation, translator) = super::count::prepare(operation, &terminal_context)?;
                     (operation, None, translator)
                 } else {
                     let (operation, translator) = super::chat::prepare(operation, &terminal_context, affinity.as_ref())?;
@@ -114,6 +114,7 @@ impl AntigravityProvider {
                     _ => return Err(unsent(Kind::Unsupported)),
                 };
                 let body = operation.middleware_body().map_err(|_| unsent(Kind::InvalidRequest))?;
+                let translated_chat = translator.is_some();
                 let events = async_stream::try_stream! {
                     if cancellation.is_cancelled() {
                         Err(unsent(Kind::Cancelled))?;
@@ -138,7 +139,13 @@ impl AntigravityProvider {
                                 // 固定探测使用该账号实际授权的项目，包括尚无公开目录的停用账号
                                 Project::Discover => resource.account_info(token).await?.project,
                             };
-                            let mode = if search { crate::transport::GenerateMode::WebSearch } else { crate::transport::GenerateMode::from(stream) };
+                            let mode = if search {
+                                crate::transport::GenerateMode::WebSearch
+                            } else if translated_chat {
+                                crate::transport::GenerateMode::Chat { stream }
+                            } else {
+                                crate::transport::GenerateMode::from(stream)
+                            };
                             resource.generate(&project, model.as_str(), token, &body, mode, &headers).await
                         } => response,
                     };

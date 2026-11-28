@@ -1201,6 +1201,7 @@ where
                 .with_response_control(self.response_control.clone())
                 .with_request_profile(self.request_profiles.get(candidate.provider()).cloned())
                 .with_fast_mode(self.plan.fast_mode())
+                .with_prompt_rewrite_rules(self.plan.prompt_rewrite_rules(candidate.provider()))
                 .with_pricing(self.plan.pricing())
                 .with_request_location(self.plan.request_location().cloned())
                 .with_openai_websocket_pool(*self.plan.openai_websocket_pool())

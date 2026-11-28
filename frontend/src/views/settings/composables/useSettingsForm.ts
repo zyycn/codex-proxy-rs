@@ -1,6 +1,6 @@
 import type { ProtectionDraft } from '../components/error-protection/policy'
 import type { rotationOptions } from '../constants'
-import type { AccountAffinity, CodexPrivacyPolicy, OpenAiRequestCountry, ProviderRequestProfiles, ResetWindowWeights, SmartSchedulingConfig } from '@/api'
+import type { AccountAffinity, CodexPrivacyPolicy, OpenAiRequestCountry, PromptRewriteRule, ProviderRequestProfiles, ResetWindowWeights, SmartSchedulingConfig } from '@/api'
 import { cloneDeep, isEqual } from 'es-toolkit'
 import { computed, reactive, ref, shallowRef } from 'vue'
 import { detectRequestLocation, getSettings, updateSettings } from '@/api'
@@ -76,6 +76,7 @@ export function useSettingsForm() {
     opsEventRetentionDays: 30,
     auditRetentionDays: 90,
 
+    promptRewriteRules: [] as PromptRewriteRule[],
     accountErrorProtection: {
       enabled: false,
       rules: [],
@@ -180,6 +181,7 @@ export function useSettingsForm() {
     form.usageRetentionDays = data.usageRetentionDays
     form.opsEventRetentionDays = data.opsEventRetentionDays
     form.auditRetentionDays = data.auditRetentionDays
+    form.promptRewriteRules = cloneDeep(data.promptRewriteRules ?? [])
     form.accountErrorProtection = {
       ...cloneDeep(data.accountErrorProtection),
       probeModel: data.accountErrorProtection.probeModel ?? '',
@@ -332,6 +334,7 @@ export function useSettingsForm() {
         usageRetentionDays: usageRetentionDays!,
         opsEventRetentionDays: form.opsEventRetentionDays,
         auditRetentionDays: form.auditRetentionDays,
+        promptRewriteRules: form.promptRewriteRules,
         accountErrorProtection: {
           ...cloneDeep(form.accountErrorProtection),
           threshold: form.accountErrorProtection.threshold!,

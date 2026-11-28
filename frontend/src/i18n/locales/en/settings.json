@@ -1,9 +1,15 @@
 {
   "settings": {
+    "promptRewrite": {
+      "title": "Prompt rewriting",
+      "description": "Replace the first matching system instruction prefix in rule order. Leave the replacement empty to remove the prefix.",
+      "empty": "No rewrite rules",
+      "providers": "Upstream platforms",
+      "matchPrefix": "Match prefix",
+      "replacement": "Replacement text",
+      "required": "Enter a prefix to match"
+    },
     "clientProfile": {
-      "systemPrompt": "System prompt",
-      "systemPromptHint": "Prepended to client system instructions · Default from {source}",
-      "restoreSystemPrompt": "Restore default",
       "userAgent": "User agent",
       "clientIdentitySource": "Client identity source",
       "globalConfiguration": "Global configuration",

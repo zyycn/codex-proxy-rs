@@ -2016,6 +2016,7 @@ fn test_runtime_settings() -> RuntimeSettings {
             usage_retention_days: 31,
             ops_event_retention_days: 30,
             audit_retention_days: 90,
+            prompt_rewrite_rules: Vec::new(),
             account_error_protection: Default::default(),
             account_warmup_enabled: false,
             account_warmup_cron: "0 8 * * *".to_owned(),

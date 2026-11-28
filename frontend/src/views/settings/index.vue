@@ -22,6 +22,7 @@ import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import OpenAiRequestCard from './components/OpenAiRequestCard.vue'
 import PricingSection from './components/pricing/index.vue'
 import PrivacyPolicyCard from './components/privacy/index.vue'
+import PromptRewriteRulesCard from './components/PromptRewriteRulesCard.vue'
 import RequestHistoryCard from './components/RequestHistoryCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
 import RequestProfileCard from './components/RequestProfileCard.vue'
@@ -252,6 +253,7 @@ watch(() => !loading.value && route.hash === '#reset-credits', async (ready) => 
             />
             <TokenRefreshCard v-model:refresh-margin-seconds="refreshMarginSecondsValue" v-model:refresh-concurrency="refreshConcurrencyValue" />
             <AccountErrorProtectionCard v-model="form.accountErrorProtection" class="col-span-full" :disabled="disabled" />
+            <PromptRewriteRulesCard v-model="form.promptRewriteRules" :ready="!loading && !error" :disabled="disabled" class="col-span-full" />
             <ModelAliasesCard
               :mappings="mappings"
               :loading="loading"

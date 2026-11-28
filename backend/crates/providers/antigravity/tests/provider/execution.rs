@@ -717,13 +717,28 @@ async fn chat_direct_genai_keeps_json_sse_usage_and_releases_the_native_lease() 
             ProtocolPayload::json_object("chat_completions", body.as_object().unwrap().clone())
                 .unwrap(),
         ));
-        let mut profile = crate::profile::ClientProfile::from_frozen(&frozen_profile()).unwrap();
-        profile.system_prompt = "Frozen AGY prompt".into();
+        let selection = Selection {
+            system_prompt: Some("Frozen AGY prompt".into()),
+            ..Default::default()
+        };
+        let profile = fixture
+            .provider
+            .resolve_request_profile(&selection.configuration())
+            .unwrap();
         let request_context = RequestAttemptContext::new(
             ModelRequestId::new("req_chat").unwrap(),
             ClientApiKeyId::new("key_fixture").unwrap(),
         )
-        .with_request_profile(Some(profile.frozen()))
+        .with_request_profile(Some(profile))
+        .with_prompt_rewrite_rules(if streaming {
+            gateway_core::settings::prompt_rewrite::CompiledPromptRewrite::new(
+                serde_json::from_value(json!([{"pattern":"Preserve","replacement":"Apply"}]))
+                    .unwrap(),
+            )
+            .for_provider(&ProviderKind::new("antigravity").unwrap())
+        } else {
+            None
+        })
         .with_middleware(
             None,
             Default::default(),
@@ -786,12 +801,8 @@ async fn chat_direct_genai_keeps_json_sse_usage_and_releases_the_native_lease() 
         let body: serde_json::Value = serde_json::from_slice(&sent.last().unwrap().body).unwrap();
         assert!(body["request"].get("input").is_none());
         assert_eq!(
-            body["request"]["systemInstruction"]["parts"][0]["text"],
-            "Frozen AGY prompt"
-        );
-        assert_eq!(
-            body["request"]["systemInstruction"]["parts"][1]["text"],
-            "Preserve the caller's project rules."
+            body["request"]["systemInstruction"]["parts"],
+            json!([{"text": if streaming { "Apply the caller's project rules." } else { "Preserve the caller's project rules." }}])
         );
         assert_eq!(body["request"]["generationConfig"]["maxOutputTokens"], 100);
         assert_eq!(

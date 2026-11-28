@@ -1,9 +1,15 @@
 {
   "settings": {
+    "promptRewrite": {
+      "title": "提示词改写",
+      "description": "按顺序匹配系统指令的前缀，首条命中后替换。替换文本留空可删除前缀",
+      "empty": "暂无改写规则",
+      "providers": "适用上游",
+      "matchPrefix": "匹配前缀",
+      "replacement": "替换文本",
+      "required": "请输入匹配前缀"
+    },
     "clientProfile": {
-      "systemPrompt": "系统提示词",
-      "systemPromptHint": "前置系统提示，保留客户端指令，默认来自 {source}",
-      "restoreSystemPrompt": "恢复默认",
       "userAgent": "用户代理",
       "clientIdentitySource": "客户端身份来源",
       "globalConfiguration": "全局配置",

@@ -3,6 +3,7 @@
 pub(crate) mod compiled;
 mod openai;
 pub mod privacy;
+pub mod prompt_rewrite;
 pub mod request_profiles;
 mod values;
 mod websocket;

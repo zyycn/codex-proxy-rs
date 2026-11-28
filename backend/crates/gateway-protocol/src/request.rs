@@ -32,9 +32,7 @@ pub fn token_count_observation(
     context: &Map<String, Value>,
 ) -> RequestObservation {
     let body = if protocol == GENAI_PROTOCOL {
-        body.get("generateContentRequest")
-            .and_then(Value::as_object)
-            .unwrap_or(body)
+        genai::count_tokens_request(body).unwrap_or(body)
     } else {
         body
     };

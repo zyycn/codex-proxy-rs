@@ -14,4 +14,4 @@ pub use response::{
 pub const GENAI_PROTOCOL: &str = "genai";
 
 mod tokens;
-pub use tokens::{CountTokensError, count_tokens_request};
+pub use tokens::{CountTokensError, count_tokens_request, into_count_tokens_request};

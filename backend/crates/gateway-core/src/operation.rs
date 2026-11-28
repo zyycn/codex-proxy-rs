@@ -462,6 +462,23 @@ impl ClientTurn {
 }
 
 impl GenerateRequest {
+    /// 只在命中后对共享请求执行写时复制，重试持有的原请求仍可独立使用
+    pub(crate) fn apply_prompt_edit(&mut self, edit: gateway_protocol::prompt_rewrite::PromptEdit) {
+        let wire = match self.protocol_payload().raw_json_body() {
+            Some(body) => {
+                let Some(updated) = edit.wire(body) else {
+                    return;
+                };
+                Some(Bytes::from(updated))
+            }
+            None => None,
+        };
+        let payload = Arc::make_mut(&mut self.payload);
+        edit.apply(&mut payload.protocol_payload.body);
+        payload.protocol_payload.raw_json_body = wire;
+        // 只编辑字符串内容，能力、角色与工具结构仍使用已有的 wire_facts
+    }
+
     /// 返回可信入口协议，直接转换只能更新当前 wire，不能改写请求来源
     #[must_use]
     pub fn source_protocol(&self) -> &str {

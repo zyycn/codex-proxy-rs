@@ -62,6 +62,7 @@ fn runtime_settings(enabled: bool, probe_enabled: bool) -> RuntimeSettings {
             usage_retention_days: 31,
             ops_event_retention_days: 30,
             audit_retention_days: 90,
+            prompt_rewrite_rules: Vec::new(),
             account_error_protection: gateway_core::account::AccountErrorProtection {
                 enabled,
                 probe_enabled,

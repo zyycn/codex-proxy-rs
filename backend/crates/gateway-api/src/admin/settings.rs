@@ -62,6 +62,7 @@ pub struct RuntimeSettingsFields {
     pub usage_retention_days: u64,
     pub ops_event_retention_days: u64,
     pub audit_retention_days: u64,
+    pub prompt_rewrite_rules: Vec<gateway_core::settings::prompt_rewrite::PromptRewriteRule>,
     pub account_error_protection: gateway_core::account::AccountErrorProtection,
     pub account_warmup_enabled: bool,
     pub account_warmup_cron: String,
@@ -744,6 +745,7 @@ impl RuntimeSettingsFields {
                 .map_err(|_| WireValidationError::new("settingsOpsRetentionOverflow"))?,
             audit_retention_days: u32::try_from(self.audit_retention_days)
                 .map_err(|_| WireValidationError::new("settingsAuditRetentionOverflow"))?,
+            prompt_rewrite_rules: self.prompt_rewrite_rules,
             account_error_protection: self.account_error_protection,
             account_warmup_enabled: self.account_warmup_enabled,
             account_warmup_cron: self.account_warmup_cron,
@@ -787,6 +789,7 @@ impl From<gateway_admin::model::settings::RuntimeSettingsValues> for RuntimeSett
             usage_retention_days: u64::from(settings.usage_retention_days),
             ops_event_retention_days: u64::from(settings.ops_event_retention_days),
             audit_retention_days: u64::from(settings.audit_retention_days),
+            prompt_rewrite_rules: settings.prompt_rewrite_rules,
             account_error_protection: settings.account_error_protection,
             account_warmup_enabled: settings.account_warmup_enabled,
             account_warmup_cron: settings.account_warmup_cron,

@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import type { ProfileOptions, ProfilePreview, ProfileSelection } from './profile'
 import type { ProfileEditorProps } from '@/components/request-profile/useProfileEditor'
-import { ZButton, ZFormItem, ZInput, ZSelect, ZTextarea } from '@codex-proxy/ui'
+import { ZFormItem, ZInput, ZSelect } from '@codex-proxy/ui'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import HelpPopover from '@/components/HelpPopover.vue'
 import ProfileEditorFrame from '@/components/request-profile/ProfileEditorFrame.vue'
 import { useProfileEditor } from '@/components/request-profile/useProfileEditor'
 
@@ -62,15 +61,6 @@ function updateVersion(value: string) {
   if (effective.value)
     model.value = { ...effective.value, clientVersion: value.trim() || null }
 }
-
-const systemPrompt = computed({
-  get: () => effective.value?.systemPrompt ?? options.value?.defaultSystemPrompt ?? '',
-  set: (value: string) => updateSystemPrompt(value),
-})
-function updateSystemPrompt(value: string | null) {
-  if (effective.value)
-    model.value = { ...effective.value, systemPrompt: value }
-}
 </script>
 
 <template>
@@ -107,25 +97,5 @@ function updateSystemPrompt(value: string | null) {
         />
       </ZFormItem>
     </div>
-    <ZFormItem :label="t('settings.clientProfile.systemPrompt')">
-      <template #label-extra>
-        <HelpPopover
-          :label="t('settings.clientProfile.systemPrompt')"
-          :content="t('settings.clientProfile.systemPromptHint', { source: options?.systemPromptSource ?? '' })"
-        />
-      </template>
-      <div class="grid gap-2">
-        <ZTextarea
-          v-model="systemPrompt"
-          :aria-label="t('settings.clientProfile.systemPrompt')"
-          :disabled="disabled || loading"
-          :rows="5"
-          resize="vertical"
-        />
-        <ZButton variant="link" size="small" class="justify-self-end" :disabled="disabled || loading || effective?.systemPrompt == null" @click="updateSystemPrompt(null)">
-          {{ t('settings.clientProfile.restoreSystemPrompt') }}
-        </ZButton>
-      </div>
-    </ZFormItem>
   </ProfileEditorFrame>
 </template>

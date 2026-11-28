@@ -106,6 +106,7 @@ fn update_body() -> Value {
         "usageRetentionDays": 31,
         "opsEventRetentionDays": 31,
         "auditRetentionDays": 91,
+        "promptRewriteRules": [],
         "accountErrorProtection": gateway_core::account::AccountErrorProtection::default(),
         "accountWarmupEnabled": false,
         "accountWarmupCron": "0 8 * * *",
@@ -287,6 +288,18 @@ async fn error_protection_rules_round_trip_and_invalid_policy_does_not_replace_t
         loaded["data"]["configRevision"],
         saved["data"]["configRevision"]
     );
+}
+
+#[test]
+fn prompt_rewrite_rejects_unknown_scope_fields_and_empty_prefixes() {
+    let mut body = update_body();
+    for rule in [
+        json!({"pattern":"prefix", "replacement":"", "unknownField":["xai"]}),
+        json!({"pattern":"", "replacement":""}),
+    ] {
+        body["promptRewriteRules"] = json!([rule]);
+        assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body.clone()).is_err());
+    }
 }
 
 #[test]

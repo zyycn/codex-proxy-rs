@@ -48,6 +48,7 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
             usage_retention_days: 31,
             ops_event_retention_days: 30,
             audit_retention_days: 90,
+            prompt_rewrite_rules: Vec::new(),
             account_error_protection: enabled_protection(),
             account_warmup_enabled: false,
             account_warmup_cron: "0 8 * * *".to_owned(),
@@ -63,6 +64,38 @@ pub(super) fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettin
 fn runtime_settings_keep_account_rotation_global() {
     let settings = settings_with_margin(3_600);
     assert!(settings.validate().is_ok());
+}
+
+#[tokio::test]
+async fn prompt_rewrite_order_and_scope_round_trip_into_the_runtime_snapshot() {
+    use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
+    let Some(database) = TestDatabase::create("prompt_rewrite").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let before = repository.load_runtime_settings().await.unwrap();
+    assert!(before.values.prompt_rewrite_rules.is_empty());
+    let expected = serde_json::json!([
+        {"providers":["antigravity","xai"],"pattern":"example","replacement":"first"},
+        {"providers":[],"pattern":"example","replacement":"second"}
+    ]);
+    let mut update = settings_with_margin(300);
+    update.values.prompt_rewrite_rules = serde_json::from_value(expected.clone()).unwrap();
+    repository.update_runtime_settings(update).await.unwrap();
+    let after = repository.load_runtime_settings().await.unwrap();
+    assert_eq!(
+        serde_json::to_value(after.values.prompt_rewrite_rules).unwrap(),
+        expected
+    );
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(snapshot.settings).unwrap()["prompt_rewrite_rules"],
+        expected
+    );
+    database.close().await;
 }
 
 #[tokio::test]

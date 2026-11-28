@@ -16,6 +16,7 @@ pub mod nested;
 pub mod observation;
 pub mod policy;
 pub mod probe;
+mod prompt_rewrite;
 pub mod provider;
 pub mod response_control;
 pub mod upstream_adapter;
@@ -324,6 +325,7 @@ pub struct RequestAttemptContext {
     request_body_limit: Option<usize>,
     lease_metadata: Option<Arc<crate::provider_ports::ProviderLeaseMetadata>>,
     response_control: Option<response_control::ResponseControl>,
+    prompt_rewrite_rules: Option<Arc<crate::settings::prompt_rewrite::ProviderPromptRules>>,
     pricing: Arc<crate::metering::PricingOverrides>,
     request_profile: Option<crate::account::OpaqueProviderData>,
     fast_mode: FastMode,
@@ -397,6 +399,15 @@ impl RequestAttemptContext {
     }
 
     #[must_use]
+    pub fn with_prompt_rewrite_rules(
+        mut self,
+        rules: Option<Arc<crate::settings::prompt_rewrite::ProviderPromptRules>>,
+    ) -> Self {
+        self.prompt_rewrite_rules = rules;
+        self
+    }
+
+    #[must_use]
     pub fn with_pricing(mut self, pricing: Arc<crate::metering::PricingOverrides>) -> Self {
         self.pricing = pricing;
         self
@@ -463,6 +474,7 @@ impl RequestAttemptContext {
             request_id,
             client_api_key_ref,
             request_profile: None,
+            prompt_rewrite_rules: None,
             pricing: Arc::default(),
             fast_mode: FastMode::Default,
             openai_websocket_pool: Default::default(),
@@ -832,6 +844,21 @@ impl AttemptContext {
         self.request.extension_scope()
     }
 
+    /// 计数由 Provider 解开入站封套后在现有正文上应用同一份规则
+    pub fn rewrite_count_prompt(
+        &self,
+        protocol: &str,
+        body: &mut serde_json::Map<String, serde_json::Value>,
+    ) {
+        if let Some(rules) = &self.request.prompt_rewrite_rules
+            && let Some(edit) = gateway_protocol::prompt_rewrite::plan(protocol, body, |text| {
+                rules.replace_prefix(text)
+            })
+        {
+            edit.apply(body);
+        }
+    }
+
     /// 在已选账号并持有其 lease 后，以 owned terminal 执行本次 retry 的中间件链
     ///
     /// terminal 返回的 stream 仍须保持 cold；中间件不能取得 credential、发送状态、
@@ -859,6 +886,12 @@ impl AttemptContext {
             })
         } else {
             terminal
+        };
+        let terminal = match (&operation, &self.request.prompt_rewrite_rules) {
+            (crate::operation::Operation::Generate(_), Some(rules)) => {
+                prompt_rewrite::wrap(terminal, rules)
+            }
+            _ => terminal,
         };
         // 保护观察真正的 Provider terminal，先于 attempt 中间件的响应改写
         let terminal: provider::ProviderMiddlewareTerminal =

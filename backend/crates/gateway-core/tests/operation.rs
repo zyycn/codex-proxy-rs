@@ -437,3 +437,29 @@ fn chat_source_survives_the_one_authorized_wire_translation() {
             .is_err()
     );
 }
+
+#[test]
+fn unmatched_prompt_prefixes_do_not_allocate_for_large_histories() {
+    use gateway_core::{identity::ProviderKind, settings::prompt_rewrite::CompiledPromptRewrite};
+    use gateway_protocol::prompt_rewrite::plan;
+    let body = serde_json::json!({"instructions": "Custom instructions", "input": "x".repeat(1024 * 1024)});
+    let body = body.as_object().unwrap();
+    let rules = CompiledPromptRewrite::new(
+        serde_json::from_value(json!([{
+            "pattern":"Unknown", "replacement":"Changed"
+        }]))
+        .unwrap(),
+    )
+    .for_provider(&ProviderKind::new("openai").unwrap())
+    .unwrap();
+    let stats = allocation_counter::measure(|| {
+        for _ in 0..1000 {
+            assert!(
+                plan("openai", std::hint::black_box(body), |text| rules
+                    .replace_prefix(text))
+                .is_none()
+            );
+        }
+    });
+    assert_eq!(stats.count_total, 0);
+}

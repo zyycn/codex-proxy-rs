@@ -21,6 +21,10 @@ fn token_count_observation_uses_the_nested_generation_request() {
             serde_json::json!({"generationConfig":{"thinkingConfig":{"thinkingLevel":"HIGH"}},"generateContentRequest":{"contents":[]}}),
             None,
         ),
+        (
+            serde_json::json!({"generate_content_request":{"generation_config":{"thinking_config":{"thinking_level":"HIGH"}}}}),
+            Some("high"),
+        ),
     ] {
         let observation = gateway_protocol::request::token_count_observation(
             "genai",

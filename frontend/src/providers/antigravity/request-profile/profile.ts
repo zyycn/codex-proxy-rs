@@ -10,8 +10,6 @@ export interface ProfileSelection {
 }
 
 export interface ProfileOptions {
-  defaultSystemPrompt: string
-  systemPromptSource: string
   defaults: ProfileSelection
   presets: {
     configuration: ProfileSelection

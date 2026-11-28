@@ -1818,6 +1818,63 @@ fn withdrawn_provider_keeps_accounts_without_becoming_a_route_or_expanding_group
 }
 
 #[test]
+fn prompt_rules_are_selected_once_by_upstream_and_keep_global_order() {
+    let snapshot = super::snapshot();
+    let plan_for = |rules| {
+        let configured = snapshot
+            .with_settings(&snapshot.settings().clone().with_prompt_rewrite_rules(rules))
+            .unwrap();
+        configured
+            .plan(
+                &PublicModelId::new("gpt-5.4").unwrap(),
+                &super::operation(),
+                configured.all_account_scope(),
+                &Default::default(),
+            )
+            .unwrap()
+    };
+    let openai = ProviderKind::new("openai").unwrap();
+    let agy = ProviderKind::new("antigravity").unwrap();
+    let xai = ProviderKind::new("xai").unwrap();
+    let scoped = |targets, prefix| {
+        serde_json::from_value(
+            serde_json::json!({"providers": targets, "pattern": prefix, "replacement": ""}),
+        )
+        .unwrap()
+    };
+    let only_agy = plan_for(vec![scoped(vec!["antigravity"], "example"); 20]);
+    assert!(only_agy.prompt_rewrite_rules(&openai).is_none());
+    let selected = only_agy.prompt_rewrite_rules(&agy).unwrap();
+    assert_eq!(
+        selected.replace_prefix("example suffix").as_deref(),
+        Some(" suffix")
+    );
+    assert!(Arc::ptr_eq(
+        &selected,
+        &only_agy.prompt_rewrite_rules(&agy).unwrap()
+    ));
+
+    let mixed = plan_for(vec![
+        scoped(vec![], "shared first"),
+        scoped(vec!["xai", "antigravity"], "shared"),
+        scoped(vec![], "sh"),
+    ]);
+    for provider in [&agy, &xai] {
+        let rules = mixed.prompt_rewrite_rules(provider).unwrap();
+        assert_eq!(rules.replace_prefix("shared first!").as_deref(), Some("!"));
+        assert_eq!(
+            rules.replace_prefix("shared second").as_deref(),
+            Some(" second")
+        );
+    }
+    let global = mixed.prompt_rewrite_rules(&openai).unwrap();
+    assert_eq!(
+        global.replace_prefix("shared second").as_deref(),
+        Some("ared second")
+    );
+}
+
+#[test]
 fn routing_plans_share_frozen_pricing_after_a_new_snapshot_is_published() {
     use gateway_core::{metering::PricingOverrides, runtime::RuntimeSnapshotHandle};
     let prices = |bps| -> Arc<PricingOverrides> {

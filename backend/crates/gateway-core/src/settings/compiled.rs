@@ -13,6 +13,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub(crate) struct CompiledSettings {
     pub(crate) values: SettingsValues,
+    pub(crate) prompt_rewrite: std::sync::Arc<super::prompt_rewrite::CompiledPromptRewrite>,
     pub(crate) account_error_protection:
         std::sync::Arc<crate::account::CompiledAccountErrorProtection>,
     pub(crate) privacy: Option<std::sync::Arc<dyn super::privacy::CompiledPrivacyPolicy>>,
@@ -40,6 +41,16 @@ impl CompiledSettings {
             .account_error_protection
             .validate()
             .map_err(|_| InvalidSettings)?;
+        let prompt_rewrite = previous
+            .filter(|prior| prior.values.prompt_rewrite_rules == settings.prompt_rewrite_rules)
+            .map_or_else(
+                || {
+                    std::sync::Arc::new(super::prompt_rewrite::CompiledPromptRewrite::new(
+                        std::sync::Arc::clone(&settings.prompt_rewrite_rules),
+                    ))
+                },
+                |prior| prior.prompt_rewrite.clone(),
+            );
         let account_error_protection = previous
             .filter(|previous| {
                 previous.values.account_error_protection == settings.account_error_protection
@@ -130,6 +141,7 @@ impl CompiledSettings {
             }
         }
         Ok(Self {
+            prompt_rewrite,
             account_error_protection,
             account_selection_policy,
             client_queue_policy,

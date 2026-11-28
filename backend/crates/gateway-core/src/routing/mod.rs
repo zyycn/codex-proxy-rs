@@ -714,6 +714,7 @@ impl ProviderCandidate {
 /// 一次请求冻结的 Provider 尝试顺序
 #[derive(Debug, Clone)]
 pub struct RoutingPlan {
+    prompt_rewrite: Arc<crate::settings::prompt_rewrite::CompiledPromptRewrite>,
     account_error_protection: Arc<crate::account::CompiledAccountErrorProtection>,
     account_error_protection_revision: u64,
     request_body_limit: usize,
@@ -732,6 +733,14 @@ pub struct RoutingPlan {
 }
 
 impl RoutingPlan {
+    #[must_use]
+    pub fn prompt_rewrite_rules(
+        &self,
+        provider: &ProviderKind,
+    ) -> Option<Arc<crate::settings::prompt_rewrite::ProviderPromptRules>> {
+        self.prompt_rewrite.for_provider(provider)
+    }
+
     #[must_use]
     pub const fn account_error_protection_revision(&self) -> u64 {
         self.account_error_protection_revision

@@ -45,6 +45,19 @@ async fn released(fixture: &Fixture) {
 
 #[tokio::test]
 async fn native_and_provider_count_share_identity_and_never_generate_usage() {
+    use gateway_core::{
+        engine::{ModelRequestId, RequestAttemptContext},
+        identity::ProviderKind,
+        policy::ClientApiKeyId,
+        settings::prompt_rewrite::CompiledPromptRewrite,
+    };
+    let rules = CompiledPromptRewrite::new(
+        serde_json::from_value(json!([
+            {"pattern":"client", "replacement":"client updated"}
+        ]))
+        .unwrap(),
+    )
+    .for_provider(&ProviderKind::new("antigravity").unwrap());
     for (protocol, body, expected) in [
         (
             "genai",
@@ -73,7 +86,15 @@ async fn native_and_provider_count_share_identity_and_never_generate_usage() {
             .clone()
             .execute(
                 counted(protocol, body),
-                context(profile(), CancellationToken::new()),
+                crate::support::context_with_request(
+                    RequestAttemptContext::new(
+                        ModelRequestId::new("req_count").unwrap(),
+                        ClientApiKeyId::new("key_fixture").unwrap(),
+                    )
+                    .with_request_profile(Some(profile()))
+                    .with_prompt_rewrite_rules(rules.clone()),
+                    CancellationToken::new(),
+                ),
             )
             .await
             .unwrap();
@@ -116,7 +137,7 @@ async fn native_and_provider_count_share_identity_and_never_generate_usage() {
         );
         assert_eq!(
             sent["request"]["systemInstruction"]["parts"][1]["text"],
-            "client identity"
+            "client updated identity"
         );
         assert_eq!(sent["request"]["contents"][0]["parts"][0]["text"], "hello");
         assert_eq!(

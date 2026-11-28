@@ -56,7 +56,9 @@ impl VisitMut for WireTypes {
             }
             let last = path.path.segments.last().unwrap().clone();
             *ty = match last.ident.to_string().as_str() {
-                "DateTime" | "Tz" | "TokenPrice" | "AdminApiKey" => parse_quote!(String),
+                "DateTime" | "Tz" | "TokenPrice" | "AdminApiKey" | "ProviderKind" => {
+                    parse_quote!(String)
+                }
                 "Value" => parse_quote!(serde_json::Value),
                 "OpaqueProviderData" => parse_quote!(serde_json::Map<String, serde_json::Value>),
                 _ => Type::Path(syn::TypePath {
@@ -80,6 +82,7 @@ fn contract_type(mut item: Item, name: &str) -> Item {
                     | "ReplaceRuntimeSettings"
                     | "AdminApiKeyMutation"
                     | "RegeneratedAdminApiKey"
+                    | "PromptRewriteRule"
                     | "CodexPrivacyPolicy"
                     | "PrivacyRule"
                     | "PrivacyStep"
@@ -113,6 +116,11 @@ fn contract_type(mut item: Item, name: &str) -> Item {
     if let Some(fields) = fields {
         for field in fields {
             field.vis = parse_quote!(pub);
+            // 非空前缀由宿主在接收设置时校验，SDK 只描述字符串合同
+            if name == "PromptRewriteRule" && field.ident.as_ref().is_some_and(|id| id == "pattern")
+            {
+                field.attrs.retain(|attr| !attr.path().is_ident("serde"));
+            }
         }
     }
     if let Item::Enum(item) = &mut item {
@@ -224,6 +232,10 @@ fn sdk_settings_contract_matches_host_declarations() {
                 "AccountErrorField",
                 "AccountErrorOperator",
             ][..],
+        ),
+        (
+            "../gateway-core/src/settings/prompt_rewrite.rs",
+            &["PromptRewriteRule"][..],
         ),
         (
             "../gateway-core/src/settings/websocket.rs",

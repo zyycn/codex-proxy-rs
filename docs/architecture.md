@@ -398,7 +398,7 @@ views/<页面>/
 
 账号页管理分组、模型限制、并发、代理与导入任务。行操作与批量导出读取服务端返回的账号能力。OpenAI 的 API Key、OAuth 传输与逐条 token 导入归 `providers/openai/accounts`，Provider 表单持有凭据草稿与校验规则。新增时向页面提交导入文档，编辑时仅提供变更的连接配置
 
-运行设置由同一份草稿和配置版本原子保存。通用和平台设置分区组合 `views/settings/components/` 中的控件，备份、定价、客户端版本及隐私规则等多文件组件各自封装私有实现。平台分区按 Provider 展示专属配置，通用分区承载调度、并发与排队、重试、错误保护、凭据刷新、历史保留、全局模型映射及安全与访问设置
+运行设置由同一份草稿和配置版本原子保存。通用和平台设置分区组合 `views/settings/components/` 中的控件，备份、定价、客户端版本及隐私规则等多文件组件各自封装私有实现。平台分区按 Provider 展示专属配置，通用分区承载提示词改写、调度、并发与排队、重试、错误保护、凭据刷新、历史保留、全局模型映射及安全与访问设置
 
 全局配置和 Key 覆盖共用 `components/request-profile/index.vue` 的身份编辑流程，各 Provider 在 `providers/<id>/request-profile/` 解释自己的配置字段。定价页按查询接口返回的档位编辑
 
@@ -513,6 +513,8 @@ Core 独占路由、重试、交付事实与结算；Provider 独占上游身份
 API 的 `chat_completions/` 负责入口和 Chat 交付校验，复用 `generation/` 的提交、取消与终结生命周期。
 Chat 的 finish 与 usage 等待执行终态确认，终结失败不得先交付成功结果
 
+运行设置快照共享提示词改写规则原文，按配置顺序索引全局规则和各上游规则。路由计划冻结快照，每次尝试只取所选平台的适用规则。attempt 中间件提交后，协议层定位系统文本，Core 匹配前缀。生成请求命中后同步更新已解析正文和原始 wire 中的目标字符串。计数由 Provider 解开封套，在已解析的计数正文上应用同一套规则
+
 原始入口协议独立于转换后的正文协议，转换时保留来源与原始能力事实，不能从客户端头、User-Agent 或目标正文推断转换资格。
 内置转换只能从 Chat 来源调用；显式插件仍按现有能力声明与中间件合同运行。
 字段合同见 [Chat Completions](api.md#chat-completions-请求)和 [Messages](api.md#messages-请求)，插件视图见 [SDK 请求中间件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)
@@ -598,7 +600,7 @@ GenAI 模型目录复用 `ExecutionService::client_model_catalog`，由 Antigrav
 
 Antigravity 目录声明原生 GenAI 和 Chat 转换能力，Responses、Messages 不借用 Chat 能力进入该平台。
 `provider/chat.rs` 装配 Chat ↔ GenAI 直接转换；`transport` 负责 Cloud Code 封装、原生 wire 与调用事实，
-并将冻结画像的提示词前置到客户端系统指令，保留客户端规则、工具说明和工作区上下文。默认提示和可编辑配置归 Provider 的 `profile`，纯协议层不持有 AGY 身份规则
+原生生成与计数前置冻结画像的系统提示，普通 Chat 使用转换后的系统指令
 
 Antigravity 的业务头使用 API 保留的不透明多值字节，transport 统一执行账号身份、HTTP 传输及切号追踪头过滤。选号阶段从原会话绑定和 Core 的账号归属冻结切号事实，认领冲突后重新读取，不从重试排除集合推测归属
 

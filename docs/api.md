@@ -270,7 +270,7 @@ AGY 在 API Key 模式下使用 `gemini-3.1-flash-lite-preview` 发起同样的�
 
 CPR 在 AGY 的原生与转换入口透传未被过滤的 HTTP 扩展头，保留同名多值的原始字节。下游鉴权、Cookie、账号身份、客户端画像和 HTTP 传输头不透传；认证、项目和 UA 由所选 OAuth 账号与冻结画像生成。`X-Goog-Api-Client` 与 Gateway 的 `X-Goog-Ext-525006001-Bin` 不进入 Cloud Code 请求。`X-Goog-User-Project` 属于调用方指定的计费项目，不能覆盖所选账号的项目，见 [Google 系统参数](https://docs.cloud.google.com/apis/docs/system-parameters)
 
-Cloud Code 生成封套使用 `userAgent: "antigravity"` 与 `requestType: "agent"`，独立搜索使用 `web_search`。原生正文在 `systemInstruction.parts` 前添加配置的提示词，保留客户端原有 parts 及系统指令的其他字段，并移除 `labels` 中 Gateway 添加的 `client`、`goog-originating-logical-product-id`、`goog-originating-service-id`。系统指令也接受 `system_instruction`，两者同时提供时以 `systemInstruction` 为准，出站统一使用驼峰名称。其余字段保留原始 JSON 表达与顺序，不经 Chat 或 canonical 请求重建
+Cloud Code 生成封套使用 `userAgent: "antigravity"` 与 `requestType: "agent"`，独立搜索使用 `web_search`。原生正文在 `systemInstruction.parts` 前添加画像提示词。普通 Chat 转换只发送调用方系统指令及其配置的改写结果。网关移除 `labels` 中 Gateway 添加的 `client`、`goog-originating-logical-product-id`、`goog-originating-service-id`。系统指令也接受 `system_instruction`，两者同时提供时以 `systemInstruction` 为准，出站统一使用驼峰名称。其余字段保留原始 JSON 表达与顺序，不经 Chat 或 canonical 请求重建
 
 同账号及归属未知时保留追踪头；会话绑定或本次执行的已有账号归属明确发生切换时，CPR 清理入站或中间件带入的 `traceparent`、`tracestate`、`sentry-trace`、`baggage`。该清理作用于本次出站请求，不修改工具结果、思考签名或业务正文
 
@@ -1820,7 +1820,7 @@ OAuth start 使用：
 
 Antigravity 的全局客户端设置保存在 `providerRequestProfiles.antigravity`，Key 可用 `providerRequestProfileOverrides.antigravity` 覆盖。配置使用 `client`（`desktop` 或 `cli`）、`platform`（`macos`、`linux` 或 `windows`）、`versionMode`、`clientVersion` 和 `arch`。`arch: null` 使用预设架构：macOS 为 `arm64`，Linux 与 Windows 为 `amd64`；也可显式选择 `arm64` 或 `amd64`
 
-`systemPrompt` 可在 AGY 设置中编辑，省略、`null` 或空白值使用内置默认，最长 16 KiB。默认取自已核对的 AGY CLI 1.5.15 身份模板，不包含客户端专属工具和工作区模板；选项接口返回 `defaultSystemPrompt` 与 `systemPromptSource`，客户端版本轮询不会改写它。提示词随请求画像一起冻结，原生和转换入口均将它放在客户端系统指令之前。客户端的全局规则、项目规则、工具说明及其他系统指令保持原样；未提供客户端系统指令时只使用配置提示词
+AGY 请求画像的 `systemPrompt` 最长 16 KiB，省略、`null` 或空白值使用内置默认。选项接口通过 `defaultSystemPrompt` 和 `systemPromptSource` 返回 AGY CLI 1.5.15 身份模板及其来源。原生生成与计数在客户端系统指令之前加入画像提示词。普通 Chat 转发只应用[提示词改写规则](#提示词改写)
 
 自动版本示例：
 
@@ -2344,6 +2344,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 | 用途 | 字段 |
 | --- | --- |
 | 并发控制版本 | `configRevision` |
+| [提示词改写](#提示词改写) | `promptRewriteRules` |
 | [客户端身份](#provider-客户端身份) | `providerRequestProfiles` |
 | [请求位置](#请求位置) | `requestLocationEnabled`、`requestLocation` |
 | [OpenAI 请求设置](#openai-请求设置) | `openaiRequestSettings` |
@@ -2715,6 +2716,14 @@ models.dev 同步只导入可表示为当前文本 Token 计价的 OpenAI/xAI �
 指定 1～10000 个待同步模型；空选择或未登记的模型返回 400。同步只更新选中模型的来源层，未选中模型
 及所有人工单价与倍率保持不变。选中的已同步模型若不再出现在来源价目中，则移除其来源层，恢复内置价格；
 没有内置价目的模型变为未配置
+
+### 提示词改写
+
+更新通用设置时须提交有序数组 `promptRewriteRules`，初始值为 `[]`。每条包含适用上游 `providers`、非空字面前缀 `pattern` 和替换文本 `replacement`。省略 `providers` 或使用空数组代表全部上游，指定多个平台时共用同一条规则。匹配与替换文本可含换行，空替换文本删除前缀
+
+设置快照按目标上游索引规则，公共规则和限定平台的规则均按原始顺序生效，仅替换首个匹配前缀。上游没有适用规则时直接转发。API Key 使用同一套通用规则
+
+Chat 和 Responses 优先取显式 `instructions`。否则只检查 `messages[0]` 或 `input[0]`，角色为 `system` 或 `developer` 时才匹配。Messages 取 `system`，GenAI 取 `systemInstruction` 或 `system_instruction`。分块内容仅在第一块为文本时改写该块。输入计数使用相同规则，GenAI 完整计数封套以其内层生成请求为准
 
 ### Provider 客户端身份
 

@@ -1,9 +1,15 @@
 {
   "settings": {
+    "promptRewrite": {
+      "title": "提示詞改寫",
+      "description": "依序比對系統指令的前綴，替換首個符合的前綴。替換文字留空可刪除前綴",
+      "empty": "暫無改寫規則",
+      "providers": "適用上游",
+      "matchPrefix": "比對前綴",
+      "replacement": "替換文字",
+      "required": "請輸入比對前綴"
+    },
     "clientProfile": {
-      "systemPrompt": "系統提示詞",
-      "systemPromptHint": "前置系統提示，保留客戶端指令，預設來自 {source}",
-      "restoreSystemPrompt": "恢復預設",
       "userAgent": "用戶代理",
       "clientIdentitySource": "客戶端身份來源",
       "globalConfiguration": "全局配置",

@@ -366,6 +366,7 @@ impl SettingsStore for FixtureSettingsStore {
                 usage_retention_days: 31,
                 ops_event_retention_days: 30,
                 audit_retention_days: 30,
+                prompt_rewrite_rules: Vec::new(),
                 account_error_protection: gateway_core::account::AccountErrorProtection::default(),
                 account_warmup_enabled: false,
                 account_warmup_cron: "0 8 * * *".to_owned(),

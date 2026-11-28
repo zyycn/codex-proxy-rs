@@ -7,7 +7,7 @@ import { formatProviderLabel, PROVIDER_IDS, providerIcon } from '@/providers/cat
 
 const props = withDefaults(defineProps<{
   providers?: readonly Value[]
-  leadingOption?: SegmentedOption
+  leadingOption?: SegmentedOption | SegmentedOption[]
   display?: 'icon' | 'label'
   size?: 'small' | 'default' | 'large'
   disabled?: boolean
@@ -19,9 +19,7 @@ const props = withDefaults(defineProps<{
 const provider = defineModel<Value>({ required: true })
 const { t } = useI18n({ useScope: 'global' })
 const options = computed(() => [
-  ...(props.leadingOption
-    ? [props.leadingOption]
-    : []),
+  ...[props.leadingOption ?? []].flat(),
   ...(props.providers ?? PROVIDER_IDS).map(value => ({
     value,
     label: formatProviderLabel(value),
